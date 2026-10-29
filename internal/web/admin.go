@@ -61,6 +61,9 @@ func (s *server) serveAdmin(w http.ResponseWriter, r *http.Request, who platform
 			return
 		}
 		id, action := parts[0], parts[1]
+		if s.adminBootstrap(w, r, who, id, action) {
+			return
+		}
 		if r.Method == "GET" && action == "deliveries" {
 			value, err := s.store.AdminDeliveries(ctx, who, id)
 			if err != nil {

@@ -16,6 +16,23 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "enroll" {
+		flags := flag.NewFlagSet("enroll", flag.ExitOnError)
+		origin := flags.String("bootstrap-origin", "", "trusted control HTTPS origin")
+		pki := flags.String("pki", "/etc/reladock/node-pki", "private PKI directory")
+		env := flags.String("env-file", "", "new private environment file")
+		flags.Parse(os.Args[2:])
+		if flags.NArg() != 0 {
+			log.Fatal("unexpected arguments")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := agent.Bootstrap(ctx, agent.BootstrapOptions{Origin: *origin, PKIDir: *pki, EnvFile: *env, Token: os.Stdin}); err != nil {
+			log.Fatal(err)
+		}
+		log.Print("Node enrollment saved; forwarding remains disabled")
+		return
+	}
 	endpoint := flag.String("control", "https://127.0.0.1:3002", "control HTTPS origin")
 	nodeID := flag.String("node", "hk-01", "enrolled node ID")
 	dir := flag.String("pki", ".local/pki", "CA and node certificate directory")
@@ -60,7 +77,17 @@ func main() {
 	} else {
 		log.Print("Agent mode: validation-only; no nftables/tc execution and no applied ACK")
 	}
+	var lastPreflight time.Time
 	for {
+		// Contact and inspection are distinct from configuration/application health.
+		if !*once && time.Since(lastPreflight) >= time.Minute {
+			pctx, done := context.WithTimeout(ctx, 20*time.Second)
+			if err := runner.ReportPreflight(pctx); err != nil {
+				log.Print("Read-only environment report needs attention")
+			}
+			done()
+			lastPreflight = time.Now()
+		}
 		if engine != nil {
 			tickCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			if err := engine.Tick(tickCtx, &runner); err != nil {

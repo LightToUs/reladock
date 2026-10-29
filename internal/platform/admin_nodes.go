@@ -192,6 +192,14 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 		return ErrInvalid
 	}
 	if action != "node.add" {
+		if action == "node.enroll" || action == "node.revoke-certificate" {
+			if _, err = tx.Exec(ctx, "DELETE FROM node_preflight WHERE node_id=$1", id); err != nil {
+				return err
+			}
+			if _, err = tx.Exec(ctx, "UPDATE node_bootstrap SET revoked=true WHERE node_id=$1", id); err != nil {
+				return err
+			}
+		}
 		if _, err = tx.Exec(ctx, "UPDATE nodes SET revision=revision+1 WHERE id=$1", id); err != nil {
 			return err
 		}

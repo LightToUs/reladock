@@ -1,4 +1,5 @@
 import { bindOperations } from './operations-tools.js';
+import { bindNodeBootstrap } from './node-bootstrap.js';
 const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], editingNode: null, certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '' };
 const titles = { overview: '平台总览', nodes: '入口节点', tenants: '企业客户', rules: '全局规则', deliveries: '配置交付', plans:'规则套餐',operations:'告警工单',costs:'成本与经营差额',audit: '操作审计' };
@@ -6,7 +7,7 @@ const deliveries = { queued: '等待领取', leased: '领取处理中', applying
 const actions = { 'node.add': '新增节点', 'node.edit': '编辑节点', 'node.maintenance': '进入维护', 'node.enable': '恢复分配', 'node.enroll': '绑定 / 轮换证书', 'node.revoke-certificate': '撤销证书', 'config.retry': '重新交付', 'tenant.access': '修改企业登录状态', 'platform.admin-access': '修改平台权限', 'rule.pause': '暂停规则', 'rule.resume': '恢复规则', 'rule.delete': '删除规则' };
 const costNav = document.createElement('button'); costNav.dataset.view = 'costs'; costNav.textContent = '成本与经营差额'; document.querySelector('.admin-nav nav').append(costNav);
 const notificationNav = document.createElement('button'); notificationNav.dataset.view = 'notifications'; notificationNav.textContent = '通知交付'; document.querySelector('.admin-nav nav').append(notificationNav); titles.notifications = '通知交付';
-function access(mode) { $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
+function access(mode) { if(mode!=='admin')bootstrapUI.clear(); $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
 function message(text) { $('#admin-message').textContent = text; }
 async function api(path, body, key) {
   const options = { credentials: 'same-origin', headers: {} };
@@ -55,11 +56,13 @@ function renderNodes(nodes) {
     row.cells[3].textContent = node.status === 'maintenance' ? '维护中' : node.appliedGeneration > 0 ? '已有应用确认 · 健康未知' : '尚未部署';
     row.cells[4].replaceChildren();
     row.cells[4].append(document.createTextNode(`${node.desiredGeneration} / ${node.validatedGeneration} / ${node.appliedGeneration}（修订 ${node.revision}）`));
+    row.cells[7].append(button('安装 Agent',()=>bootstrapUI.open(node)));
+    if(node.status!=='maintenance' && !node.appliedGeneration && node.lastSeenAt)row.cells[3].textContent=Date.now()-Date.parse(node.lastSeenAt)<120000?'Agent 已联系 · 未确认转发':'Agent 联系已过期 · 健康未知';
   }
 }
 function editNode(node) { state.editingNode = node; const form = $('#node-form'); for (const name of ['id', 'name', 'region', 'listenAddress', 'publicAddress', 'capacityMbps']) form.elements.namedItem(name).value = node[name]; form.elements.namedItem('id').readOnly = true; $('#node-form-title').textContent = `编辑节点 · ${node.name}`; $('#node-save').textContent = '保存节点修改'; $('#node-form-title').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 $('#node-new').addEventListener('click', () => { state.editingNode = null; $('#node-form').reset(); $('#node-form [name=id]').readOnly = false; $('#node-form-title').textContent = '新增入口节点'; $('#node-save').textContent = '登记节点'; });
-$('#node-form').addEventListener('submit', async event => { event.preventDefault(); const submit = $('#node-save'); submit.disabled = true; const input = Object.fromEntries(new FormData(event.target)); input.capacityMbps = Number(input.capacityMbps); const editing = state.editingNode; if (editing) input.revision = editing.revision; try { const saved = await mutate(editing ? `/api/admin/nodes/${editing.id}/update` : '/api/admin/nodes', input, editing ? '节点资料已更新。' : '节点已登记，尚未部署实际转发。'); if (saved) $('#node-new').click(); } catch (error) { message(error.message); } finally { submit.disabled = false; } });
+$('#node-form').addEventListener('submit', async event => { event.preventDefault(); const submit = $('#node-save'); submit.disabled = true; const input = Object.fromEntries(new FormData(event.target)); input.capacityMbps = Number(input.capacityMbps); const editing = state.editingNode; if (editing) input.revision = editing.revision; try { const saved = await mutate(editing ? `/api/admin/nodes/${editing.id}/update` : '/api/admin/nodes', input, editing ? '节点资料已更新。' : '节点已登记，尚未部署实际转发。'); if (saved) { $('#node-new').click(); if(!editing)await bootstrapUI.open(state.nodes.find(node=>node.id===input.id)); } } catch (error) { message(error.message); } finally { submit.disabled = false; } });
 function editCertificate(node) { state.certificateNode = node; $('#certificate-panel').hidden = false; $('#certificate-node').textContent = node.name; $('#certificate-fingerprint').textContent = node.certificateFingerprint || '未绑定'; $('#certificate-revoke').disabled = !node.certificateFingerprint; $('#certificate-form').reset(); $('#certificate-panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 $('#certificate-close').addEventListener('click', () => { $('#certificate-panel').hidden = true; state.certificateNode = null; });
 $('#certificate-form').addEventListener('submit', async event => { event.preventDefault(); const node = state.certificateNode; if (!node) return; const submit = event.target.querySelector('button'); submit.disabled = true; try { const saved = await mutate(`/api/admin/nodes/${node.id}/enroll`, { revision: node.revision, certificate: event.target.elements.namedItem('certificate').value }, '证书已绑定，旧授权已失效，最新配置已重新入队。'); if (saved) $('#certificate-close').click(); } catch (error) { message(error.message); } finally { submit.disabled = false; } });
@@ -135,4 +138,5 @@ $('#cost-form').addEventListener('submit', async event => {
   } catch (error) { $('#cost-message').textContent = error.message; }
   finally { button.disabled = false; }
 });
+const bootstrapUI = bindNodeBootstrap({api,getNode:id=>state.nodes.find(node=>node.id===id),reload,message});
 enter().catch(error => { if (error.status !== 401 && error.status !== 403) { access('login'); $('#login-message').textContent = error.message; } });

@@ -26,6 +26,9 @@ type Store struct{ pool *pgxpool.Pool }
 //go:embed schema.sql
 var schemaSQL string
 
+//go:embed migration18.sql
+var migration18SQL string
+
 //go:embed migration2.sql
 var migration2SQL string
 
@@ -65,7 +68,7 @@ var migration14SQL string
 //go:embed migration16.sql
 var migration16SQL string
 
-const SchemaVersion = 17
+const SchemaVersion = 18
 
 func Open(ctx context.Context, url string) (*Store, error) {
 	if url == "" {
@@ -272,6 +275,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 		if _, e = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(17)"); e != nil {
 			return e
+		}
+	}
+	if version < 18 {
+		if _, err = tx.Exec(ctx, migration18SQL); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(18)"); err != nil {
+			return err
 		}
 	}
 	return tx.Commit(ctx)

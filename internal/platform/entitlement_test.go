@@ -89,7 +89,8 @@ func TestUpgradeReissuesSnapshotWithKernelEntitlementMetadata(t *testing.T) {
 	if e = s.ReportConfig(ctx, "hk-01", j.ID, ConfigReport{LeaseToken: j.LeaseToken, Checksum: j.Checksum, Outcome: "validated"}); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.pool.Exec(ctx, "DELETE FROM schema_migrations WHERE version=17"); e != nil {
+	// Restore this test's isolated schema to v16, including newer additive tables.
+	if _, e = s.pool.Exec(ctx, "DELETE FROM schema_migrations WHERE version>=17; DROP TABLE node_bootstrap,node_preflight"); e != nil {
 		t.Fatal(e)
 	}
 	if e = s.Migrate(ctx); e != nil {

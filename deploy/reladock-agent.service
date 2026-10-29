@@ -20,7 +20,7 @@ ProtectSystem=strict
 ProtectHome=true
 StateDirectory=reladock-agent
 StateDirectoryMode=0700
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 CapabilityBoundingSet=
 # No CAP_NET_ADMIN is granted. Explicit reviewed application uses the separate
 # reladock-agent-apply.service; this unit always remains validation-only.

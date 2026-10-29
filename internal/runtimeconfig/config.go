@@ -13,6 +13,7 @@ type Config struct {
 	Production                         bool
 	Address, Origin, CertFile, KeyFile string
 	AgentAddress, AgentTLSDir          string
+	Bootstrap                          BootstrapConfig
 }
 
 func Load(get func(string) string) (Config, error) {
@@ -83,6 +84,11 @@ func Load(get func(string) string) (Config, error) {
 	if c.Production && u.Scheme != "https" {
 		return c, errors.New("production requires HTTPS")
 	}
+	bootstrap, err := loadBootstrap(get, c)
+	if err != nil {
+		return c, err
+	}
+	c.Bootstrap = bootstrap
 	return c, nil
 }
 

@@ -34,11 +34,13 @@ type server struct {
 	limits           map[string]window
 	persistentLimits bool
 	payments         *Payments
+	bootstrap        *BootstrapOptions
 }
 
 type Options struct {
 	PersistentRateLimit bool
 	Payments            *Payments
+	Bootstrap           *BootstrapOptions
 }
 
 var uuid = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -53,6 +55,7 @@ func NewWithOptions(store *platform.Store, assets fs.FS, origin string, options 
 		panic("invalid local origin")
 	}
 	s := &server{store: store, assets: assets, origin: origin, host: parsed.Host, limits: make(map[string]window), persistentLimits: options.PersistentRateLimit, payments: options.Payments}
+	s.bootstrap = options.Bootstrap
 	return http.HandlerFunc(s.serve)
 }
 func respond(w http.ResponseWriter, status int, value any) {
@@ -182,6 +185,21 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.payments.Webhook(w, r)
+		return
+	}
+	if s.serveBootstrap(w, r) {
+		return
+	}
+	if r.URL.Path == "/node-bootstrap.js" && (r.Method == "GET" || r.Method == "HEAD") {
+		body, err := fs.ReadFile(s.assets, "node-bootstrap.js")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		if r.Method != "HEAD" {
+			w.Write(body)
+		}
 		return
 	}
 	if r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin.js" || r.URL.Path == "/admin.css" || r.URL.Path == "/app.js" || r.URL.Path == "/app.css" || r.URL.Path == "/rule-submission.js" || r.URL.Path == "/account-tools.js" || r.URL.Path == "/business-tools.js" || r.URL.Path == "/operations-tools.js" {

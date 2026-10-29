@@ -50,6 +50,14 @@ func main() {
 	if os.Getenv("DATABASE_URL") == "" {
 		log.Fatal("DATABASE_URL is required")
 	}
+	var bootstrap *web.BootstrapOptions
+	if cfg.Bootstrap.Enabled() {
+		signer, e := nodeauth.LoadBootstrapSigner(cfg.Bootstrap.CACert, cfg.Bootstrap.CAKey, cfg.Bootstrap.CAChain)
+		if e != nil {
+			log.Fatal("invalid node bootstrap signing CA")
+		}
+		bootstrap = &web.BootstrapOptions{Config: cfg.Bootstrap, Signer: signer}
+	}
 	if *checkOnly {
 		log.Print("Runtime configuration and TLS files validated; no database connection or listener opened")
 		return
@@ -69,7 +77,7 @@ func main() {
 		}
 		paymentHandler = web.NewPayments(store, provider, paymentConfig.WebhookSecret, cfg.Origin)
 	}
-	server := &http.Server{Addr: cfg.Address, Handler: web.NewWithOptions(store, assets.Files, cfg.Origin, web.Options{PersistentRateLimit: cfg.Production, Payments: paymentHandler}), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	server := &http.Server{Addr: cfg.Address, Handler: web.NewWithOptions(store, assets.Files, cfg.Origin, web.Options{PersistentRateLimit: cfg.Production, Payments: paymentHandler, Bootstrap: bootstrap}), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if notificationSender.Enabled() {

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -66,6 +67,18 @@ func NewAgent(store *platform.Store) http.Handler {
 				return
 			}
 			respond(w, 200, job)
+			return
+		}
+		if r.URL.Path == "/agent/preflight" {
+			var report json.RawMessage
+			if !decode(w, r, &report) {
+				return
+			}
+			if err := store.ReportPreflight(ctx, id, report, fingerprint); err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, 200, map[string]bool{"ok": true})
 			return
 		}
 		if r.URL.Path == "/agent/usage" {
