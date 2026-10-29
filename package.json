@@ -1,0 +1,21 @@
+{
+  "name": "reladock",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "db:start": "docker compose up -d --wait postgres",
+    "db:stop": "docker compose stop postgres",
+    "start": "node scripts/start.mjs",
+    "build:release": "node scripts/release.mjs",
+    "backup": "node scripts/backup.mjs create",
+    "backup:verify": "node scripts/backup.mjs verify",
+    "admin": "node scripts/start.mjs run ./cmd/reladock-admin",
+    "agent": "node scripts/start.mjs run ./cmd/reladock-agent",
+    "test": "node scripts/start.mjs test -race ./... && node --test",
+    "test:go": "node scripts/start.mjs test -race ./...",
+    "vet": "node scripts/start.mjs vet ./..."
+  },
+  "engines": { "node": ">=20" }
+}

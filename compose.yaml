@@ -1,0 +1,19 @@
+name: reladock
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: reladock
+      POSTGRES_USER: reladock
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run npm run setup first}
+    ports:
+      - "127.0.0.1:55434:5432"
+    volumes:
+      - reladock_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reladock -d reladock"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  reladock_postgres:

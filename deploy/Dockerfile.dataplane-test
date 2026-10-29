@@ -1,0 +1,5 @@
+# Disposable test image; never a production node image.
+FROM alpine:latest
+RUN for attempt in 1 2 3; do apk add --no-cache nftables python3 iproute2 coreutils && exit 0; done; exit 1
+ENTRYPOINT ["sleep"]
+CMD ["infinity"]

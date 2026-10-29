@@ -1,0 +1,32 @@
+[Unit]
+Description=RelaDock explicitly authorized forwarding Agent
+After=network-online.target
+Wants=network-online.target
+Conflicts=reladock-agent.service
+ConditionPathExists=/etc/reladock/shaping.json
+
+[Service]
+Type=simple
+User=reladock
+Group=reladock
+WorkingDirectory=/var/lib/reladock-agent
+EnvironmentFile=/etc/reladock/agent.env
+ExecStart=/opt/reladock/reladock-agent --apply=true --node ${RELADOCK_NODE} --control ${RELADOCK_CONTROL} --pki ${RELADOCK_PKI} --state-dir ${RELADOCK_STATE_DIR} --snat=${RELADOCK_SNAT} --shaping-interface=${RELADOCK_SHAPING_INTERFACE} --metering-wal-dir ${RELADOCK_WAL_DIR} --nft-binary ${RELADOCK_NFT_BINARY} --tc-binary ${RELADOCK_TC_BINARY} --ip-binary ${RELADOCK_IP_BINARY} --ethtool-binary ${RELADOCK_ETHTOOL_BINARY} --shaping-lease ${RELADOCK_SHAPING_LEASE}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=40
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+StateDirectory=reladock-agent
+StateDirectoryMode=0700
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

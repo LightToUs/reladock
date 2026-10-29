@@ -1,0 +1,30 @@
+[Unit]
+Description=RelaDock Agent (validation-only by default)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=reladock
+Group=reladock
+WorkingDirectory=/var/lib/reladock-agent
+EnvironmentFile=/etc/reladock/agent.env
+ExecStart=/opt/reladock/reladock-agent --node ${RELADOCK_NODE} --control ${RELADOCK_CONTROL} --pki ${RELADOCK_PKI}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StateDirectory=reladock-agent
+StateDirectoryMode=0700
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+# No CAP_NET_ADMIN is granted. Explicit reviewed application uses the separate
+# reladock-agent-apply.service; this unit always remains validation-only.
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

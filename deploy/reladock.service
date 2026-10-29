@@ -1,0 +1,27 @@
+[Unit]
+Description=RelaDock control platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=reladock
+Group=reladock
+WorkingDirectory=/var/lib/reladock
+EnvironmentFile=/etc/reladock/control.env
+ExecStart=/opt/reladock/reladock
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+StateDirectory=reladock
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
