@@ -268,7 +268,11 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		ttl := r.ExpiresAt.Sub(p.BuiltAt) - ExpirySafetyMargin
 		fmt.Fprintf(&definitions, " set %s { type inet_service; flags timeout;", name)
 		if ttl.Milliseconds() > 0 {
-			fmt.Fprintf(&definitions, " elements = { %d timeout %dms };", r.ListenPort, ttl.Milliseconds())
+			timeout := fmt.Sprintf("%dms", ttl.Milliseconds())
+			if ttl.Milliseconds() > math.MaxInt32 {
+				timeout = fmt.Sprintf("%ds", ttl/time.Second)
+			}
+			fmt.Fprintf(&definitions, " elements = { %d timeout %s };", r.ListenPort, timeout)
 		}
 		definitions.WriteString(" }\n")
 		expiryMatch[r.ID] = "ct original proto-dst @" + name + " "

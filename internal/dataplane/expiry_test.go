@@ -30,3 +30,22 @@ func TestPaidRuleExpiryRemainsInKernelEvenIfAgentStops(t *testing.T) {
 		t.Fatal("expired rollback renewed entitlement", expired.Script)
 	}
 }
+
+func TestLongPaidRuleExpiryUsesNftSafeSeconds(t *testing.T) {
+	cfg := fixture()
+	now := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	expires := now.Add(365 * 24 * time.Hour)
+	cfg.Rules[0].ExpiresAt = &expires
+	o := options()
+	o.builtAt = now
+	p, err := Compile(context.Background(), cfg, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(p.Script, "timeout 31535965s") {
+		t.Fatal("long expiry was emitted as an nft-unsafe millisecond value", p.Script)
+	}
+	if strings.Contains(p.Script, "timeout 31535965000ms") {
+		t.Fatal("long expiry still exceeds nft's millisecond parser range", p.Script)
+	}
+}
