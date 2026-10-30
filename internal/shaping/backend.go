@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,9 +73,142 @@ func optionalArray(data []byte) ([]map[string]json.RawMessage, error) {
 }
 
 var (
-	legacyFWClass  = regexp.MustCompile(`"options":\{handle (0x[0-9A-Fa-f]{1,8})/(0x[0-9A-Fa-f]{1,8}) classid ([0-9A-Fa-f]+:[0-9A-Fa-f]+)[ \t]*\}`)
-	legacyFWAction = regexp.MustCompile(`"options":\{handle (0x[0-9A-Fa-f]{1,8})/(0x[0-9A-Fa-f]{1,8})[ \t\r\n]+"actions":`)
+	legacyFWSummary = regexp.MustCompile(`^\{"protocol":"ip","pref":([0-9]+),"kind":"fw","chain":0\}$`)
+	legacyFWClass   = regexp.MustCompile(`^\{"protocol":"ip","pref":([0-9]+),"kind":"fw","chain":0,"options":\{handle (0x[0-9A-Fa-f]{8})/(0x[0-9A-Fa-f]{8}) classid (5244:[0-9A-Fa-f]{1,4})[ \t]*\}\}$`)
+	legacyFWAction  = regexp.MustCompile(`(?s)^\{"protocol":"ip","pref":([0-9]+),"kind":"fw","chain":0,"options":\{handle (0x[0-9A-Fa-f]{8})/(0x[0-9A-Fa-f]{8})[ \t\r\n]+"actions":(\[.*\])\}\}$`)
 )
+
+func uniqueJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok || seen[key] {
+				return errors.New("duplicate or invalid JSON object key")
+			}
+			seen[key] = true
+			if err := uniqueJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim('}') {
+			return errors.New("invalid JSON object")
+		}
+	case '[':
+		for decoder.More() {
+			if err := uniqueJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		end, err := decoder.Token()
+		if err != nil || end != json.Delim(']') {
+			return errors.New("invalid JSON array")
+		}
+	default:
+		return errors.New("invalid JSON delimiter")
+	}
+	return nil
+}
+
+func uniqueJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := uniqueJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("trailing JSON value")
+	}
+	return nil
+}
+
+func splitLegacyFilterRows(data []byte) ([][]byte, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) < 2 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' {
+		return nil, errors.New("invalid legacy filter array")
+	}
+	rows := make([][]byte, 0)
+	for i := 1; i < len(trimmed)-1; {
+		for i < len(trimmed)-1 && (trimmed[i] == ' ' || trimmed[i] == '\t' || trimmed[i] == '\r' || trimmed[i] == '\n') {
+			i++
+		}
+		if i >= len(trimmed)-1 {
+			break
+		}
+		if trimmed[i] != '{' {
+			return nil, errors.New("legacy filter row is not an object")
+		}
+		start, depth, inString, escaped := i, 0, false, false
+		for ; i < len(trimmed)-1; i++ {
+			char := trimmed[i]
+			if inString {
+				if escaped {
+					escaped = false
+				} else if char == '\\' {
+					escaped = true
+				} else if char == '"' {
+					inString = false
+				}
+				continue
+			}
+			switch char {
+			case '"':
+				inString = true
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					i++
+					rows = append(rows, append([]byte(nil), trimmed[start:i]...))
+					goto rowDone
+				}
+				if depth < 0 {
+					return nil, errors.New("legacy filter braces are unbalanced")
+				}
+			}
+		}
+		return nil, errors.New("unterminated legacy filter row")
+	rowDone:
+		for i < len(trimmed)-1 && (trimmed[i] == ' ' || trimmed[i] == '\t' || trimmed[i] == '\r' || trimmed[i] == '\n') {
+			i++
+		}
+		if i < len(trimmed)-1 {
+			if trimmed[i] != ',' {
+				return nil, errors.New("legacy filter rows lack a comma")
+			}
+			i++
+		}
+	}
+	if len(rows) == 0 {
+		return nil, errors.New("legacy filter array is empty")
+	}
+	return rows, nil
+}
+
+func decodeFilterObject(data []byte) (map[string]json.RawMessage, error) {
+	if err := uniqueJSON(data); err != nil {
+		return nil, err
+	}
+	var row map[string]json.RawMessage
+	if err := json.Unmarshal(data, &row); err != nil || row == nil {
+		return nil, errors.New("invalid filter object")
+	}
+	return row, nil
+}
 
 // filterArray accepts valid tc JSON and the narrowly defined hybrid emitted
 // by iproute2 5.15 for fw options. The latter leaves only handle/classid in
@@ -84,26 +218,66 @@ func filterArray(data []byte) ([]map[string]json.RawMessage, error) {
 	if len(trimmed) == 0 {
 		return []map[string]json.RawMessage{}, nil
 	}
-	rows, jsonErr := array(trimmed)
-	if jsonErr == nil {
-		return rows, nil
+	if json.Valid(trimmed) {
+		if err := uniqueJSON(trimmed); err != nil {
+			return nil, err
+		}
+		return array(trimmed)
 	}
-	normalized := append([]byte(nil), trimmed...)
-	replacements := 0
-	normalized = legacyFWClass.ReplaceAllFunc(normalized, func(match []byte) []byte {
-		parts := legacyFWClass.FindSubmatch(match)
-		replacements++
-		return []byte(fmt.Sprintf(`"options":{"fw":{"mark":"%s","mask":"%s"},"classid":"%s"}`, parts[1], parts[2], parts[3]))
-	})
-	normalized = legacyFWAction.ReplaceAllFunc(normalized, func(match []byte) []byte {
-		parts := legacyFWAction.FindSubmatch(match)
-		replacements++
-		return []byte(fmt.Sprintf(`"options":{"fw":{"mark":"%s","mask":"%s"},"actions":`, parts[1], parts[2]))
-	})
-	if replacements == 0 || bytes.Contains(normalized, []byte(`"options":{handle`)) {
-		return nil, jsonErr
+	rawRows, err := splitLegacyFilterRows(trimmed)
+	if err != nil {
+		return nil, err
 	}
-	return array(normalized)
+	rows := make([]map[string]json.RawMessage, 0, len(rawRows))
+	currentPref, details := "", 0
+	seenSummary, seenDetail := map[string]bool{}, map[string]bool{}
+	for _, rawRow := range rawRows {
+		if parts := legacyFWSummary.FindSubmatch(rawRow); parts != nil {
+			if currentPref != "" && details == 0 {
+				return nil, errors.New("legacy fw summary lacks detail")
+			}
+			pref := string(parts[1])
+			if seenSummary[pref] {
+				return nil, errors.New("duplicate legacy fw summary")
+			}
+			seenSummary[pref] = true
+			currentPref, details = pref, 0
+			row, err := decodeFilterObject(rawRow)
+			if err != nil {
+				return nil, err
+			}
+			rows = append(rows, row)
+			continue
+		}
+		parts, action := legacyFWClass.FindSubmatch(rawRow), false
+		if parts == nil {
+			parts, action = legacyFWAction.FindSubmatch(rawRow), true
+		}
+		if parts == nil || currentPref == "" || string(parts[1]) != currentPref {
+			return nil, errors.New("unsupported legacy fw detail")
+		}
+		detailKey := string(parts[2]) + "/" + string(parts[3])
+		if seenDetail[detailKey] {
+			return nil, errors.New("duplicate legacy fw detail")
+		}
+		seenDetail[detailKey] = true
+		var normalized []byte
+		if action {
+			normalized = []byte(fmt.Sprintf(`{"protocol":"ip","pref":%s,"kind":"fw","chain":0,"options":{"fw":{"mark":"%s","mask":"%s"},"actions":%s}}`, parts[1], parts[2], parts[3], parts[4]))
+		} else {
+			normalized = []byte(fmt.Sprintf(`{"protocol":"ip","pref":%s,"kind":"fw","chain":0,"options":{"fw":{"mark":"%s","mask":"%s"},"classid":"%s"}}`, parts[1], parts[2], parts[3], parts[4]))
+		}
+		row, err := decodeFilterObject(normalized)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
+		details++
+	}
+	if currentPref == "" || details == 0 {
+		return nil, errors.New("legacy fw output lacks detail")
+	}
+	return rows, nil
 }
 
 func tcRateBytes(value string) (uint64, error) {

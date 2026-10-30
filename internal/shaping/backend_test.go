@@ -267,13 +267,34 @@ func TestSystemBackendAcceptsLegacyIPRoute215HybridFWJSON(t *testing.T) {
 	}
 }
 
+func TestSystemBackendAcceptsMultipleLegacyFWDetailsUnderOneSummary(t *testing.T) {
+	raw := `[{"protocol":"ip","pref":10,"kind":"fw","chain":0},{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 }},{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c100/0xffffff00 classid 5244:11c1 }}]`
+	s, err := inspectLegacyFilters(t, raw)
+	if err != nil || len(s.Filters) != 2 || s.Filters[0].ClassID != "5244:11c0" || s.Filters[1].ClassID != "5244:11c1" {
+		t.Fatalf("grouped legacy details: %+v %v", s.Filters, err)
+	}
+}
+
+func TestFilterArrayRejectsDuplicateJSONKeys(t *testing.T) {
+	if _, err := filterArray([]byte(`[{"protocol":"ip","protocol":"ip","pref":10,"kind":"fw","chain":0}]`)); err == nil {
+		t.Fatal("duplicate valid JSON key accepted")
+	}
+}
+
 func TestSystemBackendLegacyHybridFWJSONFailsClosed(t *testing.T) {
 	tests := map[string]string{
-		"missing classid":  `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid }}]`,
-		"oversized mark":   `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x15211c000/0xffffff00 classid 5244:11c0 }}]`,
-		"unknown option":   `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 police nope classid 5244:11c0 }}]`,
-		"trailing garbage": `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 garbage }}]`,
-		"malformed action": `[{"protocol":"ip","pref":20,"kind":"fw","chain":0,"options":{handle 0x52000000/0xff000000 actions nope}}]`,
+		"missing classid":          `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid }}]`,
+		"oversized mark":           `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x15211c000/0xffffff00 classid 5244:11c0 }}]`,
+		"oversized mask":           `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0x1ffffff00 classid 5244:11c0 }}]`,
+		"oversized classid":        `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:111c0 }}]`,
+		"unknown option":           `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 police nope classid 5244:11c0 }}]`,
+		"trailing garbage":         `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 garbage }}]`,
+		"malformed action":         `[{"protocol":"ip","pref":20,"kind":"fw","chain":0,"options":{handle 0x52000000/0xff000000 actions nope}}]`,
+		"detail without summary":   `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 }}]`,
+		"duplicate options":        `[{"protocol":"ip","pref":10,"kind":"fw","chain":0},{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 },"options":{handle 0x5211c001/0xffffff00 classid 5244:11c1 }}]`,
+		"nested matching fragment": `[{"protocol":"ip","pref":10,"kind":"fw","chain":0},{"protocol":"ip","pref":10,"kind":"fw","chain":0,"junk":{"options":{handle 0x11111111/0xffffffff classid 5244:1111 }},"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 }}]`,
+		"duplicate detail":         `[{"protocol":"ip","pref":10,"kind":"fw","chain":0},{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 }},{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 }}]`,
+		"conflicting actions":      `[{"protocol":"ip","pref":20,"kind":"fw","chain":0},{"protocol":"ip","pref":20,"kind":"fw","chain":0,"options":{handle 0x52000000/0xff000000 "actions":[{"kind":"gact","control_action":{"type":"drop"}},{"kind":"gact","control_action":{"type":"pass"}}]}}]`,
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
