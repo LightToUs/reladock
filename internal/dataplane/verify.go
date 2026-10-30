@@ -53,11 +53,13 @@ func ReadbackVerifier(r Runner) Verifier {
 		counters := map[string]bool{}
 		rules := map[string]int{}
 		tables := 0
+		tableComment, relayComment := "", ""
 		for _, v := range doc.NFTables {
 			if v.Table != nil {
-				if v.Table.Family != "ip" || v.Table.Name != Table || v.Table.Comment != owner {
+				if v.Table.Family != "ip" || v.Table.Name != Table {
 					return bad
 				}
+				tableComment = v.Table.Comment
 				tables++
 			}
 			if c := v.Chain; c != nil {
@@ -79,9 +81,10 @@ func ReadbackVerifier(r Runner) Verifier {
 						return bad
 					}
 				case "relay":
-					if c.Type != "" || c.Hook != "" || c.Comment != planToken(p) {
+					if c.Type != "" || c.Hook != "" {
 						return bad
 					}
+					relayComment = c.Comment
 				default:
 					return bad
 				}
@@ -99,7 +102,19 @@ func ReadbackVerifier(r Runner) Verifier {
 				rules[v.Rule.Chain]++
 			}
 		}
-		if tables != 1 || len(chains) != 4 || len(counters) != len(p.Counters) {
+		if tableComment == "" || relayComment == "" {
+			comments, textErr := readNFTTextComments(ctx, r)
+			if textErr != nil {
+				return textErr
+			}
+			if tableComment == "" {
+				tableComment = comments.Owner
+			}
+			if relayComment == "" {
+				relayComment = comments.Relay
+			}
+		}
+		if tableComment != owner || relayComment != planToken(p) || tables != 1 || len(chains) != 4 || len(counters) != len(p.Counters) {
 			return bad
 		}
 		for _, c := range p.Counters {

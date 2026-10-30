@@ -43,7 +43,7 @@ func (r *ExecRunner) Run(ctx context.Context, args []string, input string) ([]by
 		return nil, errors.New("nft execution is supported only on Linux")
 	}
 	allowed := false
-	for _, v := range [][]string{{"-c", "-f", "-"}, {"-f", "-"}, {"-j", "list", "tables"}, {"-j", "list", "ruleset"}, {"-j", "list", "table", "ip", Table}} {
+	for _, v := range [][]string{{"-c", "-f", "-"}, {"-f", "-"}, {"-j", "list", "tables"}, {"-j", "list", "ruleset"}, {"-j", "list", "table", "ip", Table}, {"-a", "list", "table", "ip", Table}} {
 		if reflect.DeepEqual(args, v) {
 			allowed = true
 		}

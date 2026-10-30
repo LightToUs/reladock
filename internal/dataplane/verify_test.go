@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +72,64 @@ func TestReadbackRejectsMissingCountersWrongGenerationAndCommandFailure(t *testi
 			e := ReadbackVerifier(r)(context.Background(), p)
 			if (e == nil) != (mode == "valid") {
 				t.Fatalf("%s: %v", mode, e)
+			}
+		})
+	}
+}
+
+func TestReadbackUsesStrictTextFallbackWhenJSONOmitsComments(t *testing.T) {
+	p, e := Compile(context.Background(), fixture(), options())
+	if e != nil {
+		t.Fatal(e)
+	}
+	items := readbackFixture(p)
+	delete(items[0]["table"].(map[string]any), "comment")
+	delete(items[4]["chain"].(map[string]any), "comment")
+	raw, _ := json.Marshal(map[string]any{"nftables": items})
+	for _, valid := range []bool{true, false} {
+		text := "table ip reladock { # handle 24\n\tcomment \"reladock-dataplane-v1\"\n\tchain relay { # handle 4\n\t\tcomment \"" + planToken(p) + "\"\n\t}\n}\n"
+		if !valid {
+			text = "table ip reladock {\n\tcomment \"foreign\"\n}\n"
+		}
+		r := runnerFunc(func(_ context.Context, args []string, input string) ([]byte, error) {
+			if input != "" {
+				t.Fatal("readback wrote nft input")
+			}
+			if reflect.DeepEqual(args, []string{"-j", "list", "table", "ip", "reladock"}) {
+				return raw, nil
+			}
+			if reflect.DeepEqual(args, []string{"-a", "list", "table", "ip", "reladock"}) {
+				return []byte(text), nil
+			}
+			t.Fatal("unexpected readback command", args)
+			return nil, nil
+		})
+		e = ReadbackVerifier(r)(context.Background(), p)
+		if (e == nil) != valid {
+			t.Fatalf("valid=%t err=%v", valid, e)
+		}
+	}
+}
+
+func TestNFTTextCommentParserFailsClosed(t *testing.T) {
+	valid := "table ip reladock { # handle 24\n\tcomment \"reladock-dataplane-v1\"\n\tchain relay { # handle 4\n\t\tcomment \"reladock-plan-abc\"\n\t}\n}\n"
+	for name, raw := range map[string]string{
+		"valid":               valid,
+		"wrong table":         strings.Replace(valid, "table ip reladock", "table ip foreign", 1),
+		"duplicate owner":     strings.Replace(valid, "\tchain relay", "\tcomment \"second\"\n\tchain relay", 1),
+		"duplicate relay":     strings.Replace(valid, "\t}\n}", "\t\tcomment \"second\"\n\t}\n}", 1),
+		"missing close":       strings.TrimSuffix(valid, "}\n"),
+		"trailing table":      valid + "table ip second {}\n",
+		"quoted brace bypass": "table ip reladock {\n\tchain \"evil }\" {\n\t\tcomment \"reladock-dataplane-v1\"\n\t\tcounter comment \"{\"\n\t}\n}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			comments, e := parseNFTTextComments([]byte(raw))
+			if name == "valid" {
+				if e != nil || comments.Owner != owner || comments.Relay != "reladock-plan-abc" {
+					t.Fatalf("valid parse: %+v %v", comments, e)
+				}
+			} else if e == nil {
+				t.Fatalf("unsafe text accepted: %+v", comments)
 			}
 		})
 	}

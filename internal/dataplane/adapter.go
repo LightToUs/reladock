@@ -239,13 +239,25 @@ func (a *Adapter) inspect(ctx context.Context) (bool, error) {
 		if e = json.Unmarshal(out, &doc); e != nil {
 			return false, e
 		}
-		owned := 0
+		tables := 0
+		tableComment := ""
 		for _, v := range doc.NFTables {
-			if v.Table != nil && v.Table.Family == "ip" && v.Table.Name == Table && v.Table.Comment == owner {
-				owned++
+			if v.Table != nil && v.Table.Family == "ip" && v.Table.Name == Table {
+				tables++
+				tableComment = v.Table.Comment
 			}
 		}
-		if owned != 1 {
+		if tables != 1 {
+			return false, errors.New("refusing table without platform ownership comment")
+		}
+		if tableComment == "" {
+			comments, textErr := readNFTTextComments(ctx, a.runner)
+			if textErr != nil {
+				return false, textErr
+			}
+			tableComment = comments.Owner
+		}
+		if tableComment != owner {
 			return false, errors.New("refusing table without platform ownership comment")
 		}
 	}
@@ -673,13 +685,26 @@ func (a *Adapter) actualPlan(ctx context.Context, s State) (*Plan, error) {
 	if e = json.Unmarshal(b, &doc); e != nil {
 		return nil, e
 	}
+	relayComment, relayCount := "", 0
 	for _, v := range doc.NFTables {
 		if v.Chain != nil && v.Chain.Name == "relay" {
-			for _, p := range []*Plan{s.Recovery, s.PreviousRecovery, s.Candidate, s.Good} {
-				if p != nil && v.Chain.Comment == planToken(*p) {
-					return p, nil
-				}
-			}
+			relayCount++
+			relayComment = v.Chain.Comment
+		}
+	}
+	if relayCount != 1 {
+		return nil, errors.New("unknown physical counter incarnation; refusing to discard counters")
+	}
+	if relayComment == "" {
+		comments, textErr := readNFTTextComments(ctx, a.runner)
+		if textErr != nil {
+			return nil, textErr
+		}
+		relayComment = comments.Relay
+	}
+	for _, p := range []*Plan{s.Recovery, s.PreviousRecovery, s.Candidate, s.Good} {
+		if p != nil && relayComment == planToken(*p) {
+			return p, nil
 		}
 	}
 	return nil, errors.New("unknown physical counter incarnation; refusing to discard counters")

@@ -143,6 +143,63 @@ func TestApplyCheckThenAtomicApplyAndStaleAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestInspectUsesStrictTextFallbackWhenJSONOmitsTableComment(t *testing.T) {
+	for _, text := range []string{
+		"table ip reladock { # handle 24\n\tcomment \"reladock-dataplane-v1\"\n}\n",
+		"table ip reladock { # handle 24\n\tcomment \"foreign\"\n}\n",
+	} {
+		r := runnerFunc(func(_ context.Context, args []string, input string) ([]byte, error) {
+			if input != "" {
+				t.Fatal("inspection wrote nft input")
+			}
+			switch {
+			case reflect.DeepEqual(args, []string{"-j", "list", "tables"}):
+				return []byte(`{"nftables":[{"table":{"family":"ip","name":"reladock"}}]}`), nil
+			case reflect.DeepEqual(args, []string{"-j", "list", "table", "ip", "reladock"}):
+				return []byte(`{"nftables":[{"table":{"family":"ip","name":"reladock"}}]}`), nil
+			case reflect.DeepEqual(args, []string{"-a", "list", "table", "ip", "reladock"}):
+				return []byte(text), nil
+			default:
+				t.Fatal("unexpected inspection command", args)
+				return nil, nil
+			}
+		})
+		a := newTestAdapter(t, &memoryStore{}, r, &mutexLock{}, goodVerify)
+		found, e := a.inspect(context.Background())
+		if (e == nil) != strings.Contains(text, owner) || found != (e == nil) {
+			t.Fatalf("text=%q found=%t err=%v", text, found, e)
+		}
+	}
+}
+
+func TestActualPlanUsesTextFallbackWhenJSONOmitsRelayComment(t *testing.T) {
+	p, e := Compile(context.Background(), fixture(), options())
+	if e != nil {
+		t.Fatal(e)
+	}
+	r := runnerFunc(func(_ context.Context, args []string, input string) ([]byte, error) {
+		if input != "" {
+			t.Fatal("recovery inspection wrote nft input")
+		}
+		switch {
+		case reflect.DeepEqual(args, []string{"-j", "list", "tables"}):
+			return []byte(`{"nftables":[{"table":{"family":"ip","name":"reladock"}}]}`), nil
+		case reflect.DeepEqual(args, []string{"-j", "list", "table", "ip", "reladock"}):
+			return []byte(`{"nftables":[{"table":{"family":"ip","name":"reladock","comment":"reladock-dataplane-v1"}},{"chain":{"family":"ip","table":"reladock","name":"relay"}}]}`), nil
+		case reflect.DeepEqual(args, []string{"-a", "list", "table", "ip", "reladock"}):
+			return []byte("table ip reladock {\n\tcomment \"reladock-dataplane-v1\"\n\tchain relay {\n\t\tcomment \"" + planToken(p) + "\"\n\t}\n}\n"), nil
+		default:
+			t.Fatal("unexpected recovery inspection command", args)
+			return nil, nil
+		}
+	})
+	a := newTestAdapter(t, &memoryStore{}, r, &mutexLock{}, goodVerify)
+	actual, e := a.actualPlan(context.Background(), State{Candidate: &p})
+	if e != nil || actual == nil || actual.Incarnation != p.Incarnation {
+		t.Fatalf("physical plan not recovered: actual=%+v err=%v", actual, e)
+	}
+}
+
 func TestCheckFailureNeverApplies(t *testing.T) {
 	s := &memoryStore{}
 	r := &fakeRunner{failAt: map[int]bool{2: true}}

@@ -1,6 +1,6 @@
 # RelaDock
 
-v0.7.2 新增入口 Agent 一次性安装接入，支持在显式租约授权下接管真实 VPS 上空的内核默认 `fq/0:` 根队列，并兼容 iproute2 在无 class/filter 时返回空输出。后台登记节点后生成专属命令，从固定 GitHub Release 下载并验证安装包，在 VPS 本地生成私钥、申请证书、自动启用连接校验服务。须先配置生产 HTTPS、签发 CA 和实际已发布版本摘要；当前代码不会自动发布 Release。实际转发仍单独确认，详见 [部署说明](docs/DEPLOYMENT.md)。
+v0.7.3 新增入口 Agent 一次性安装接入，支持在显式租约授权下接管真实 VPS 上空的内核默认 `fq/0:` 根队列，兼容 iproute2 空 class/filter 输出，并为 nftables 1.0.2 增加严格的文本 comment 回读兜底。后台登记节点后生成专属命令，从固定 GitHub Release 下载并验证安装包，在 VPS 本地生成私钥、申请证书、自动启用连接校验服务。须先配置生产 HTTPS、签发 CA 和实际已发布版本摘要；当前代码不会自动发布 Release。实际转发仍单独确认，详见 [部署说明](docs/DEPLOYMENT.md)。
 
 网络中转与后续企业组网平台。只透传客户业务和 VPN 协议流量，不提供 VPN 订阅或终端用户管理。
 
