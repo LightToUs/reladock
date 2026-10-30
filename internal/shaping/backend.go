@@ -63,6 +63,12 @@ func array(data []byte) ([]map[string]json.RawMessage, error) {
 	}
 	return v, nil
 }
+func optionalArray(data []byte) ([]map[string]json.RawMessage, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return []map[string]json.RawMessage{}, nil
+	}
+	return array(data)
+}
 func str(m map[string]json.RawMessage, k string) string {
 	var s string
 	_ = json.Unmarshal(m[k], &s)
@@ -153,7 +159,7 @@ func (b *SystemBackend) Inspect(ctx context.Context, l Lease) (Snapshot, error) 
 	if e != nil {
 		return s, e
 	}
-	classes, e := array(raw)
+	classes, e := optionalArray(raw)
 	if e != nil {
 		return s, e
 	}
@@ -197,7 +203,7 @@ func (b *SystemBackend) Inspect(ctx context.Context, l Lease) (Snapshot, error) 
 	if e != nil {
 		return s, e
 	}
-	filters, e := array(raw)
+	filters, e := optionalArray(raw)
 	if e != nil {
 		return s, e
 	}

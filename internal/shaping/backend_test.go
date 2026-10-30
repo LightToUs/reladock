@@ -101,6 +101,25 @@ func TestSystemBackendFingerprintsExactKernelDefaultQdiscOutput(t *testing.T) {
 	}
 }
 
+func TestSystemBackendTreatsBlankClassAndFilterOutputAsEmpty(t *testing.T) {
+	run := runnerFunc(func(_ context.Context, tool Tool, args []string) ([]byte, error) {
+		if tool == IP {
+			return []byte(`[{"ifindex":7,"ifname":"rd-egress","ifalias":"reladock-shaping-v1:node-owner"}]`), nil
+		}
+		if args[1] == "qdisc" {
+			return []byte(`[{"kind":"noqueue","handle":"0:","root":true,"options":{}}]`), nil
+		}
+		return nil, nil
+	})
+	s, e := NewSystemBackend(run, func(context.Context) (string, error) { return "netns-test", nil }).Inspect(context.Background(), options().Lease)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(s.Classes) != 0 || len(s.Filters) != 0 {
+		t.Fatalf("blank tc inventory was not empty: %+v", s)
+	}
+}
+
 func TestSystemBackendRejectsMalformedOrUnsupportedReadback(t *testing.T) {
 	for _, bad := range []string{`null`, `{}`, `[{"kind":"htb","handle":"5244:","root":true,"options":{"default":"bogus"}}]`} {
 		r := runnerFunc(func(_ context.Context, tool Tool, args []string) ([]byte, error) {

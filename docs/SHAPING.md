@@ -88,7 +88,7 @@ tc 命令是顺序执行的，**不存在 nft 式原子事务或 `tc -c`**。主
 
 `NewLinuxBackend` 只允许 Linux 和绝对 tc/ip 路径，直接参数数组执行，不经过 shell，不构造 nft 或路由操作；默认不会被 Compile 创建。命令允许 show 和本组件需要的 root add、class/filter replace；Backend 是可信底层原语，调用方不可将任意用户命令直接交给它绕过 Adapter。
 
-`SystemBackend` 实际读取 `ip -j -d link`、`tc -j qdisc/class/filter show`。校验 namespace、alias、ifindex、root HTB/default、每个 class 的 parent/rate/ceil、fw mark/mask/priority/classid/drop。兼容 HTB class 的 `class`/`kind`、顶层或嵌套参数、parent-scoped fw 回读省略 parent 的格式。tc 输出 rate/ceil 是 byte/s，转换到 bit/s 后验证。写执行器只允许固定 root add、显式授权路径使用的固定 root replace，以及 class/filter replace；delete、其他 root kind/handle 和非法接口名均拒绝。未知模式、offload 或未知 action 不视为成功；不根据 plan 数据伪造 readback。
+`SystemBackend` 实际读取 `ip -j -d link`、`tc -j qdisc/class/filter show`。校验 namespace、alias、ifindex、root HTB/default、每个 class 的 parent/rate/ceil、fw mark/mask/priority/classid/drop。兼容 HTB class 的 `class`/`kind`、顶层或嵌套参数、parent-scoped fw 回读省略 parent 的格式；部分 iproute2 在没有 class/filter 时输出空字节而非 `[]`，这两个明确的空清单视为空，qdisc 与其他 JSON 仍必须完整。tc 输出 rate/ceil 是 byte/s，转换到 bit/s 后验证。写执行器只允许固定 root add、显式授权路径使用的固定 root replace，以及 class/filter replace；delete、其他 root kind/handle 和非法接口名均拒绝。未知模式、offload 或未知 action 不视为成功；不根据 plan 数据伪造 readback。
 
 FileStore 使用最终目录 0700、文件 0600、私有临时文件、文件 fsync、原子 rename、目录 fsync 和严格 JSON（8 MiB 上限）。锁使用同一 inode 的 flock，支持取消。状态含 Good、PriorGood、完整 Candidate、Restoring、HighWater、已验证摘要。所有控制同一租约的进程必须使用同一目录和锁；父目录须可信，禁止删除/替换锁 inode。最终 symlink、宽权限、非普通状态文件拒绝。不支持原 namespace/接口身份变化后的无授权自动接管。磁盘故障与断电的保证受文件系统影响。
 
