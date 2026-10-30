@@ -218,6 +218,44 @@ func TestAdminNodeLifecycleAndRevisionGuards(t *testing.T) {
 	}
 }
 
+func TestAdminNodesExposeAgentContactStatus(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	status := func() string {
+		t.Helper()
+		nodes, err := s.AdminNodes(ctx, admin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, node := range nodes {
+			if node.ID == "hk-01" {
+				return node.ContactStatus
+			}
+		}
+		t.Fatal("seed node not found")
+		return ""
+	}
+	for _, tc := range []struct {
+		name   string
+		update string
+		want   string
+	}{
+		{"never connected", "UPDATE nodes SET last_seen_at=NULL WHERE id='hk-01'", "never-seen"},
+		{"online", "UPDATE nodes SET last_seen_at=clock_timestamp()-interval '4 minutes 59 seconds' WHERE id='hk-01'", "online"},
+		{"offline", "UPDATE nodes SET last_seen_at=clock_timestamp()-interval '5 minutes 1 second' WHERE id='hk-01'", "offline"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := s.pool.Exec(ctx, tc.update); err != nil {
+				t.Fatal(err)
+			}
+			if got := status(); got != tc.want {
+				t.Fatalf("contact status=%q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTenantSuspensionAndPlatformRuleActions(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

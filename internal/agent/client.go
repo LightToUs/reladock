@@ -278,9 +278,9 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 		client.Timeout = 20 * time.Second
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	version := "validation-only/0.7.4"
+	version := "validation-only/0.7.5"
 	if c.Applier != nil {
-		version = "apply-opt-in/0.7.4"
+		version = "apply-opt-in/0.7.5"
 	}
 	req.Header.Set("X-RelaDock-Agent-Version", version)
 	return client.Do(req)

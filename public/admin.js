@@ -1,5 +1,6 @@
 import { bindOperations } from './operations-tools.js';
 import { bindNodeBootstrap } from './node-bootstrap.js';
+import { agentContactPresentation } from './node-contact-status.js';
 const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], editingNode: null, certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '' };
 const titles = { overview: '平台总览', nodes: '入口节点', tenants: '企业客户', rules: '全局规则', deliveries: '配置交付', plans:'规则套餐',operations:'告警工单',costs:'成本与经营差额',audit: '操作审计' };
@@ -49,15 +50,14 @@ async function mutate(path, body, success) {
 }
 function renderNodes(nodes) {
   const root = $('#admin-nodes'); root.replaceChildren();
-  for (const node of nodes) { const row = root.insertRow(); cell(row, node.name, node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`); cell(row, node.status === 'maintenance' ? '维护中' : '尚未部署'); cell(row, `${node.desiredGeneration} / ${node.validatedGeneration}`, `修订 ${node.revision}`); cell(row, node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试耗尽 · 待处理' : deliveries[node.deliveryState] || '未知', node.lastSeenAt ? `最近联系 ${new Date(node.lastSeenAt).toLocaleString()}` : '尚无联系记录'); cell(row, node.certificateFingerprint ? '已绑定' : '未绑定'); const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('编辑', () => editNode(node)), button(node.status === 'maintenance' ? '恢复分配' : '进入维护', () => mutate(`/api/admin/nodes/${node.id}/${node.status === 'maintenance' ? 'enable' : 'maintenance'}`, { revision: node.revision }, '节点分配状态已更新。')), button('证书', () => editCertificate(node)), button('重试交付', () => mutate(`/api/admin/nodes/${node.id}/retry`, { revision: node.revision }, '已生成最新完整快照，等待 Agent 领取。')), button('交付记录', () => { $('#delivery-node').value = node.id; showView('deliveries'); })); }
-  empty(root, 8, '暂无节点，请先登记入口资源。');
+  for (const node of nodes) { const row = root.insertRow(); cell(row, node.name, node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`); cell(row, node.status === 'maintenance' ? '维护中' : '尚未部署'); const contact = agentContactPresentation(node.contactStatus); const contactCell = cell(row, contact.label, node.lastSeenAt ? `最近联系 ${new Date(node.lastSeenAt).toLocaleString()}` : '尚无联系记录'); contactCell.classList.add('agent-status', `agent-status-${contact.tone}`); cell(row, `${node.desiredGeneration} / ${node.validatedGeneration}`, `修订 ${node.revision}`); cell(row, node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试耗尽 · 待处理' : deliveries[node.deliveryState] || '未知'); cell(row, node.certificateFingerprint ? '已绑定' : '未绑定'); const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('编辑', () => editNode(node)), button(node.status === 'maintenance' ? '恢复分配' : '进入维护', () => mutate(`/api/admin/nodes/${node.id}/${node.status === 'maintenance' ? 'enable' : 'maintenance'}`, { revision: node.revision }, '节点分配状态已更新。')), button('证书', () => editCertificate(node)), button('重试交付', () => mutate(`/api/admin/nodes/${node.id}/retry`, { revision: node.revision }, '已生成最新完整快照，等待 Agent 领取。')), button('交付记录', () => { $('#delivery-node').value = node.id; showView('deliveries'); })); }
+  empty(root, 9, '暂无节点，请先登记入口资源。');
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i]; const row = root.rows[i];
     row.cells[3].textContent = node.status === 'maintenance' ? '维护中' : node.appliedGeneration > 0 ? '已有应用确认 · 健康未知' : '尚未部署';
-    row.cells[4].replaceChildren();
-    row.cells[4].append(document.createTextNode(`${node.desiredGeneration} / ${node.validatedGeneration} / ${node.appliedGeneration}（修订 ${node.revision}）`));
-    row.cells[7].append(button('安装 Agent',()=>bootstrapUI.open(node)));
-    if(node.status!=='maintenance' && !node.appliedGeneration && node.lastSeenAt)row.cells[3].textContent=Date.now()-Date.parse(node.lastSeenAt)<120000?'Agent 已联系 · 未确认转发':'Agent 联系已过期 · 健康未知';
+    row.cells[5].replaceChildren();
+    row.cells[5].append(document.createTextNode(`${node.desiredGeneration} / ${node.validatedGeneration} / ${node.appliedGeneration}（修订 ${node.revision}）`));
+    row.cells[8].append(button('安装 Agent',()=>bootstrapUI.open(node)));
   }
 }
 function editNode(node) { state.editingNode = node; const form = $('#node-form'); for (const name of ['id', 'name', 'region', 'listenAddress', 'publicAddress', 'capacityMbps']) form.elements.namedItem(name).value = node[name]; form.elements.namedItem('id').readOnly = true; $('#node-form-title').textContent = `编辑节点 · ${node.name}`; $('#node-save').textContent = '保存节点修改'; $('#node-form-title').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
