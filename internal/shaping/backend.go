@@ -191,6 +191,12 @@ func splitLegacyFilterRows(data []byte) ([][]byte, error) {
 				return nil, errors.New("legacy filter rows lack a comma")
 			}
 			i++
+			for i < len(trimmed)-1 && (trimmed[i] == ' ' || trimmed[i] == '\t' || trimmed[i] == '\r' || trimmed[i] == '\n') {
+				i++
+			}
+			if i >= len(trimmed)-1 || trimmed[i] != '{' {
+				return nil, errors.New("legacy filter array has a trailing comma")
+			}
 		}
 	}
 	if len(rows) == 0 {
@@ -263,6 +269,15 @@ func filterArray(data []byte) ([]map[string]json.RawMessage, error) {
 		seenDetail[detailKey] = true
 		var normalized []byte
 		if action {
+			if !json.Valid(parts[4]) {
+				return nil, errors.New("legacy fw actions are not one JSON value")
+			}
+			if err := uniqueJSON(parts[4]); err != nil {
+				return nil, err
+			}
+			if _, err := array(parts[4]); err != nil {
+				return nil, errors.New("legacy fw actions are not an object array")
+			}
 			normalized = []byte(fmt.Sprintf(`{"protocol":"ip","pref":%s,"kind":"fw","chain":0,"options":{"fw":{"mark":"%s","mask":"%s"},"actions":%s}}`, parts[1], parts[2], parts[3], parts[4]))
 		} else {
 			normalized = []byte(fmt.Sprintf(`{"protocol":"ip","pref":%s,"kind":"fw","chain":0,"options":{"fw":{"mark":"%s","mask":"%s"},"classid":"%s"}}`, parts[1], parts[2], parts[3], parts[4]))
