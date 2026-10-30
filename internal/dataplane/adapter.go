@@ -1,6 +1,7 @@
 package dataplane
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -586,14 +587,69 @@ func (a *Adapter) Observe(ctx context.Context, fn func(context.Context, Plan) er
 func (a *Adapter) freezeOwned(ctx context.Context) error {
 	stop, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	exists, e := a.inspect(stop)
+	return a.ensureFrozen(stop)
+}
+
+func (a *Adapter) relayFrozen(ctx context.Context) (bool, error) {
+	b, e := a.runner.Run(ctx, []string{"-j", "list", "table", "ip", Table}, "")
+	if e != nil {
+		return false, e
+	}
+	var doc struct {
+		NFTables []struct {
+			Rule *struct {
+				Family  string                       `json:"family"`
+				Table   string                       `json:"table"`
+				Chain   string                       `json:"chain"`
+				Comment string                       `json:"comment"`
+				Expr    []map[string]json.RawMessage `json:"expr"`
+			} `json:"rule"`
+		} `json:"nftables"`
+	}
+	if e = json.Unmarshal(b, &doc); e != nil {
+		return false, e
+	}
+	frozen := false
+	for _, item := range doc.NFTables {
+		if item.Rule == nil || item.Rule.Comment != "reladock-meter-freeze" {
+			continue
+		}
+		rule := item.Rule
+		if rule.Family != "ip" || rule.Table != Table || rule.Chain != "relay" || len(rule.Expr) != 1 || len(rule.Expr[0]) != 1 {
+			return false, errors.New("malformed meter freeze rule")
+		}
+		drop, ok := rule.Expr[0]["drop"]
+		if !ok || string(bytes.TrimSpace(drop)) != "null" {
+			return false, errors.New("meter freeze comment is not a drop")
+		}
+		frozen = true
+	}
+	return frozen, nil
+}
+
+func (a *Adapter) ensureFrozen(ctx context.Context) error {
+	exists, e := a.inspect(ctx)
 	if e != nil {
 		return e
 	}
 	if !exists {
 		return ErrRecoveryRequired
 	}
-	return a.execute(stop, "insert rule ip "+Table+" relay drop comment \"reladock-meter-freeze\"\n")
+	frozen, e := a.relayFrozen(ctx)
+	if e != nil || frozen {
+		return e
+	}
+	if e = a.execute(ctx, "insert rule ip "+Table+" relay drop comment \"reladock-meter-freeze\"\n"); e != nil {
+		return e
+	}
+	frozen, e = a.relayFrozen(ctx)
+	if e != nil {
+		return e
+	}
+	if !frozen {
+		return errors.New("meter freeze missing after successful insert")
+	}
+	return nil
 }
 
 // CheckMeterBinding validates local persistent state before any collector can
@@ -667,7 +723,7 @@ func newIncarnation() string {
 }
 
 func (a *Adapter) freezeAndSample(ctx context.Context, p Plan) error {
-	if e := a.execute(ctx, "insert rule ip "+Table+" relay drop comment \"reladock-meter-freeze\"\n"); e != nil {
+	if e := a.ensureFrozen(ctx); e != nil {
 		return e
 	}
 	return a.hooks.BeforeReplace(ctx, p)

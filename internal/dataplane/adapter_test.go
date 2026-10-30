@@ -69,11 +69,13 @@ type call struct {
 	script string
 }
 type fakeRunner struct {
-	calls   []call
-	failAt  map[int]bool
-	foreign bool
-	exists  bool
-	token   string
+	calls         []call
+	failAt        map[int]bool
+	foreign       bool
+	exists        bool
+	token         string
+	freezeRules   int
+	invalidFreeze bool
 }
 
 func (r *fakeRunner) Run(_ context.Context, args []string, input string) ([]byte, error) {
@@ -96,15 +98,62 @@ func (r *fakeRunner) Run(_ context.Context, args []string, input string) ([]byte
 		if r.token != "" {
 			chain = `,{"chain":{"name":"relay","comment":"` + r.token + `"}}`
 		}
-		return []byte(`{"nftables":[{"table":{"family":"ip","name":"reladock","comment":"` + comment + `"}}` + chain + `]}`), nil
+		rules := ""
+		for i := 0; i < r.freezeRules; i++ {
+			expr := `[{"drop":null}]`
+			if r.invalidFreeze {
+				expr = `[{"accept":null}]`
+			}
+			rules += `,{"rule":{"family":"ip","table":"reladock","chain":"relay","comment":"reladock-meter-freeze","expr":` + expr + `}}`
+		}
+		return []byte(`{"nftables":[{"table":{"family":"ip","name":"reladock","comment":"` + comment + `"}}` + chain + rules + `]}`), nil
 	}
 	if reflect.DeepEqual(args, []string{"-f", "-"}) {
+		if strings.Contains(input, `reladock-meter-freeze`) {
+			r.freezeRules++
+		}
 		if strings.Contains(input, "chain forward") {
 			r.exists = true
 			r.token = regexp.MustCompile(`reladock-plan-[0-9a-f]+`).FindString(input)
 		}
 	}
 	return nil, nil
+}
+
+func TestFreezeOwnedIsIdempotent(t *testing.T) {
+	r := &fakeRunner{exists: true, token: "reladock-plan-0123456789abcdef"}
+	a := newTestAdapter(t, &memoryStore{}, r, &mutexLock{}, goodVerify)
+	if err := a.freezeOwned(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.freezeOwned(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.freezeRules != 1 {
+		t.Fatalf("freeze insertions=%d, want 1", r.freezeRules)
+	}
+}
+
+func TestFreezeOwnedRecognizesExistingDuplicateDropsWithoutGrowingThem(t *testing.T) {
+	r := &fakeRunner{exists: true, token: "reladock-plan-0123456789abcdef", freezeRules: 3}
+	a := newTestAdapter(t, &memoryStore{}, r, &mutexLock{}, goodVerify)
+	if err := a.freezeOwned(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.freezeRules != 3 {
+		t.Fatalf("existing freezes grew to %d", r.freezeRules)
+	}
+}
+
+func TestFreezeOwnedRejectsCommentThatIsNotADrop(t *testing.T) {
+	r := &fakeRunner{exists: true, token: "reladock-plan-0123456789abcdef", freezeRules: 1, invalidFreeze: true}
+	a := newTestAdapter(t, &memoryStore{}, r, &mutexLock{}, goodVerify)
+	if err := a.freezeOwned(context.Background()); err == nil {
+		t.Fatal("non-drop freeze comment accepted")
+	}
+	if r.freezeRules != 1 {
+		t.Fatalf("wrote after malformed freeze: %d", r.freezeRules)
+	}
 }
 func newTestAdapter(t *testing.T, s StateStore, r Runner, l Locker, v Verifier) *Adapter {
 	t.Helper()

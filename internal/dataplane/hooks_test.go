@@ -14,7 +14,7 @@ type transitionLog struct {
 }
 
 func (h *transitionLog) BeforeReplace(_ context.Context, p Plan) error {
-	if len(h.runner.calls) == 0 || !strings.Contains(h.runner.calls[len(h.runner.calls)-1].script, "reladock-meter-freeze") {
+	if h.runner.freezeRules == 0 {
 		return errors.New("counters sampled before traffic freeze")
 	}
 	h.events = append(h.events, "before")
@@ -63,7 +63,7 @@ func TestTransitionMeterFailureCannotResumeOrDiscardUnrecordedTraffic(t *testing
 	if _, e := a.Apply(ctx, cfg); e == nil {
 		t.Fatal("lost WAL error")
 	}
-	if !s.state.Pending || !strings.Contains(r.calls[len(r.calls)-1].script, "reladock-meter-freeze") {
+	if !s.state.Pending || r.freezeRules == 0 {
 		t.Fatal("forwarded after losing final counter snapshot")
 	}
 	if e := a.Recover(ctx); e == nil {
@@ -84,7 +84,7 @@ func TestDependencyVerificationFailureFreezesOwnedForwardingBeforeReturning(t *t
 	if e := a.Observe(ctx, func(context.Context, Plan) error { called = true; return nil }); e == nil {
 		t.Fatal("lost dependency failure")
 	}
-	if called || !strings.Contains(r.calls[len(r.calls)-1].script, "reladock-meter-freeze") {
+	if called || r.freezeRules == 0 {
 		t.Fatal("forwarding continued with unverified limiter")
 	}
 }
@@ -148,7 +148,7 @@ func TestDifferentWALCannotAdoptAndRebillExistingPhysicalCounters(t *testing.T) 
 	if e := a.Observe(ctx, func(context.Context, Plan) error { sampled = true; return nil }); e == nil {
 		t.Fatal("new WAL adopted old counters")
 	}
-	if sampled || !strings.Contains(r.calls[len(r.calls)-1].script, "reladock-meter-freeze") {
+	if sampled || r.freezeRules == 0 {
 		t.Fatal("WAL mismatch neither stopped traffic nor prevented rebilling")
 	}
 }
