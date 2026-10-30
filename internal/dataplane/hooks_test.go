@@ -42,7 +42,11 @@ func TestTransitionHooksFreezeBeforeReadingCounters(t *testing.T) {
 	if _, e := a.Apply(ctx, cfg); e != nil {
 		t.Fatal(e)
 	}
-	if strings.Join(h.events, ",") != "after,before,after" {
+	cfg.Generation = 3
+	if _, e := a.Apply(ctx, cfg); e != nil {
+		t.Fatal(e)
+	}
+	if strings.Join(h.events, ",") != "after,before,after,before,after" {
 		t.Fatalf("hooks %+v", h.events)
 	}
 }

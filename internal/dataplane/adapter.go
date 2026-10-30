@@ -597,6 +597,11 @@ func (a *Adapter) relayFrozen(ctx context.Context) (bool, error) {
 	}
 	var doc struct {
 		NFTables []struct {
+			Table *struct {
+				Family  string `json:"family"`
+				Name    string `json:"name"`
+				Comment string `json:"comment"`
+			} `json:"table"`
 			Rule *struct {
 				Family  string                       `json:"family"`
 				Table   string                       `json:"table"`
@@ -608,6 +613,27 @@ func (a *Adapter) relayFrozen(ctx context.Context) (bool, error) {
 	}
 	if e = json.Unmarshal(b, &doc); e != nil {
 		return false, e
+	}
+	tables := 0
+	tableComment := ""
+	for _, item := range doc.NFTables {
+		if item.Table != nil && item.Table.Family == "ip" && item.Table.Name == Table {
+			tables++
+			tableComment = item.Table.Comment
+		}
+	}
+	if tables != 1 {
+		return false, errors.New("refusing table without platform ownership comment")
+	}
+	if tableComment == "" {
+		comments, textErr := readNFTTextComments(ctx, a.runner)
+		if textErr != nil {
+			return false, textErr
+		}
+		tableComment = comments.Owner
+	}
+	if tableComment != owner {
+		return false, errors.New("refusing table without platform ownership comment")
 	}
 	frozen := false
 	for _, item := range doc.NFTables {

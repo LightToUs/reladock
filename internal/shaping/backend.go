@@ -96,6 +96,17 @@ func tcRateBytes(value string) (uint64, error) {
 	return 0, errors.New("unsupported tc rate unit")
 }
 
+func tcByteQuantity(value string) error {
+	if !strings.HasSuffix(value, "b") || !decimal(strings.TrimSuffix(value, "b")) {
+		return errors.New("invalid legacy HTB byte quantity")
+	}
+	_, err := strconv.ParseUint(strings.TrimSuffix(value, "b"), 10, 64)
+	if err != nil {
+		return errors.New("legacy HTB byte quantity overflow")
+	}
+	return nil
+}
+
 func rawJSON(value any) json.RawMessage {
 	b, _ := json.Marshal(value)
 	return b
@@ -136,9 +147,14 @@ func classArray(data []byte) ([]map[string]json.RawMessage, error) {
 			return nil, errors.New("legacy HTB class lacks root or parent")
 		}
 		var rate, ceil uint64
-		rateSeen, ceilSeen := false, false
+		attributes := map[string]bool{}
 		for i := start; i < len(fields); i++ {
-			switch fields[i] {
+			name := fields[i]
+			if attributes[name] {
+				return nil, fmt.Errorf("duplicate legacy HTB %s", name)
+			}
+			attributes[name] = true
+			switch name {
 			case "root", "parent":
 				return nil, errors.New("duplicate legacy HTB relation")
 			case "rate", "ceil":
@@ -149,21 +165,35 @@ func classArray(data []byte) ([]map[string]json.RawMessage, error) {
 				if err != nil {
 					return nil, err
 				}
-				if fields[i] == "rate" {
-					if rateSeen {
-						return nil, errors.New("duplicate legacy HTB rate")
-					}
-					rate, rateSeen = v, true
+				if name == "rate" {
+					rate = v
 				} else {
-					if ceilSeen {
-						return nil, errors.New("duplicate legacy HTB ceil")
-					}
-					ceil, ceilSeen = v, true
+					ceil = v
 				}
 				i++
+			case "prio":
+				if i+1 >= len(fields) {
+					return nil, errors.New("legacy HTB priority lacks value")
+				}
+				priority, err := strconv.ParseUint(fields[i+1], 10, 64)
+				if err != nil {
+					return nil, errors.New("invalid legacy HTB priority")
+				}
+				row["prio"] = rawJSON(priority)
+				i++
+			case "burst", "cburst":
+				if i+1 >= len(fields) {
+					return nil, fmt.Errorf("legacy HTB %s lacks value", name)
+				}
+				if err := tcByteQuantity(fields[i+1]); err != nil {
+					return nil, err
+				}
+				i++
+			default:
+				return nil, fmt.Errorf("unsupported legacy HTB attribute %s", name)
 			}
 		}
-		if !rateSeen || !ceilSeen {
+		if !attributes["rate"] || !attributes["ceil"] {
 			return nil, errors.New("legacy HTB class lacks rate or ceil")
 		}
 		row["rate"], row["ceil"] = rawJSON(rate), rawJSON(ceil)

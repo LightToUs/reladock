@@ -76,6 +76,8 @@ type fakeRunner struct {
 	token         string
 	freezeRules   int
 	invalidFreeze bool
+	tableReads    int
+	foreignAtRead int
 }
 
 func (r *fakeRunner) Run(_ context.Context, args []string, input string) ([]byte, error) {
@@ -90,8 +92,9 @@ func (r *fakeRunner) Run(_ context.Context, args []string, input string) ([]byte
 		return []byte(`{"nftables":[]}`), nil
 	}
 	if reflect.DeepEqual(args, []string{"-j", "list", "table", "ip", "reladock"}) {
+		r.tableReads++
 		comment := owner
-		if r.foreign {
+		if r.foreign || r.foreignAtRead == r.tableReads {
 			comment = "foreign"
 		}
 		chain := ""
@@ -115,6 +118,7 @@ func (r *fakeRunner) Run(_ context.Context, args []string, input string) ([]byte
 		if strings.Contains(input, "chain forward") {
 			r.exists = true
 			r.token = regexp.MustCompile(`reladock-plan-[0-9a-f]+`).FindString(input)
+			r.freezeRules = 0
 		}
 	}
 	return nil, nil
@@ -153,6 +157,17 @@ func TestFreezeOwnedRejectsCommentThatIsNotADrop(t *testing.T) {
 	}
 	if r.freezeRules != 1 {
 		t.Fatalf("wrote after malformed freeze: %d", r.freezeRules)
+	}
+}
+
+func TestFreezeOwnedRevalidatesOwnershipOnDecisionSnapshot(t *testing.T) {
+	r := &fakeRunner{exists: true, token: "reladock-plan-0123456789abcdef", foreignAtRead: 2}
+	a := newTestAdapter(t, &memoryStore{}, r, &mutexLock{}, goodVerify)
+	if err := a.freezeOwned(context.Background()); err == nil {
+		t.Fatal("foreign replacement accepted between ownership and freeze reads")
+	}
+	if r.freezeRules != 0 {
+		t.Fatalf("foreign table modified with %d freeze rules", r.freezeRules)
 	}
 }
 func newTestAdapter(t *testing.T, s StateStore, r Runner, l Locker, v Verifier) *Adapter {

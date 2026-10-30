@@ -200,6 +200,12 @@ func TestSystemBackendLegacyClassTextFailsClosed(t *testing.T) {
 		"unsupported unit":       "class htb 5244:1 root rate 1Gbps ceil 1Gbit\n",
 		"sub-byte rate":          "class htb 5244:1 root rate 1bit ceil 1Gbit\n",
 		"overflow":               "class htb 5244:1 root rate 18446744073709551615Tbit ceil 1Gbit\n",
+		"nonzero priority":       "class htb 5244:1 root prio 7 rate 1Gbit ceil 1Gbit burst 1250000b cburst 1250000b\n",
+		"duplicate priority":     "class htb 5244:1 root prio 0 prio 0 rate 1Gbit ceil 1Gbit burst 1250000b cburst 1250000b\n",
+		"unknown attribute":      "class htb 5244:1 root prio 0 rate 1Gbit ceil 1Gbit frobnicate 1\n",
+		"missing burst value":    "class htb 5244:1 root prio 0 rate 1Gbit ceil 1Gbit burst\n",
+		"invalid burst value":    "class htb 5244:1 root prio 0 rate 1Gbit ceil 1Gbit burst nope\n",
+		"trailing garbage":       "class htb 5244:1 root prio 0 rate 1Gbit ceil 1Gbit garbage\n",
 	}
 	for name, raw := range tests {
 		t.Run(name, func(t *testing.T) {
