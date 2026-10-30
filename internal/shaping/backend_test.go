@@ -156,6 +156,60 @@ func TestSystemBackendAcceptsTopLevelHTBClassRates(t *testing.T) {
 	}
 }
 
+func inspectLegacyClasses(t *testing.T, raw string) (Snapshot, error) {
+	t.Helper()
+	r := runnerFunc(func(_ context.Context, tool Tool, args []string) ([]byte, error) {
+		if tool == IP {
+			return []byte(`[{"ifindex":7,"ifname":"rd-egress","ifalias":"reladock-shaping-v1:node-owner"}]`), nil
+		}
+		if args[1] == "qdisc" {
+			return []byte(`[{"kind":"htb","handle":"5244:","root":true,"options":{"default":65535}}]`), nil
+		}
+		if args[1] == "class" {
+			return []byte(raw), nil
+		}
+		return []byte(`[]`), nil
+	})
+	return NewSystemBackend(r, func(context.Context) (string, error) { return "netns-test", nil }).Inspect(context.Background(), options().Lease)
+}
+
+func TestSystemBackendAcceptsLegacyHTBClassTextFromIPRoute215(t *testing.T) {
+	raw := "class htb 5244:1 root prio 0 rate 1Gbit ceil 1Gbit burst 1250000b cburst 1250000b\n" +
+		"class htb 5244:11c0 parent 5244:1 prio 0 rate 8bit ceil 1000Mbit burst 1250000b cburst 1250000b\n"
+	s, err := inspectLegacyClasses(t, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ClassState{
+		{ID: "5244:1", Parent: RootHandle, Kind: "htb", RateBits: 1_000_000_000, CeilBits: 1_000_000_000},
+		{ID: "5244:11c0", Parent: "5244:1", Kind: "htb", RateBits: 8, CeilBits: 1_000_000_000},
+	}
+	if !reflect.DeepEqual(s.Classes, want) {
+		t.Fatalf("legacy classes %+v, want %+v", s.Classes, want)
+	}
+}
+
+func TestSystemBackendLegacyClassTextFailsClosed(t *testing.T) {
+	tests := map[string]string{
+		"malformed JSON-looking": `[{"kind":"htb"}`,
+		"unknown class kind":     "class cake 5244:1 root rate 1Gbit ceil 1Gbit\n",
+		"missing rate":           "class htb 5244:1 root ceil 1Gbit\n",
+		"missing ceil":           "class htb 5244:1 root rate 1Gbit\n",
+		"duplicate rate":         "class htb 5244:1 root rate 1Gbit rate 1Gbit ceil 1Gbit\n",
+		"duplicate class":        "class htb 5244:1 root rate 1Gbit ceil 1Gbit\nclass htb 5244:1 root rate 1Gbit ceil 1Gbit\n",
+		"unsupported unit":       "class htb 5244:1 root rate 1Gbps ceil 1Gbit\n",
+		"sub-byte rate":          "class htb 5244:1 root rate 1bit ceil 1Gbit\n",
+		"overflow":               "class htb 5244:1 root rate 18446744073709551615Tbit ceil 1Gbit\n",
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := inspectLegacyClasses(t, raw); err == nil {
+				t.Fatal("unsafe legacy class output accepted")
+			}
+		})
+	}
+}
+
 func TestSystemBackendAcceptsParentScopedFlatFWRows(t *testing.T) {
 	r := runnerFunc(func(_ context.Context, tool Tool, args []string) ([]byte, error) {
 		if tool == IP {

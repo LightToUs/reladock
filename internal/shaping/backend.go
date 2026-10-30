@@ -69,6 +69,108 @@ func optionalArray(data []byte) ([]map[string]json.RawMessage, error) {
 	}
 	return array(data)
 }
+
+func tcRateBytes(value string) (uint64, error) {
+	units := []struct {
+		suffix     string
+		multiplier uint64
+	}{{"Tbit", 1_000_000_000_000}, {"Gbit", 1_000_000_000}, {"Mbit", 1_000_000}, {"Kbit", 1_000}, {"bit", 1}}
+	for _, unit := range units {
+		if !strings.HasSuffix(value, unit.suffix) {
+			continue
+		}
+		number := strings.TrimSuffix(value, unit.suffix)
+		if !decimal(number) {
+			return 0, errors.New("invalid tc rate number")
+		}
+		n, err := strconv.ParseUint(number, 10, 64)
+		if err != nil || n > ^uint64(0)/unit.multiplier {
+			return 0, errors.New("tc rate overflow")
+		}
+		bits := n * unit.multiplier
+		if bits%8 != 0 || bits/8 > 1<<60 {
+			return 0, errors.New("tc rate is not representable")
+		}
+		return bits / 8, nil
+	}
+	return 0, errors.New("unsupported tc rate unit")
+}
+
+func rawJSON(value any) json.RawMessage {
+	b, _ := json.Marshal(value)
+	return b
+}
+
+// classArray accepts JSON where iproute2 implements it and the strict HTB
+// text emitted by iproute2 5.15 even when -j is requested. Other tc inventory
+// remains JSON-only; this compatibility path does not relax lease validation.
+func classArray(data []byte) ([]map[string]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return []map[string]json.RawMessage{}, nil
+	}
+	if trimmed[0] == '[' || trimmed[0] == '{' {
+		return array(trimmed)
+	}
+	rows := make([]map[string]json.RawMessage, 0)
+	seen := map[string]bool{}
+	for _, line := range strings.Split(string(trimmed), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 7 || fields[0] != "class" || fields[1] != "htb" || !classID(fields[2]) || seen[fields[2]] {
+			return nil, errors.New("invalid legacy HTB class row")
+		}
+		seen[fields[2]] = true
+		row := map[string]json.RawMessage{"kind": rawJSON("htb"), "handle": rawJSON(fields[2])}
+		start := 0
+		switch fields[3] {
+		case "root":
+			row["root"] = rawJSON(true)
+			start = 4
+		case "parent":
+			if len(fields) < 8 || !classID(fields[4]) {
+				return nil, errors.New("invalid legacy HTB parent")
+			}
+			row["parent"] = rawJSON(fields[4])
+			start = 5
+		default:
+			return nil, errors.New("legacy HTB class lacks root or parent")
+		}
+		var rate, ceil uint64
+		rateSeen, ceilSeen := false, false
+		for i := start; i < len(fields); i++ {
+			switch fields[i] {
+			case "root", "parent":
+				return nil, errors.New("duplicate legacy HTB relation")
+			case "rate", "ceil":
+				if i+1 >= len(fields) {
+					return nil, errors.New("legacy HTB rate lacks value")
+				}
+				v, err := tcRateBytes(fields[i+1])
+				if err != nil {
+					return nil, err
+				}
+				if fields[i] == "rate" {
+					if rateSeen {
+						return nil, errors.New("duplicate legacy HTB rate")
+					}
+					rate, rateSeen = v, true
+				} else {
+					if ceilSeen {
+						return nil, errors.New("duplicate legacy HTB ceil")
+					}
+					ceil, ceilSeen = v, true
+				}
+				i++
+			}
+		}
+		if !rateSeen || !ceilSeen {
+			return nil, errors.New("legacy HTB class lacks rate or ceil")
+		}
+		row["rate"], row["ceil"] = rawJSON(rate), rawJSON(ceil)
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
 func str(m map[string]json.RawMessage, k string) string {
 	var s string
 	_ = json.Unmarshal(m[k], &s)
@@ -159,7 +261,7 @@ func (b *SystemBackend) Inspect(ctx context.Context, l Lease) (Snapshot, error) 
 	if e != nil {
 		return s, e
 	}
-	classes, e := optionalArray(raw)
+	classes, e := classArray(raw)
 	if e != nil {
 		return s, e
 	}
