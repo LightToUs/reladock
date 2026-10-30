@@ -23,6 +23,7 @@ type ConfigRule struct {
 	QuotaBytes         int64      `json:"quotaBytes,omitempty"`
 	UsageUploadBytes   int64      `json:"usageUploadBytes,omitempty"`
 	UsageDownloadBytes int64      `json:"usageDownloadBytes,omitempty"`
+	DevelopmentBypass  bool       `json:"developmentBypass,omitempty"`
 }
 type NodeConfig struct {
 	SchemaVersion int          `json:"schemaVersion"`
@@ -49,7 +50,7 @@ type ConfigReport struct {
 }
 
 // Caller holds the node lock. Snapshot and node generation commit with the mutation.
-func enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) error {
+func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) error {
 	var cfg NodeConfig
 	cfg.SchemaVersion = 1
 	cfg.NodeID = nodeID
@@ -79,7 +80,14 @@ func enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) error {
 		// Unpaid or expired drafts may reserve ports but never enable forwarding.
 		// The legacy path exists only while migrating v1/v2 before billing tables;
 		// migration 11 replaces all historical snapshots using this entitlement gate.
-		if entitlementSchema && !entitled {
+		if s.allowUnentitledRules && r.Status == "pending-agent" {
+			r.DevelopmentBypass = true
+			r.SubscriptionID = ""
+			r.ExpiresAt = nil
+			r.QuotaBytes = 0
+			r.UsageUploadBytes = 0
+			r.UsageDownloadBytes = 0
+		} else if entitlementSchema && !entitled {
 			r.Status = "paused"
 		}
 		cfg.Rules = append(cfg.Rules, r)

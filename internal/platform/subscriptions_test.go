@@ -235,7 +235,7 @@ func enforceQuotaTest(t *testing.T, s *Store, ruleID string) {
 	if _, err = tx.Exec(ctx, "SELECT id FROM relay_rules WHERE id=$1 FOR UPDATE", ruleID); err != nil {
 		t.Fatal(err)
 	}
-	if err = EnforceRuleQuota(ctx, tx, ruleID); err != nil {
+	if err = s.EnforceRuleQuota(ctx, tx, ruleID); err != nil {
 		t.Fatal(err)
 	}
 	if err = tx.Commit(ctx); err != nil {

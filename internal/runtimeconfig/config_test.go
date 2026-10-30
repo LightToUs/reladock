@@ -4,8 +4,28 @@ import "testing"
 
 func TestLocalDefaults(t *testing.T) {
 	c, err := Load(func(string) string { return "" })
-	if err != nil || c.Address != "127.0.0.1:3001" || c.Origin != "http://127.0.0.1:3001" || c.AgentAddress != "127.0.0.1:3002" {
+	if err != nil || c.Address != "127.0.0.1:3001" || c.Origin != "http://127.0.0.1:3001" || c.AgentAddress != "127.0.0.1:3002" || c.AllowUnentitledRules {
 		t.Fatalf("local defaults: %+v %v", c, err)
+	}
+}
+
+func TestDevelopmentEntitlementBypassRequiresExactBoolean(t *testing.T) {
+	c, err := Load(func(k string) string {
+		if k == "RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES" {
+			return "true"
+		}
+		return ""
+	})
+	if err != nil || !c.AllowUnentitledRules {
+		t.Fatalf("explicit bypass not loaded: %+v %v", c, err)
+	}
+	if _, err = Load(func(k string) string {
+		if k == "RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES" {
+			return "1"
+		}
+		return ""
+	}); err == nil {
+		t.Fatal("ambiguous bypass value accepted")
 	}
 }
 

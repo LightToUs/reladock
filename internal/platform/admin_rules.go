@@ -71,7 +71,7 @@ func (s *Store) AdminChangeRule(ctx context.Context, who Identity, tenantID, id,
 		return Rule{}, err
 	}
 	defer tx.Rollback(ctx)
-	rule, changed, err := changeRuleState(ctx, tx, tenantID, id, status, &version)
+	rule, changed, err := s.changeRuleState(ctx, tx, tenantID, id, status, &version)
 	if err != nil {
 		return Rule{}, err
 	}

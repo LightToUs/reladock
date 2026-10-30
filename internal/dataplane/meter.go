@@ -62,17 +62,21 @@ func (h MeterHooks) Sample(ctx context.Context, p Plan) error {
 	if h.WAL == nil || h.Runner == nil || p.Incarnation == "" {
 		return errors.New("meter requires WAL, runner and physical incarnation")
 	}
-	periods := map[string]string{}
+	rules := map[string]platform.ConfigRule{}
 	for _, r := range p.Config.Rules {
-		periods[r.ID] = r.SubscriptionID
+		rules[r.ID] = r
 	}
 	manifest := make([]metering.Counter, 0, len(p.Counters))
 	for _, c := range p.Counters {
-		period, ok := periods[c.RuleID]
-		if !ok || period == "" {
+		rule, ok := rules[c.RuleID]
+		if !ok || rule.SubscriptionID == "" && !rule.DevelopmentBypass {
 			return errors.New("business counter lacks paid period")
 		}
-		manifest = append(manifest, metering.Counter{Name: c.Name, RuleID: c.RuleID, SubscriptionID: period, Protocol: c.Protocol, Direction: c.Direction})
+		var generation int64
+		if rule.DevelopmentBypass {
+			generation = p.Config.Generation
+		}
+		manifest = append(manifest, metering.Counter{Name: c.Name, RuleID: c.RuleID, SubscriptionID: rule.SubscriptionID, Protocol: c.Protocol, Direction: c.Direction, ConfigGeneration: generation, DevelopmentBypass: rule.DevelopmentBypass})
 	}
 	raw, e := h.Runner.Run(ctx, []string{"-j", "list", "table", "ip", Table}, "")
 	if e != nil {

@@ -21,7 +21,14 @@ var (
 	ErrCapacity     = errors.New("节点可用端口不足")
 )
 
-type Store struct{ pool *pgxpool.Pool }
+type Store struct {
+	pool                 *pgxpool.Pool
+	allowUnentitledRules bool
+}
+
+type StoreOptions struct {
+	AllowUnentitledRules bool
+}
 
 //go:embed schema.sql
 var schemaSQL string
@@ -71,6 +78,10 @@ var migration16SQL string
 const SchemaVersion = 18
 
 func Open(ctx context.Context, url string) (*Store, error) {
+	return OpenWithOptions(ctx, url, StoreOptions{})
+}
+
+func OpenWithOptions(ctx context.Context, url string, options StoreOptions) (*Store, error) {
 	if url == "" {
 		return nil, errors.New("DATABASE_URL is required; no JSON or memory fallback")
 	}
@@ -84,7 +95,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{pool: pool}
+	s := &Store{pool: pool, allowUnentitledRules: options.AllowUnentitledRules}
 	if err = pool.Ping(ctx); err == nil {
 		err = s.Migrate(ctx)
 	}
@@ -147,7 +158,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 		for _, id := range ids {
-			if err = enqueueConfig(ctx, tx, id); err != nil {
+			if err = s.enqueueConfig(ctx, tx, id); err != nil {
 				return err
 			}
 		}
@@ -199,7 +210,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			if e = lockNode(ctx, tx, id); e != nil {
 				return e
 			}
-			if e = enqueueConfig(ctx, tx, id); e != nil {
+			if e = s.enqueueConfig(ctx, tx, id); e != nil {
 				return e
 			}
 		}
@@ -269,7 +280,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			if e = lockNode(ctx, tx, id); e != nil {
 				return e
 			}
-			if e = enqueueConfig(ctx, tx, id); e != nil {
+			if e = s.enqueueConfig(ctx, tx, id); e != nil {
 				return e
 			}
 		}

@@ -304,7 +304,7 @@ func (s *Store) PurchasePlan(ctx context.Context, who Identity, key string, inpu
 	if _, err = tx.Exec(ctx, "UPDATE relay_rules SET bandwidth_mbps=$2,status='pending-agent',desired_version=desired_version+1,updated_at=now() WHERE id=$1", input.RuleID, plan.BandwidthMbps); err != nil {
 		return RuleSubscription{}, err
 	}
-	if err = enqueueConfig(ctx, tx, nodeID); err != nil {
+	if err = s.enqueueConfig(ctx, tx, nodeID); err != nil {
 		return RuleSubscription{}, err
 	}
 	if err = audit(ctx, tx, who, "subscription.purchase", id); err != nil {
@@ -366,8 +366,8 @@ func (s *Store) RuleSubscriptions(ctx context.Context, who Identity, ruleID stri
 // It requests a paused config and never claims actual traffic has stopped.
 // Collection/reporting/worker/Agent delays allow overshoot; this is not a hard
 // packet-level quota. No subscription means no implicitly granted entitlement.
-func EnforceRuleQuota(ctx context.Context, tx pgx.Tx, ruleID string) error {
-	_, err := enforceRuleQuota(ctx, tx, ruleID)
+func (s *Store) EnforceRuleQuota(ctx context.Context, tx pgx.Tx, ruleID string) error {
+	_, err := s.enforceRuleQuota(ctx, tx, ruleID)
 	return err
 }
 
@@ -395,7 +395,10 @@ func CheckRuleResumeAllowed(ctx context.Context, tx pgx.Tx, ruleID string) error
 	return nil
 }
 
-func enforceRuleQuota(ctx context.Context, tx pgx.Tx, ruleID string) (bool, error) {
+func (s *Store) enforceRuleQuota(ctx context.Context, tx pgx.Tx, ruleID string) (bool, error) {
+	if s.allowUnentitledRules {
+		return false, nil
+	}
 	var id string
 	err := tx.QueryRow(ctx, "SELECT id FROM rule_subscriptions WHERE rule_id=$1 ORDER BY ordinal DESC LIMIT 1", ruleID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -427,7 +430,7 @@ func enforceRuleQuota(ctx context.Context, tx pgx.Tx, ruleID string) (bool, erro
 	if _, err = tx.Exec(ctx, "UPDATE relay_rules SET status='paused',desired_version=desired_version+1,updated_at=now() WHERE id=$1", ruleID); err != nil {
 		return false, err
 	}
-	if err = enqueueConfig(ctx, tx, node); err != nil {
+	if err = s.enqueueConfig(ctx, tx, node); err != nil {
 		return false, err
 	}
 	if err = platformLog(ctx, tx, nil, "subscription.enforce", ruleID, map[string]any{"subscriptionId": id, "reason": period.Status}); err != nil {
@@ -496,7 +499,7 @@ func (s *Store) enforceSubscriptionCandidate(ctx context.Context, ruleID, nodeID
 	if currentNode != nodeID {
 		return false, ErrConflict
 	}
-	changed, err := enforceRuleQuota(ctx, tx, ruleID)
+	changed, err := s.enforceRuleQuota(ctx, tx, ruleID)
 	if err != nil {
 		return false, err
 	}

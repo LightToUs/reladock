@@ -166,7 +166,7 @@ func (s *Store) RedeemNodeBootstrap(ctx context.Context, token string, csr []byt
 	if _, err = tx.Exec(ctx, "UPDATE config_outbox SET state='superseded' WHERE node_id=$1 AND state='leased'", id); err != nil {
 		return out, err
 	}
-	if err = enqueueConfig(ctx, tx, id); err != nil {
+	if err = s.enqueueConfig(ctx, tx, id); err != nil {
 		return out, err
 	}
 	if _, err = tx.Exec(ctx, "UPDATE node_bootstrap SET csr_hash=$2,certificate=$3,fingerprint=$4 WHERE token_hash=$1", digest, ch, cert, fingerprint); err != nil {

@@ -63,12 +63,15 @@ func main() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	store, err := platform.Open(ctx, os.Getenv("DATABASE_URL"))
+	store, err := platform.OpenWithOptions(ctx, os.Getenv("DATABASE_URL"), platform.StoreOptions{AllowUnentitledRules: cfg.AllowUnentitledRules})
 	cancel()
 	if err != nil {
 		log.Fatal("PostgreSQL startup failed; check DATABASE_URL and database availability")
 	}
 	defer store.Close()
+	if cfg.AllowUnentitledRules {
+		log.Print("WARNING: development entitlement bypass enabled; rules may forward without an active plan, quota, or expiry")
+	}
 	var paymentHandler *web.Payments
 	if paymentEnabled {
 		provider, err := payments.NewStripe(paymentConfig)

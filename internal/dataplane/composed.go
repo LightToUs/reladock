@@ -51,7 +51,7 @@ func ComposedVerifier(r Runner, s *shaping.Adapter) Verifier {
 // fixtures may omit entitlements; deployed active rules must never do so.
 func ValidatePaidConfig(cfg platform.NodeConfig) error {
 	for _, r := range cfg.Rules {
-		if r.Status == "pending-agent" && (r.SubscriptionID == "" || r.ExpiresAt == nil || r.QuotaBytes <= 0) {
+		if r.Status == "pending-agent" && !r.DevelopmentBypass && (r.SubscriptionID == "" || r.ExpiresAt == nil || r.QuotaBytes <= 0) {
 			return errors.New("active rule lacks quota, paid period or kernel expiry")
 		}
 	}

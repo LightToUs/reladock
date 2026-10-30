@@ -11,6 +11,7 @@ import (
 
 type Config struct {
 	Production                         bool
+	AllowUnentitledRules               bool
 	Address, Origin, CertFile, KeyFile string
 	AgentAddress, AgentTLSDir          string
 	Bootstrap                          BootstrapConfig
@@ -18,6 +19,11 @@ type Config struct {
 
 func Load(get func(string) string) (Config, error) {
 	c := Config{Address: get("LISTEN_ADDRESS"), Origin: get("PUBLIC_ORIGIN"), CertFile: get("TLS_CERT_FILE"), KeyFile: get("TLS_KEY_FILE"), AgentAddress: get("AGENT_LISTEN_ADDRESS"), AgentTLSDir: get("AGENT_TLS_DIR")}
+	allowUnentitled, err := LoadDevelopmentEntitlementBypass(get)
+	if err != nil {
+		return c, err
+	}
+	c.AllowUnentitledRules = allowUnentitled
 	mode := get("APP_ENV")
 	if mode != "" && mode != "development" && mode != "production" {
 		return c, errors.New("APP_ENV must be development or production")
@@ -90,6 +96,17 @@ func Load(get func(string) string) (Config, error) {
 	}
 	c.Bootstrap = bootstrap
 	return c, nil
+}
+
+func LoadDevelopmentEntitlementBypass(get func(string) string) (bool, error) {
+	switch get("RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES") {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	default:
+		return false, errors.New("RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES must be true or false")
+	}
 }
 
 func validPort(s string) bool {

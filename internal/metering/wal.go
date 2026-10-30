@@ -20,12 +20,14 @@ type Options struct {
 	MaxPending, MaxStreams int
 }
 type Report struct {
-	RuleID         string `json:"ruleId"`
-	SubscriptionID string `json:"subscriptionId,omitempty"`
-	Epoch          string `json:"epoch"`
-	Sequence       int64  `json:"sequence"`
-	UploadBytes    int64  `json:"uploadBytes"`
-	DownloadBytes  int64  `json:"downloadBytes"`
+	RuleID            string `json:"ruleId"`
+	SubscriptionID    string `json:"subscriptionId,omitempty"`
+	Epoch             string `json:"epoch"`
+	Sequence          int64  `json:"sequence"`
+	UploadBytes       int64  `json:"uploadBytes"`
+	DownloadBytes     int64  `json:"downloadBytes"`
+	ConfigGeneration  int64  `json:"configGeneration,omitempty"`
+	DevelopmentBypass bool   `json:"developmentBypass,omitempty"`
 }
 type Receipt struct {
 	RuleID         string `json:"ruleId"`
@@ -254,7 +256,7 @@ func (w *WAL) sample(ctx context.Context, grouped []group) error {
 }
 
 func appendReport(s *snapshot, c stream) error {
-	p, e := json.Marshal(Report{RuleID: c.RuleID, SubscriptionID: c.SubscriptionID, Epoch: c.Epoch, Sequence: c.Sequence, UploadBytes: c.UploadBytes, DownloadBytes: c.DownloadBytes})
+	p, e := json.Marshal(Report{RuleID: c.RuleID, SubscriptionID: c.SubscriptionID, Epoch: c.Epoch, Sequence: c.Sequence, UploadBytes: c.UploadBytes, DownloadBytes: c.DownloadBytes, ConfigGeneration: c.ConfigGeneration, DevelopmentBypass: c.DevelopmentBypass})
 	if e != nil {
 		return e
 	}

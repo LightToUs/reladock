@@ -3,6 +3,8 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +26,87 @@ func TestUnpaidRuleCannotEnterActiveNodeConfiguration(t *testing.T) {
 	}
 	if len(cfg.Rules) != 1 || cfg.Rules[0].ID != r.ID || cfg.Rules[0].Status != "paused" {
 		t.Fatalf("unpaid config forwarded: %+v", cfg)
+	}
+}
+
+func TestDevelopmentBypassDeliversUnsubscribedRuleWithoutQuotaOrExpiry(t *testing.T) {
+	s := testStore(t)
+	s.allowUnentitledRules = true
+	ctx := context.Background()
+	who, _ := register(t, s, "development-bypass@example.com")
+	r, err := s.CreateRule(ctx, who, "development-bypass-rule", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.ClaimConfig(ctx, "hk-01", "development-bypass-test")
+	if err != nil || job == nil {
+		t.Fatalf("claim: %v", err)
+	}
+	var cfg NodeConfig
+	if err = json.Unmarshal(job.Payload, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Rules) != 1 || cfg.Rules[0].ID != r.ID || cfg.Rules[0].Status != "pending-agent" || !cfg.Rules[0].DevelopmentBypass {
+		t.Fatalf("development rule was not enabled explicitly: %+v", cfg)
+	}
+	if cfg.Rules[0].SubscriptionID != "" || cfg.Rules[0].ExpiresAt != nil || cfg.Rules[0].QuotaBytes != 0 {
+		t.Fatalf("development bypass fabricated a paid entitlement: %+v", cfg.Rules[0])
+	}
+	if _, err = s.PauseRule(ctx, who, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	job, err = s.ClaimConfig(ctx, "hk-01", "development-bypass-test")
+	if err != nil || job == nil {
+		t.Fatalf("paused claim: %v", err)
+	}
+	cfg = NodeConfig{}
+	if err = json.Unmarshal(job.Payload, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Rules[0].Status != "paused" || cfg.Rules[0].DevelopmentBypass {
+		t.Fatalf("development bypass overrode manual pause: %+v", cfg.Rules[0])
+	}
+}
+
+func TestDevelopmentBypassDoesNotBindUsageToExistingPlan(t *testing.T) {
+	s, _, who, rule, plan := subscriptionFixture(t)
+	s.allowUnentitledRules = true
+	ctx := context.Background()
+	if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: who.TenantID, Key: "development-existing-credit", AmountCents: 100, Reason: "development fixture", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PurchasePlan(ctx, who, "development-existing-purchase", PurchasePlanInput{RuleID: rule.ID, PriceVersionID: plan.ID}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.ClaimConfig(ctx, "hk-01", "development-existing-test")
+	if err != nil || job == nil {
+		t.Fatalf("claim: %v", err)
+	}
+	var cfg NodeConfig
+	if err = json.Unmarshal(job.Payload, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Rules) != 1 || !cfg.Rules[0].DevelopmentBypass || cfg.Rules[0].SubscriptionID != "" {
+		t.Fatalf("development usage stayed bound to paid plan: %+v", cfg)
+	}
+	s.allowUnentitledRules = false
+	developmentUsage := UsageReport{RuleID: rule.ID, Epoch: "development-unbound-epoch", Sequence: 1, UploadBytes: 10, DevelopmentBypass: true, ConfigGeneration: cfg.Generation}
+	if _, err = s.pool.Exec(ctx, "UPDATE config_outbox SET checksum=$2 WHERE node_id='hk-01' AND generation=$1", cfg.Generation, strings.Repeat("0", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReportUsage(ctx, "hk-01", developmentUsage); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("development usage trusted a corrupted historical snapshot: %v", err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE config_outbox SET checksum=$2 WHERE node_id='hk-01' AND generation=$1", cfg.Generation, job.Checksum); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReportUsage(ctx, "hk-01", developmentUsage); err != nil {
+		t.Fatalf("authorized development WAL could not drain after bypass disabled: %v", err)
+	}
+	developmentUsage.ConfigGeneration++
+	developmentUsage.Epoch = "forged-development-epoch"
+	if _, err = s.ReportUsage(ctx, "hk-01", developmentUsage); err == nil {
+		t.Fatal("usage claimed an unauthorized development generation")
 	}
 }
 

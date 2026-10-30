@@ -37,7 +37,11 @@ var incarnationName = regexp.MustCompile(`^[A-Za-z0-9._:/-]{1,128}$`)
 // Counter is copied from Plan.Counters plus its ConfigRule.SubscriptionID.
 // Only verified forward-path named counters belong here, never NAT first-packet
 // or node-wide statistics. The complete expected manifest is mandatory.
-type Counter struct{ Name, RuleID, SubscriptionID, Protocol, Direction string }
+type Counter struct {
+	Name, RuleID, SubscriptionID, Protocol, Direction string
+	ConfigGeneration                                  int64
+	DevelopmentBypass                                 bool
+}
 type Reading struct {
 	Counter
 	Bytes, Packets int64
@@ -47,6 +51,8 @@ type group struct {
 	RuleID, SubscriptionID     string
 	Readings                   []Reading
 	UploadBytes, DownloadBytes int64
+	ConfigGeneration           int64
+	DevelopmentBypass          bool
 }
 
 func bytePair(up, down int64) bool { return up >= 0 && down >= 0 && up <= math.MaxInt64-down }
@@ -59,7 +65,7 @@ func groupReadings(readings []Reading) ([]group, error) {
 	names := map[string]bool{}
 	tuples := map[string]bool{}
 	for _, r := range readings {
-		if !counterName.MatchString(r.Name) || !uuidPattern.MatchString(r.RuleID) || r.SubscriptionID != "" && !uuidPattern.MatchString(r.SubscriptionID) || (r.Protocol != "tcp" && r.Protocol != "udp") || (r.Direction != "original" && r.Direction != "reply") || r.Bytes < 0 || r.Packets < 0 || names[r.Name] {
+		if !counterName.MatchString(r.Name) || !uuidPattern.MatchString(r.RuleID) || r.SubscriptionID != "" && !uuidPattern.MatchString(r.SubscriptionID) || (r.Protocol != "tcp" && r.Protocol != "udp") || (r.Direction != "original" && r.Direction != "reply") || r.Bytes < 0 || r.Packets < 0 || names[r.Name] || r.DevelopmentBypass && (r.SubscriptionID != "" || r.ConfigGeneration < 1) || !r.DevelopmentBypass && r.ConfigGeneration != 0 {
 			return nil, ErrCounters
 		}
 		names[r.Name] = true
@@ -70,10 +76,10 @@ func groupReadings(readings []Reading) ([]group, error) {
 		tuples[key] = true
 		g := byRule[r.RuleID]
 		if g == nil {
-			g = &group{RuleID: r.RuleID, SubscriptionID: r.SubscriptionID}
+			g = &group{RuleID: r.RuleID, SubscriptionID: r.SubscriptionID, ConfigGeneration: r.ConfigGeneration, DevelopmentBypass: r.DevelopmentBypass}
 			byRule[r.RuleID] = g
 		}
-		if g.SubscriptionID != r.SubscriptionID {
+		if g.SubscriptionID != r.SubscriptionID || g.ConfigGeneration != r.ConfigGeneration || g.DevelopmentBypass != r.DevelopmentBypass {
 			return nil, ErrCounters
 		}
 		if r.Direction == "original" {

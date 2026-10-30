@@ -12,6 +12,8 @@
 
 控制平台可用 `reladock --check-config` 校验当前进程环境和 TLS 文件，不连接数据库或监听网络；它不自动读取 env 文件，由 systemd EnvironmentFile 或受控启动器注入。
 
+开发联调期间可在控制服务环境中显式设置 `RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES=true`。此开关默认关闭，只使 `pending-agent` 规则绕过套餐周期、额度和到期判断；人工暂停、删除、逐规则带宽、真实计量、mTLS、Agent 校验和 applied ACK 仍照常执行。配置不会伪造订阅或账本，开发用量以空 `subscriptionId` 独立上报，并携带配置 generation；关闭开关后，Agent 仍可依据数据库保留且校验摘要的历史版本快照排空已持久化开发 WAL，伪造、不完整或不存在的 generation 会被拒绝。控制服务与 `reladock-admin` 必须使用同一环境文件。开启或关闭后必须重启控制服务，并对相关节点执行配置重试生成新 generation。商业生产必须删除该变量或设为精确的 `false`；其他拼写和值会使服务和运维 CLI 拒绝启动。
+
 选择支持 systemd 的 Linux。准备独立 PostgreSQL（当前开发环境使用 PostgreSQL 17），限制数据库网络访问，为应用建立独立数据库及账号。生产数据库不要作为测试数据库。先完成备份再启动新版本；程序启动会自动事务迁移，版本降级不自动回滚数据库。
 
 人工建立非登录系统用户 `reladock`，将二进制放入 `/opt/reladock`，配置放入 `/etc/reladock`。程序应由 root 管理且运行用户不可写。环境文件设 0600；证书及私钥仅允许服务账号读取。将 `deploy/reladock.service` 安装到 `/etc/systemd/system`，配置 `control.env.example` 中的实际值，再使用 systemd 启动。模板默认非特权 8443 和 Agent 9443；使用 443 需由运维明确配置端口映射或服务能力。
@@ -63,7 +65,7 @@
 - 外部健康探测、UDP 未知状态、失联告警及备份恢复演练。
 
 以上均需实测证据。Linux 构建通过不代表运行环境或链路已验收。
-## 一条命令安装入口 Agent（v0.7.9）
+## 一条命令安装入口 Agent（v0.7.10）
 
 管理后台的“安装 Agent”面板现可生成短期节点专属命令。登记新节点后自动打开该面板；已有节点也可打开。执行地点是对应的专用 Linux VPS，不是 Mac。本流程只安装并启动 **validation-only** 服务，后台显示联系和环境上报，不代表实际业务转发正常。
 
@@ -71,8 +73,8 @@
 
 1. 控制台必须提供可被 VPS 信任的 HTTPS，独立 Agent mTLS 入口也必须可达。当前本地 `127.0.0.1` 开发入口不能供远程 VPS 接入。
 2. 准备专用节点签发中间 CA 和私钥，根 CA 私钥离线保管；不要使用 `.local/pki` 开发 CA。将签发链加入 Agent 服务的客户端信任库。节点收到的 CA 信任链还须能验证 Agent 服务端证书；两端链不一致时必须先修正信任配置，不能关闭 TLS 校验。
-3. 执行 `npm run build:release` 和 `RELEASE_ARCH=arm64 npm run build:release`，分别得到 `.cache/release/reladock-v0.7.9-linux-amd64.tar.gz` 与 `...-arm64.tar.gz` 及 `.sha256`。安装包为纯普通文件的平面归档，不包含私钥/运行配置。开发机器的 macOS 扩展属性不进入归档。
-4. **另行明确授权发布**后，在 `LightToUs/reladock` 的 GitHub Releases 上传两种架构文件及各自摘要，tag 必须匹配 `v0.7.9`。本功能不会创建 Release、推送或自动跟随 latest。
+3. 执行 `npm run build:release` 和 `RELEASE_ARCH=arm64 npm run build:release`，分别得到 `.cache/release/reladock-v0.7.10-linux-amd64.tar.gz` 与 `...-arm64.tar.gz` 及 `.sha256`。安装包为纯普通文件的平面归档，不包含私钥/运行配置。开发机器的 macOS 扩展属性不进入归档。
+4. **另行明确授权发布**后，在 `LightToUs/reladock` 的 GitHub Releases 上传两种架构文件及各自摘要，tag 必须匹配 `v0.7.10`。本功能不会创建 Release、推送或自动跟随 latest。
 5. 在控制服务配置以下全部项，再启动控制服务。全部为空时自动安装关闭；部分配置或不安全地址使启动失败。
 
 ```ini
@@ -80,7 +82,7 @@ NODE_BOOTSTRAP_CA_CERT=/etc/reladock/bootstrap-ca/issuer.crt
 NODE_BOOTSTRAP_CA_KEY=/etc/reladock/bootstrap-ca/issuer.key
 NODE_BOOTSTRAP_CA_CHAIN=/etc/reladock/bootstrap-ca/trust-chain.crt
 AGENT_PUBLIC_ORIGIN=https://agent.example.com:9443
-NODE_RELEASE_VERSION=v0.7.9
+NODE_RELEASE_VERSION=v0.7.10
 NODE_RELEASE_AMD64_SHA256=填写已发布amd64归档的64位小写SHA256
 NODE_RELEASE_ARM64_SHA256=填写已发布arm64归档的64位小写SHA256
 ```

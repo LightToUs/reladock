@@ -13,6 +13,7 @@ import (
 
 	"reladock/internal/nodeauth"
 	"reladock/internal/platform"
+	"reladock/internal/runtimeconfig"
 )
 
 func main() {
@@ -42,7 +43,11 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	store, err := platform.Open(ctx, os.Getenv("DATABASE_URL"))
+	allowUnentitled, err := runtimeconfig.LoadDevelopmentEntitlementBypass(os.Getenv)
+	if err != nil {
+		log.Fatal(err)
+	}
+	store, err := platform.OpenWithOptions(ctx, os.Getenv("DATABASE_URL"), platform.StoreOptions{AllowUnentitledRules: allowUnentitled})
 	if err != nil {
 		log.Fatal("database unavailable; check local configuration")
 	}

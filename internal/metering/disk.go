@@ -217,7 +217,7 @@ func validateSnapshot(s snapshot, o Options) error {
 		}
 		key := r.RuleID + "/" + r.Epoch
 		c, ok := cursors[key]
-		if !ok || r.SubscriptionID != c.SubscriptionID || r.Sequence < 1 || r.Sequence > c.Sequence || !bytePair(r.UploadBytes, r.DownloadBytes) || r.UploadBytes > c.UploadBytes || r.DownloadBytes > c.DownloadBytes {
+		if !ok || r.SubscriptionID != c.SubscriptionID || r.ConfigGeneration != c.ConfigGeneration || r.DevelopmentBypass != c.DevelopmentBypass || r.Sequence < 1 || r.Sequence > c.Sequence || !bytePair(r.UploadBytes, r.DownloadBytes) || r.UploadBytes > c.UploadBytes || r.DownloadBytes > c.DownloadBytes {
 			return ErrCorrupt
 		}
 		if old, ok := last[key]; ok && (r.Sequence != old.Sequence+1 || r.UploadBytes < old.UploadBytes || r.DownloadBytes < old.DownloadBytes) {

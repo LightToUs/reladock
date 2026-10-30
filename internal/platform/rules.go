@@ -152,7 +152,7 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 	if _, err = tx.Exec(ctx, "INSERT INTO idempotency_requests(tenant_id,key,request_hash,rule_id) VALUES($1,$2,$3,$4)", who.TenantID, key, requestHash, rule.ID); err != nil {
 		return Rule{}, err
 	}
-	if err = enqueueConfig(ctx, tx, input.NodeID); err != nil {
+	if err = s.enqueueConfig(ctx, tx, input.NodeID); err != nil {
 		return Rule{}, err
 	}
 	if err = audit(ctx, tx, who, "rule.create", rule.ID); err != nil {
@@ -191,7 +191,7 @@ func (s *Store) DeleteRule(ctx context.Context, who Identity, id string) error {
 	_, err := s.changeRule(ctx, who, id, "deleted")
 	return err
 }
-func changeRuleState(ctx context.Context, tx pgx.Tx, tenantID, id, status string, expected *int64) (Rule, bool, error) {
+func (s *Store) changeRuleState(ctx context.Context, tx pgx.Tx, tenantID, id, status string, expected *int64) (Rule, bool, error) {
 	var nodeID string
 	err := tx.QueryRow(ctx, "SELECT node_id FROM relay_rules WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&nodeID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -213,7 +213,7 @@ func changeRuleState(ctx context.Context, tx pgx.Tx, tenantID, id, status string
 	if rule.Status == "deleted" && status != "deleted" {
 		return Rule{}, false, ErrNotFound
 	}
-	if status == "pending-agent" {
+	if status == "pending-agent" && !s.allowUnentitledRules {
 		if err := CheckRuleResumeAllowed(ctx, tx, id); err != nil {
 			return Rule{}, false, err
 		}
@@ -230,7 +230,7 @@ func changeRuleState(ctx context.Context, tx pgx.Tx, tenantID, id, status string
 			return Rule{}, false, err
 		}
 	}
-	if err = enqueueConfig(ctx, tx, nodeID); err != nil {
+	if err = s.enqueueConfig(ctx, tx, nodeID); err != nil {
 		return Rule{}, false, err
 	}
 	if status == "deleted" {
@@ -252,7 +252,7 @@ func (s *Store) changeRule(ctx context.Context, who Identity, id, status string)
 	if err = tenantWriteAccess(ctx, tx, who); err != nil {
 		return Rule{}, err
 	}
-	rule, changed, err := changeRuleState(ctx, tx, who.TenantID, id, status, nil)
+	rule, changed, err := s.changeRuleState(ctx, tx, who.TenantID, id, status, nil)
 	if err != nil {
 		return Rule{}, err
 	}

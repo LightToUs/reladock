@@ -2,6 +2,9 @@ package platform
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"math"
 	"regexp"
@@ -127,15 +130,19 @@ func billingText(value string, max int) bool {
 // They count from zero on each never-reused epoch; gaps in sequence are allowed
 // because counters are cumulative. New reports on subscribed rules require an
 // explicit period ID; previously accepted legacy reports remain replayable.
+// Development reports instead carry the checksummed snapshot generation, which is
+// re-authorized from the immutable delivery payload even after bypass is off.
 // The future collector must obtain the ID from authoritative configuration and
 // start a fresh epoch/counter at every period change; never relabel buffered WAL.
 type UsageReport struct {
-	RuleID         string `json:"ruleId"`
-	SubscriptionID string `json:"subscriptionId,omitempty"`
-	Epoch          string `json:"epoch"`
-	Sequence       int64  `json:"sequence"`
-	UploadBytes    int64  `json:"uploadBytes"`
-	DownloadBytes  int64  `json:"downloadBytes"`
+	RuleID            string `json:"ruleId"`
+	SubscriptionID    string `json:"subscriptionId,omitempty"`
+	Epoch             string `json:"epoch"`
+	Sequence          int64  `json:"sequence"`
+	UploadBytes       int64  `json:"uploadBytes"`
+	DownloadBytes     int64  `json:"downloadBytes"`
+	ConfigGeneration  int64  `json:"configGeneration,omitempty"`
+	DevelopmentBypass bool   `json:"developmentBypass,omitempty"`
 }
 
 type UsageReceipt struct {
@@ -165,7 +172,7 @@ type RuleUsage struct {
 // retired epochs accept exact replays only. Receipt times never assign a period.
 func (s *Store) ReportUsage(ctx context.Context, nodeID string, input UsageReport, fingerprint ...string) (UsageReceipt, error) {
 	receipt := UsageReceipt{RuleID: input.RuleID, SubscriptionID: input.SubscriptionID, Epoch: input.Epoch, Sequence: input.Sequence}
-	if !nodeIDPattern.MatchString(nodeID) || !billingUUID.MatchString(input.RuleID) || input.SubscriptionID != "" && !billingUUID.MatchString(input.SubscriptionID) || !idempotencyKey.MatchString(input.Epoch) || input.Sequence <= 0 || !billingBytePair(input.UploadBytes, input.DownloadBytes) {
+	if !nodeIDPattern.MatchString(nodeID) || !billingUUID.MatchString(input.RuleID) || input.SubscriptionID != "" && !billingUUID.MatchString(input.SubscriptionID) || !idempotencyKey.MatchString(input.Epoch) || input.Sequence <= 0 || !billingBytePair(input.UploadBytes, input.DownloadBytes) || input.DevelopmentBypass && (input.SubscriptionID != "" || input.ConfigGeneration < 1) || !input.DevelopmentBypass && input.ConfigGeneration != 0 {
 		return receipt, ErrInvalid
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -195,6 +202,41 @@ func (s *Store) ReportUsage(ctx context.Context, nodeID string, input UsageRepor
 	if ownerNode != nodeID {
 		return receipt, ErrForbidden
 	}
+	if input.DevelopmentBypass {
+		var payload []byte
+		var checksum string
+		err = tx.QueryRow(ctx, "SELECT payload,checksum FROM config_outbox WHERE node_id=$1 AND generation=$2", nodeID, input.ConfigGeneration).Scan(&payload, &checksum)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return receipt, ErrForbidden
+		}
+		if err != nil {
+			return receipt, err
+		}
+		if len(payload) > 2<<20 {
+			return receipt, ErrForbidden
+		}
+		hash := sha256.Sum256(payload)
+		if hex.EncodeToString(hash[:]) != checksum {
+			return receipt, ErrForbidden
+		}
+		var config NodeConfig
+		if err = json.Unmarshal(payload, &config); err != nil || config.SchemaVersion != 1 || config.NodeID != nodeID || config.Generation != input.ConfigGeneration {
+			return receipt, ErrForbidden
+		}
+		authorized := false
+		matches := 0
+		for _, rule := range config.Rules {
+			if rule.ID == input.RuleID {
+				matches++
+				if rule.Status == "pending-agent" && rule.DevelopmentBypass {
+					authorized = true
+				}
+			}
+		}
+		if !authorized || matches != 1 {
+			return receipt, ErrForbidden
+		}
+	}
 	var oldUp, oldDown int64
 	var boundPeriod string
 	err = tx.QueryRow(ctx, `SELECT upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes,COALESCE(subscription_id::text,'') FROM billing_usage_reports WHERE rule_id=$1 AND epoch=$2 AND sequence=$3`, input.RuleID, input.Epoch, input.Sequence).Scan(&oldUp, &oldDown, &receipt.UploadDeltaBytes, &receipt.DownloadDeltaBytes, &boundPeriod)
@@ -217,7 +259,7 @@ func (s *Store) ReportUsage(ctx context.Context, nodeID string, input UsageRepor
 		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM rule_subscriptions WHERE rule_id=$1)", input.RuleID).Scan(&subscribed); err != nil {
 			return receipt, err
 		}
-		if subscribed {
+		if subscribed && !input.DevelopmentBypass {
 			return receipt, ErrInvalid
 		}
 	} else {
@@ -285,7 +327,7 @@ func (s *Store) ReportUsage(ctx context.Context, nodeID string, input UsageRepor
 			return receipt, err
 		}
 	}
-	if err = EnforceRuleQuota(ctx, tx, input.RuleID); err != nil {
+	if err = s.EnforceRuleQuota(ctx, tx, input.RuleID); err != nil {
 		return receipt, err
 	}
 	return receipt, tx.Commit(ctx)

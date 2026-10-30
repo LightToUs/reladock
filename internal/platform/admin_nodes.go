@@ -132,7 +132,7 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 		if _, err = tx.Exec(ctx, "INSERT INTO nodes(id,name,region,status,listen_address,public_address,capacity_mbps) VALUES($1,$2,$3,'unprovisioned',$4,NULLIF($5,'')::inet,$6)", id, input.Name, input.Region, input.ListenAddress, input.PublicAddress, input.CapacityMbps); err != nil {
 			return nodeError(err)
 		}
-		if err = enqueueConfig(ctx, tx, id); err != nil {
+		if err = s.enqueueConfig(ctx, tx, id); err != nil {
 			return err
 		}
 		details["name"] = input.Name
@@ -151,7 +151,7 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 			return err
 		}
 		if input.ListenAddress != bind {
-			if err = enqueueConfig(ctx, tx, id); err != nil {
+			if err = s.enqueueConfig(ctx, tx, id); err != nil {
 				return err
 			}
 		}
@@ -174,7 +174,7 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 		if _, err = tx.Exec(ctx, "UPDATE config_outbox SET state='superseded' WHERE node_id=$1 AND state='leased'", id); err != nil {
 			return err
 		}
-		if err = enqueueConfig(ctx, tx, id); err != nil {
+		if err = s.enqueueConfig(ctx, tx, id); err != nil {
 			return err
 		}
 		details["fingerprint"] = fingerprint
@@ -186,7 +186,7 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 			return err
 		}
 	case "config.retry":
-		if err = enqueueConfig(ctx, tx, id); err != nil {
+		if err = s.enqueueConfig(ctx, tx, id); err != nil {
 			return err
 		}
 	default:
