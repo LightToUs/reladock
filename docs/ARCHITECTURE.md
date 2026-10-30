@@ -70,7 +70,7 @@ Agent 领取最新 generation，领取租约 60 秒，最多 5 次。应用前�
 
 默认 Go Agent 校验快照并报告 validated/failed，不执行网络。显式应用模式在同一跨进程数据面锁中：持久候选 → 冻结平台 relay 链 → 最终 counter 落盘 → 按固定周期基线＋跨 epoch 本地实际用量重建额度 → 受控 tc → nft 原子替换/回读 → 新物理 incarnation/WAL → 最后有效状态 → applied ACK。回滚也先采样并创建独立 incarnation；不能用 generation 代替物理计数代次。已确认报告才从 WAL 清理，ACK 不清除周期累计。存储满/不确定结果停止转发或保留屏障，不静默丢用量。节点 last_seen_at 仅为控制联系时间。
 
-tc 采用每规则双向合计上限，双方必须经过同一个显式专用 egress；packet mark 把 TCP/UDP 及上下行映射到同一 HTB class，真实路由不匹配则该业务包 drop。未配置保障带宽。读取 class 时优先使用 JSON，并严格兼容 iproute2 5.15 可能返回的 HTB 文本；不完整、未知或溢出的输出拒绝应用。nft quota 对每规则上下行共享，替换前用持久已用量减去剩余额度；到期用内核 timed set，即使 Agent 停止也不无限转发。冻结规则在 owned table 内按真实 drop 表达式回读确认并幂等插入，不能仅凭 comment 信任；历史重复的有效冻结由后续成功原子替换清理。30s 应用/恢复预算配合 35s 保守到期余量，可能提前最多约 35s 停止，不能销售秒级短周期。运行时拒绝 flowtable 及 GRO/GSO/TSO/LRO 绕过条件，前置网络设置由节点运维明确完成，不由 installer 修改。参阅 DATAPLANE、SHAPING 和 METERING 文档。
+tc 采用每规则双向合计上限，双方必须经过同一个显式专用 egress；packet mark 把 TCP/UDP 及上下行映射到同一 HTB class，真实路由不匹配则该业务包 drop。未配置保障带宽。读取 class/filter 时优先使用 JSON，并严格兼容 iproute2 5.15 可能返回的 HTB 文本和 fw options 混合文本；兼容路径只接受已验证结构，不完整、未知、尾随或溢出的输出拒绝应用。nft quota 对每规则上下行共享，替换前用持久已用量减去剩余额度；到期用内核 timed set，即使 Agent 停止也不无限转发。冻结规则在 owned table 内按真实 drop 表达式回读确认并幂等插入，不能仅凭 comment 信任；历史重复的有效冻结由后续成功原子替换清理。30s 应用/恢复预算配合 35s 保守到期余量，可能提前最多约 35s 停止，不能销售秒级短周期。运行时拒绝 flowtable 及 GRO/GSO/TSO/LRO 绕过条件，前置网络设置由节点运维明确完成，不由 installer 修改。参阅 DATAPLANE、SHAPING 和 METERING 文档。
 
 ### 全平台权限与管理（v3）
 

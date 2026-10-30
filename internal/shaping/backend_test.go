@@ -234,3 +234,52 @@ func TestSystemBackendAcceptsParentScopedFlatFWRows(t *testing.T) {
 		t.Fatalf("parent-scoped flat fw readback %+v %v", s, e)
 	}
 }
+
+func inspectLegacyFilters(t *testing.T, raw string) (Snapshot, error) {
+	t.Helper()
+	r := runnerFunc(func(_ context.Context, tool Tool, args []string) ([]byte, error) {
+		if tool == IP {
+			return []byte(`[{"ifindex":7,"ifname":"rd-egress","ifalias":"reladock-shaping-v1:node-owner"}]`), nil
+		}
+		if args[1] == "qdisc" {
+			return []byte(`[{"kind":"htb","handle":"5244:","root":true,"options":{"default":65535}}]`), nil
+		}
+		if args[1] == "class" {
+			return []byte(`[{"class":"htb","handle":"5244:1","root":true,"rate":125000000,"ceil":125000000,"prio":0}]`), nil
+		}
+		if args[1] == "filter" {
+			return []byte(raw), nil
+		}
+		return []byte(`[]`), nil
+	})
+	return NewSystemBackend(r, func(context.Context) (string, error) { return "netns-test", nil }).Inspect(context.Background(), options().Lease)
+}
+
+func TestSystemBackendAcceptsLegacyIPRoute215HybridFWJSON(t *testing.T) {
+	raw := `[{"protocol":"ip","pref":10,"kind":"fw","chain":0},{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 }},{"protocol":"ip","pref":20,"kind":"fw","chain":0},{"protocol":"ip","pref":20,"kind":"fw","chain":0,"options":{handle 0x52000000/0xff000000 ` + "\n" +
+		`"actions":[{"order":1,"kind":"gact","control_action":{"type":"drop"},"prob":{"random_type":"none","control_action":{"type":"pass"},"val":0},"index":1,"ref":1,"bind":1}]}}]`
+	s, err := inspectLegacyFilters(t, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Filters) != 2 || s.Filters[0].Mark != 0x5211c000 || s.Filters[0].Mask != 0xffffff00 || s.Filters[0].ClassID != "5244:11c0" || s.Filters[0].Drop || s.Filters[1].Mark != 0x52000000 || s.Filters[1].Mask != 0xff000000 || !s.Filters[1].Drop {
+		t.Fatalf("legacy hybrid filters: %+v", s.Filters)
+	}
+}
+
+func TestSystemBackendLegacyHybridFWJSONFailsClosed(t *testing.T) {
+	tests := map[string]string{
+		"missing classid":  `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid }}]`,
+		"oversized mark":   `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x15211c000/0xffffff00 classid 5244:11c0 }}]`,
+		"unknown option":   `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 police nope classid 5244:11c0 }}]`,
+		"trailing garbage": `[{"protocol":"ip","pref":10,"kind":"fw","chain":0,"options":{handle 0x5211c000/0xffffff00 classid 5244:11c0 garbage }}]`,
+		"malformed action": `[{"protocol":"ip","pref":20,"kind":"fw","chain":0,"options":{handle 0x52000000/0xff000000 actions nope}}]`,
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := inspectLegacyFilters(t, raw); err == nil {
+				t.Fatal("unsafe legacy hybrid filter output accepted")
+			}
+		})
+	}
+}

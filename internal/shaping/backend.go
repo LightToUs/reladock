@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -68,6 +69,41 @@ func optionalArray(data []byte) ([]map[string]json.RawMessage, error) {
 		return []map[string]json.RawMessage{}, nil
 	}
 	return array(data)
+}
+
+var (
+	legacyFWClass  = regexp.MustCompile(`"options":\{handle (0x[0-9A-Fa-f]{1,8})/(0x[0-9A-Fa-f]{1,8}) classid ([0-9A-Fa-f]+:[0-9A-Fa-f]+)[ \t]*\}`)
+	legacyFWAction = regexp.MustCompile(`"options":\{handle (0x[0-9A-Fa-f]{1,8})/(0x[0-9A-Fa-f]{1,8})[ \t\r\n]+"actions":`)
+)
+
+// filterArray accepts valid tc JSON and the narrowly defined hybrid emitted
+// by iproute2 5.15 for fw options. The latter leaves only handle/classid in
+// text while keeping the surrounding document and optional actions as JSON.
+func filterArray(data []byte) ([]map[string]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return []map[string]json.RawMessage{}, nil
+	}
+	rows, jsonErr := array(trimmed)
+	if jsonErr == nil {
+		return rows, nil
+	}
+	normalized := append([]byte(nil), trimmed...)
+	replacements := 0
+	normalized = legacyFWClass.ReplaceAllFunc(normalized, func(match []byte) []byte {
+		parts := legacyFWClass.FindSubmatch(match)
+		replacements++
+		return []byte(fmt.Sprintf(`"options":{"fw":{"mark":"%s","mask":"%s"},"classid":"%s"}`, parts[1], parts[2], parts[3]))
+	})
+	normalized = legacyFWAction.ReplaceAllFunc(normalized, func(match []byte) []byte {
+		parts := legacyFWAction.FindSubmatch(match)
+		replacements++
+		return []byte(fmt.Sprintf(`"options":{"fw":{"mark":"%s","mask":"%s"},"actions":`, parts[1], parts[2]))
+	})
+	if replacements == 0 || bytes.Contains(normalized, []byte(`"options":{handle`)) {
+		return nil, jsonErr
+	}
+	return array(normalized)
 }
 
 func tcRateBytes(value string) (uint64, error) {
@@ -335,7 +371,7 @@ func (b *SystemBackend) Inspect(ctx context.Context, l Lease) (Snapshot, error) 
 	if e != nil {
 		return s, e
 	}
-	filters, e := optionalArray(raw)
+	filters, e := filterArray(raw)
 	if e != nil {
 		return s, e
 	}

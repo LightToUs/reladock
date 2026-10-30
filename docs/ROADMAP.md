@@ -20,7 +20,7 @@
 - 控制通道告警去重与工单、可选且默认关闭的 Stripe 支付连接器，已接入真实数据库与替身支付接口测试；无真实商户收款。
 - 告警转移同事务通知 Outbox、默认关闭的签名 HTTPS webhook、有界租约/重试、后台通知交付及耗尽后人工重试；不假装通知已读。
 - 不可变节点成本、发票/请求幂等与事务审计、按实际套餐扣费和已录成本的现金口径差额。成本缺失保持未知，不推测企业成本归属或应计毛利。
-- 生产 HTTPS、数据库共享限流、Linux 构建及按组件安装模板；独立应用服务不自动启用。隔离 Docker 实测组合 TCP/UDP、逐规则 tc、全包计数/WAL、额度耗尽、替换不重置额度、Agent 离线内核到期和失败回滚。v0.7.7 增加 iproute2 5.15 HTB 文本回读兼容和幂等故障冻结；生产节点仍须通过持久 journal 自动恢复并取得 applied ACK，不能据此宣称端到端协议健康。TCP 目标可达性与 UDP unknown 观测按当前 applied generation 授权存储。
+- 生产 HTTPS、数据库共享限流、Linux 构建及按组件安装模板；独立应用服务不自动启用。隔离 Docker 实测组合 TCP/UDP、逐规则 tc、全包计数/WAL、额度耗尽、替换不重置额度、Agent 离线内核到期和失败回滚。v0.7.8 增加 iproute2 5.15 HTB class 文本、fw filter 混合文本回读兼容和幂等故障冻结；生产节点仍须通过持久 journal 自动恢复并取得 applied ACK，不能据此宣称端到端协议健康。TCP 目标可达性与 UDP unknown 观测按当前 applied generation 授权存储。
 
 ## 尚未实现
 

@@ -1,6 +1,6 @@
 # RelaDock
 
-v0.7.7 兼容 iproute2 5.15 在 `tc -j class` 上返回旧式 HTB 文本的节点，并将故障冻结改为幂等确认，避免恢复重试持续堆积 `reladock-meter-freeze` 规则。JSON 仍是首选读取路径；未知、缺字段、重复字段或溢出的旧式输出会拒绝应用。节点“在线”、配置 applied 与端到端转发健康仍是三个独立状态，升级不会绕过套餐授权，也不得通过删除 Agent journal、WAL 或数据库 applying 记录强行恢复。后台登记节点后生成专属命令，从固定 GitHub Release 下载并验证安装包，在 VPS 本地生成私钥、申请证书、自动启用连接校验服务。实际转发仍单独确认，详见 [部署说明](docs/DEPLOYMENT.md)。
+v0.7.8 兼容 iproute2 5.15 在 `tc -j class` 上返回旧式 HTB 文本、在 `tc -j filter` 的 fw options 中混入旧式文本的节点，并将故障冻结改为幂等确认，避免恢复重试持续堆积 `reladock-meter-freeze` 规则。JSON 仍是首选读取路径；兼容解析只接受已复现的严格字段和结构，未知、缺字段、重复字段、尾随内容或溢出都会拒绝应用。节点“在线”、配置 applied 与端到端转发健康仍是三个独立状态，升级不会绕过套餐授权，也不得通过删除 Agent journal、WAL 或数据库 applying 记录强行恢复。后台登记节点后生成专属命令，从固定 GitHub Release 下载并验证安装包，在 VPS 本地生成私钥、申请证书、自动启用连接校验服务。实际转发仍单独确认，详见 [部署说明](docs/DEPLOYMENT.md)。
 
 网络中转与后续企业组网平台。只透传客户业务和 VPN 协议流量，不提供 VPN 订阅或终端用户管理。
 
