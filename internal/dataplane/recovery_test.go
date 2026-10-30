@@ -2,11 +2,14 @@ package dataplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"reladock/internal/platform"
 )
 
 func lastApplied(t *testing.T, r *fakeRunner) string {
@@ -18,6 +21,16 @@ func lastApplied(t *testing.T, r *fakeRunner) string {
 	}
 	t.Fatal("no kernel transaction attempted")
 	return ""
+}
+
+func kernelTransactions(r *fakeRunner) int {
+	count := 0
+	for _, call := range r.calls {
+		if reflect.DeepEqual(call.args, []string{"-f", "-"}) {
+			count++
+		}
+	}
+	return count
 }
 
 func TestRollbackRetainsNewCandidateAllocationAcrossRestart(t *testing.T) {
@@ -191,5 +204,91 @@ func TestDurableCandidateSurvivesInterruptedApplyAndRecovery(t *testing.T) {
 	cfg.Generation = 3
 	if _, e = a.Apply(ctx, cfg); e == nil {
 		t.Fatal("recovery tombstones reused without explicit reconciliation")
+	}
+}
+
+func TestRecoveredInitialEmptyPlanCanBeVerifiedForExactRetry(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewFileStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := fixture()
+	cfg.Rules = []platform.ConfigRule{}
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(payload, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Rules == nil {
+		t.Fatal("production-shaped empty rules unexpectedly decoded as nil")
+	}
+	runner := &fakeRunner{}
+	interrupted := errors.New("simulated interruption")
+	crashing := runnerFunc(func(c context.Context, args []string, in string) ([]byte, error) {
+		if reflect.DeepEqual(args, []string{"-f", "-"}) {
+			panic(interrupted)
+		}
+		return runner.Run(c, args, in)
+	})
+	a := newTestAdapter(t, store, crashing, store.Locker(), goodVerify)
+	func() {
+		defer func() {
+			if got := recover(); got != interrupted {
+				t.Fatalf("unexpected interruption %v", got)
+			}
+		}()
+		_, _ = a.Apply(ctx, cfg)
+	}()
+
+	a = newTestAdapter(t, store, runner, store.Locker(), goodVerify)
+	if err = a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := kernelTransactions(runner)
+	if _, err = a.ApplyVerified(ctx, cfg); err != nil {
+		t.Fatalf("exact empty retry was not verified after recovery: %v", err)
+	}
+	if got := kernelTransactions(runner); got != before {
+		t.Fatalf("verified retry wrote a new kernel transaction: before=%d after=%d", before, got)
+	}
+}
+
+func TestRecoveredEmptyPlanDoesNotVerifyAnActiveRetry(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewFileStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := fixture()
+	runner := &fakeRunner{}
+	interrupted := errors.New("simulated interruption")
+	crashing := runnerFunc(func(c context.Context, args []string, in string) ([]byte, error) {
+		if reflect.DeepEqual(args, []string{"-f", "-"}) {
+			panic(interrupted)
+		}
+		return runner.Run(c, args, in)
+	})
+	a := newTestAdapter(t, store, crashing, store.Locker(), goodVerify)
+	func() {
+		defer func() {
+			if got := recover(); got != interrupted {
+				t.Fatalf("unexpected interruption %v", got)
+			}
+		}()
+		_, _ = a.Apply(ctx, active)
+	}()
+	a = newTestAdapter(t, store, runner, store.Locker(), goodVerify)
+	if err = a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := kernelTransactions(runner)
+	if _, err = a.ApplyVerified(ctx, active); !errors.Is(err, ErrStale) {
+		t.Fatalf("active config was accepted against an empty recovered plan: %v", err)
+	}
+	if got := kernelTransactions(runner); got != before {
+		t.Fatalf("rejected retry wrote a new kernel transaction: before=%d after=%d", before, got)
 	}
 }

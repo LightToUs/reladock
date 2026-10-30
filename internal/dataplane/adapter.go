@@ -283,6 +283,15 @@ func (a *Adapter) ApplyVerified(ctx context.Context, cfg platform.NodeConfig) (P
 	return a.apply(ctx, cfg, true)
 }
 
+func sameConfigAllowingEmptyRules(a, b platform.NodeConfig) bool {
+	if len(a.Rules) != 0 || len(b.Rules) != 0 {
+		return reflect.DeepEqual(a, b)
+	}
+	a.Rules = nil
+	b.Rules = nil
+	return reflect.DeepEqual(a, b)
+}
+
 func (a *Adapter) apply(ctx context.Context, cfg platform.NodeConfig, retry bool) (Plan, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -302,7 +311,11 @@ func (a *Adapter) apply(ctx context.Context, cfg platform.NodeConfig, retry bool
 		return Plan{}, ErrRecoveryRequired
 	}
 	if cfg.Generation <= s.HighWater {
-		if retry && cfg.Generation == s.HighWater && s.Good != nil && s.GoodDesired != nil && reflect.DeepEqual(cfg, *s.GoodDesired) && s.Good.Generation == cfg.Generation {
+		exactDesired := s.GoodDesired != nil && reflect.DeepEqual(cfg, *s.GoodDesired)
+		if s.GoodDesired == nil && s.Good != nil {
+			exactDesired = sameConfigAllowingEmptyRules(cfg, s.Good.Config)
+		}
+		if retry && cfg.Generation == s.HighWater && s.Good != nil && exactDesired && s.Good.Generation == cfg.Generation {
 			if exists, err := a.inspect(ctx); err != nil {
 				return Plan{}, err
 			} else if !exists {

@@ -65,7 +65,7 @@ An authorized Linux operator can replace dry-run with `--apply --state-dir /abso
 
 ## Ownership and transaction boundaries
 
-Fixed table: `ip reladock`, exact comment `reladock-dataplane-v1`. `nft -j list tables` determines existence only; ownership is read separately with `nft -j list table ip reladock`. Inventory comments are not assumed available. Read failures and missing/wrong comments fail closed. A marked existing table without last-good state is not adopted. The marker is cooperative ownership, not protection from another privileged writer forging/modifying it.
+Fixed table: `ip reladock`, exact comment `reladock-dataplane-v1`. `nft -j list tables` determines existence only; ownership is read separately with `nft -j list table ip reladock`. Inventory comments are not assumed available. Read failures and missing/wrong comments fail closed. A marked existing table without last-good state is not adopted. After an interrupted first empty configuration, recovery may satisfy an exact retry only when the recovered `Good.Config` is structurally equal to the controller payload, with the sole normalization that nil and non-nil empty `Rules` are equivalent; an active payload never matches a guard-only recovery. The marker is cooperative ownership, not protection from another privileged writer forging/modifying it.
 
 The batch idempotently adds, deletes and recreates **only that table in one nft transaction**. No global flush, sysctl, IP-forwarding enablement, route, other firewall table, conntrack deletion, interface or qdisc modification occurs. Forwarding and compatible firewall/routing are operator prerequisites. Other tables may still drop traffic after this table accepts it.
 
