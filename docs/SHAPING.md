@@ -12,7 +12,7 @@
 
 mark 方案：显式预留非零 8 位 namespace，高 8 位 namespace＋中间 16 位稳定规则编号，mask `0xffffff00`，低 8 位保留。规则编号由 `SHA256(nodeID/tenantID/ruleID)` 前 16 位映射到 2–65534；同一快照或历史编号碰撞直接拒绝，不进行顺序依赖的探测分配。nft 每个业务包按规则设置 packet mark，不依赖 NAT 首包或只保存 conntrack mark。输出供主 Agent 集成，不执行 nft。
 
-专用接口必须有显式租约：namespace 身份、device、ifindex、owner alias、mark namespace 和声明链路容量。初次只接受没有 root 或内核 `noqueue`。不能根据固定 handle 猜测已有 HTB 的归属。后续只允许状态中记录的同一专用 HTB 树；发现外部 root/类/分类器拒绝操作。绝不执行 root delete/replace。
+专用接口必须有显式租约：namespace 身份、device、ifindex、owner alias、mark namespace 和声明链路容量。初次接受没有 root 或内核 `noqueue`。真实物理网卡若存在不可删除的内核默认 `fq/0:`，仅在租约额外设置 `ReplaceDefaultQdisc=true`、绑定该次 `tc -j qdisc` 原始输出的 SHA-256、接口身份与 alias 完全匹配且没有任何 class/filter 时，才允许在持久化 Candidate 意图后用固定 `qdisc replace ... handle 5244: htb default ffff` 完成交接。默认 false；指纹变化、非零 handle、其他 qdisc 或任何 class/filter 仍拒绝。不能根据固定 handle 猜测已有 HTB 的归属。后续只允许状态中记录的同一专用 HTB 树；不执行 root delete，也不接管其他外部 root。
 
 ## 交付 API
 
@@ -34,7 +34,7 @@ NewFileStore(absolutePrivateDirectory string) (*FileStore, error)
 (*FileStore).Locker() Locker
 ```
 
-`Backend` 提供 `Inspect(ctx, Lease) (Snapshot,error)`、`RunTC(ctx, []string) error`。`Runner.Run(ctx, Tool, []string)` 仅选择 tc/ip，无 shell。`Store.Load/Save` 持久化 State；`Locker.Lock(ctx)` 返回 unlock。Backend、Store、Locker 均可注入。`Compile` 不构造执行器、不修改网络；没有新 CLI 或自动启用入口。
+`Backend` 提供 `Inspect(ctx, Lease) (Snapshot,error)`、`RunTC(ctx, Lease, []string) error`。`Runner.Run(ctx, Tool, []string)` 仅选择 tc/ip，无 shell。`Store.Load/Save` 持久化 State；`Locker.Lock(ctx)` 返回 unlock。Backend、Store、Locker 均可注入。`Compile` 不构造执行器、不修改网络；没有新 CLI 或自动启用入口。
 
 `Options` 包含 `NodeID`、`Lease`、`UploadEgress`、`DownloadEgress`。Lease 必须声明：
 
@@ -45,6 +45,8 @@ NewFileStore(absolutePrivateDirectory string) (*FileStore, error)
 | `NamespaceID` | 实际 `/proc/self/ns/net` 身份；重建 namespace 后要求重新授权 |
 | `OwnerID` | 字面 ID，运行时 alias 必须等于 `reladock-shaping-v1:<OwnerID>` |
 | `Dedicated` | 必须明确为 true；独占使用为运维承诺，不通过猜测接口名判断 |
+| `ReplaceDefaultQdisc` | 默认 false；只有运维核对物理接口上的空内核默认 `fq/0:` 后才可设 true，不授权其他 root 替换 |
+| `DefaultQdiscFingerprint` | `ReplaceDefaultQdisc=true` 时必填；同一节点上 `tc -j qdisc show dev <Device> \| sha256sum` 的 64 位小写摘要，任何输出变化都会拒绝交接 |
 | `MarkNamespace` | 明确分配的非零 8 位 mark namespace，须由主 Agent 保证全路径不冲突 |
 | `LinkMbps` | 1–100000，接口声明的物理调度预算，不是企业共享带宽套餐 |
 
@@ -64,7 +66,7 @@ fw 精确过滤器使用 `mark/0xffffff00`、priority 10；保留 namespace 的�
 
 ## 应用、幂等与跨阶段恢复
 
-tc 命令是顺序执行的，**不存在 nft 式原子事务或 `tc -c`**。主 Agent 必须在 nft freeze 和计量最终采样之后调用 shaping，再替换 nft；本包不提供跨 tc/nft 的原子性，也不负责解除冻结。每条命令前都复核租约和已知树，拒绝外部 root、未知类/过滤器、改动的速率/ceil 和非预期 action。初次 root 只 `qdisc add`，竞争中出现外部 root 时内核报错，绝不 replace/delete。仅允许平台已知树内 class/filter replace。
+tc 命令是顺序执行的，**不存在 nft 式原子事务或 `tc -c`**。主 Agent 必须在 nft freeze 和计量最终采样之后调用 shaping，再替换 nft；本包不提供跨 tc/nft 的原子性，也不负责解除冻结。每条命令前都复核租约和已知树，拒绝外部 root、未知类/过滤器、改动的速率/ceil 和非预期 action。初次空 root 使用 `qdisc add`，竞争中出现外部 root 时内核报错。唯一 replace 例外是租约指纹精确绑定的空内核默认 `fq/0:`，并且必须在 Candidate 意图持久化之后替换为固定 HTB；不执行 root delete。仅允许平台已知树内 class/filter replace。
 
 `Apply` 要求 generation 严格大于持久 `HighWater`。执行前原子持久化 `Pending`、完整 Candidate、历史编号和 `PriorGood = Good`；逐条安装后回读全部 root/classes/fw filters，成功才保存新 Good 与已验证计划摘要。编译、归属检查失败不执行 tc；首次意图写盘失败也不执行 tc。任何部分应用或最终提交失败都尝试运行时恢复，即使重新写恢复意图失败也不会提前跳过内核恢复。恢复使用独立 30s context，不被原请求取消抑制。
 
@@ -86,7 +88,7 @@ tc 命令是顺序执行的，**不存在 nft 式原子事务或 `tc -c`**。主
 
 `NewLinuxBackend` 只允许 Linux 和绝对 tc/ip 路径，直接参数数组执行，不经过 shell，不构造 nft 或路由操作；默认不会被 Compile 创建。命令允许 show 和本组件需要的 root add、class/filter replace；Backend 是可信底层原语，调用方不可将任意用户命令直接交给它绕过 Adapter。
 
-`SystemBackend` 实际读取 `ip -j -d link`、`tc -j qdisc/class/filter show`。校验 namespace、alias、ifindex、root HTB/default、每个 class 的 parent/rate/ceil、fw mark/mask/priority/classid/drop。兼容 HTB class 的 `class`/`kind`、顶层或嵌套参数、parent-scoped fw 回读省略 parent 的格式。tc 输出 rate/ceil 是 byte/s，转换到 bit/s 后验证。未知模式、offload 或未知 action 不视为成功；不根据 plan 数据伪造 readback。
+`SystemBackend` 实际读取 `ip -j -d link`、`tc -j qdisc/class/filter show`。校验 namespace、alias、ifindex、root HTB/default、每个 class 的 parent/rate/ceil、fw mark/mask/priority/classid/drop。兼容 HTB class 的 `class`/`kind`、顶层或嵌套参数、parent-scoped fw 回读省略 parent 的格式。tc 输出 rate/ceil 是 byte/s，转换到 bit/s 后验证。写执行器只允许固定 root add、显式授权路径使用的固定 root replace，以及 class/filter replace；delete、其他 root kind/handle 和非法接口名均拒绝。未知模式、offload 或未知 action 不视为成功；不根据 plan 数据伪造 readback。
 
 FileStore 使用最终目录 0700、文件 0600、私有临时文件、文件 fsync、原子 rename、目录 fsync 和严格 JSON（8 MiB 上限）。锁使用同一 inode 的 flock，支持取消。状态含 Good、PriorGood、完整 Candidate、Restoring、HighWater、已验证摘要。所有控制同一租约的进程必须使用同一目录和锁；父目录须可信，禁止删除/替换锁 inode。最终 symlink、宽权限、非普通状态文件拒绝。不支持原 namespace/接口身份变化后的无授权自动接管。磁盘故障与断电的保证受文件系统影响。
 

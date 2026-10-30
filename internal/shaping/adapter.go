@@ -36,20 +36,21 @@ type FilterState struct {
 // Foreign covers unrecognized qdiscs, actions, classes or filter attributes.
 // Backends must fail closed when their readback cannot be interpreted safely.
 type Snapshot struct {
-	NamespaceID string
-	Device      string
-	IfIndex     int
-	Alias       string
-	RootKind    string
-	RootHandle  string
-	RootDefault uint32
-	Classes     []ClassState
-	Filters     []FilterState
-	Foreign     bool
+	NamespaceID     string
+	Device          string
+	IfIndex         int
+	Alias           string
+	RootKind        string
+	RootHandle      string
+	RootDefault     uint32
+	RootFingerprint string
+	Classes         []ClassState
+	Filters         []FilterState
+	Foreign         bool
 }
 type Backend interface {
 	Inspect(context.Context, Lease) (Snapshot, error)
-	RunTC(context.Context, []string) error
+	RunTC(context.Context, Lease, []string) error
 }
 type Store interface {
 	Load(context.Context) (State, error)
@@ -125,6 +126,10 @@ func expected(p Plan) ([]ClassState, []FilterState) {
 	return classes, filters
 }
 
+func replaceableDefault(s Snapshot, l Lease) bool {
+	return validLease(l) && l.ReplaceDefaultQdisc && s.NamespaceID == l.NamespaceID && s.Device == l.Device && s.IfIndex == l.IfIndex && s.Alias == l.Alias() && !s.Foreign && s.RootKind == "fq" && s.RootHandle == "0:" && s.RootFingerprint == l.DefaultQdiscFingerprint && len(s.Classes) == 0 && len(s.Filters) == 0
+}
+
 func (a *Adapter) inspect(ctx context.Context, s State) (Snapshot, error) {
 	snap, e := a.backend.Inspect(ctx, a.opts.Lease)
 	if e != nil {
@@ -139,6 +144,9 @@ func (a *Adapter) inspect(ctx context.Context, s State) (Snapshot, error) {
 		if len(snap.Classes) > 0 || len(snap.Filters) > 0 {
 			return snap, errors.New("orphan/foreign tc objects")
 		}
+		return snap, nil
+	}
+	if replaceableDefault(snap, l) {
 		return snap, nil
 	}
 	if snap.RootKind != "htb" || snap.RootHandle != RootHandle || snap.RootDefault != 65535 || (s.Good == nil && s.Candidate == nil) {
@@ -197,8 +205,12 @@ func (a *Adapter) install(ctx context.Context, p Plan, s State) error {
 		return e
 	}
 	if snap.RootKind == "" || snap.RootKind == "noqueue" {
-		// add refuses a raced-in external root; replace/delete are never used.
-		if e = a.backend.RunTC(ctx, []string{"qdisc", "add", "dev", a.opts.Lease.Device, "root", "handle", RootHandle, "htb", "default", "ffff"}); e != nil {
+		// add refuses a raced-in external root.
+		if e = a.backend.RunTC(ctx, a.opts.Lease, []string{"qdisc", "add", "dev", a.opts.Lease.Device, "root", "handle", RootHandle, "htb", "default", "ffff"}); e != nil {
+			return e
+		}
+	} else if snap.RootKind == "fq" && snap.RootHandle == "0:" {
+		if e = a.backend.RunTC(ctx, a.opts.Lease, []string{"qdisc", "replace", "dev", a.opts.Lease.Device, "root", "handle", RootHandle, "htb", "default", "ffff"}); e != nil {
 			return e
 		}
 	}
@@ -215,7 +227,7 @@ func (a *Adapter) install(ctx context.Context, p Plan, s State) error {
 				return e
 			}
 		}
-		if e = a.backend.RunTC(ctx, cmd); e != nil {
+		if e = a.backend.RunTC(ctx, a.opts.Lease, cmd); e != nil {
 			return e
 		}
 	}

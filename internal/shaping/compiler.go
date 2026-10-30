@@ -20,13 +20,15 @@ const DefaultClass = "5244:ffff"
 const MarkMask uint32 = 0xffffff00
 
 type Lease struct {
-	Device        string
-	IfIndex       int
-	NamespaceID   string
-	OwnerID       string
-	Dedicated     bool
-	MarkNamespace uint8
-	LinkMbps      int
+	Device                  string
+	IfIndex                 int
+	NamespaceID             string
+	OwnerID                 string
+	Dedicated               bool
+	ReplaceDefaultQdisc     bool
+	DefaultQdiscFingerprint string
+	MarkNamespace           uint8
+	LinkMbps                int
 }
 
 func (l Lease) Alias() string { return "reladock-shaping-v1:" + l.OwnerID }
@@ -65,10 +67,15 @@ type Plan struct {
 
 var id = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$`)
 var device = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,14}$`)
+var qdiscFingerprint = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+func validLease(l Lease) bool {
+	validHandoff := !l.ReplaceDefaultQdisc && l.DefaultQdiscFingerprint == "" || l.ReplaceDefaultQdisc && qdiscFingerprint.MatchString(l.DefaultQdiscFingerprint)
+	return id.MatchString(l.OwnerID) && device.MatchString(l.Device) && l.Device != "lo" && l.Dedicated && validHandoff && l.IfIndex >= 1 && len(l.NamespaceID) >= 1 && len(l.NamespaceID) <= 256 && l.MarkNamespace != 0 && l.LinkMbps >= 1 && l.LinkMbps <= 100000
+}
 func validateOptions(o Options) error {
 	l := o.Lease
-	if !id.MatchString(o.NodeID) || !id.MatchString(l.OwnerID) || !device.MatchString(l.Device) || l.Device == "lo" || !l.Dedicated || l.IfIndex < 1 || len(l.NamespaceID) < 1 || len(l.NamespaceID) > 256 || l.MarkNamespace == 0 || l.LinkMbps < 1 || l.LinkMbps > 100000 || o.UploadEgress != l.Device || o.DownloadEgress != l.Device {
+	if !id.MatchString(o.NodeID) || !validLease(l) || o.UploadEgress != l.Device || o.DownloadEgress != l.Device {
 		return errors.New("explicit dedicated lease and same upload/download egress required")
 	}
 	return nil

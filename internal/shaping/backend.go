@@ -3,6 +3,7 @@ package shaping
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,7 +33,22 @@ type SystemBackend struct {
 func NewSystemBackend(r Runner, namespace func(context.Context) (string, error)) *SystemBackend {
 	return &SystemBackend{r, namespace}
 }
-func (b *SystemBackend) RunTC(c context.Context, args []string) error {
+func (b *SystemBackend) RunTC(c context.Context, lease Lease, args []string) error {
+	if !validLease(lease) || !tcWriteAllowed(args, lease.Device) {
+		return errors.New("unsupported network operation")
+	}
+	if args[0] == "qdisc" && args[1] == "replace" {
+		if !lease.ReplaceDefaultQdisc {
+			return errors.New("root replacement requires explicit lease authorization")
+		}
+		snap, e := b.Inspect(c, lease)
+		if e != nil {
+			return e
+		}
+		if !replaceableDefault(snap, lease) {
+			return errors.New("kernel default qdisc fingerprint or interface lease changed")
+		}
+	}
 	_, e := b.runner.Run(c, TC, args)
 	return e
 }
@@ -107,6 +123,7 @@ func (b *SystemBackend) Inspect(ctx context.Context, l Lease) (Snapshot, error) 
 	if e != nil {
 		return s, e
 	}
+	s.RootFingerprint = fmt.Sprintf("%x", sha256.Sum256(raw))
 	roots := 0
 	for _, q := range qdiscs {
 		kind, handle := str(q, "kind"), str(q, "handle")
@@ -267,6 +284,70 @@ func NewLinuxBackend(tcPath, ipPath string) (*SystemBackend, error) {
 type execRunner struct{ tcPath, ipPath string }
 type limitedOutput struct{ bytes.Buffer }
 
+func tcWriteAllowed(args []string, expectedDevice string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	if !device.MatchString(expectedDevice) || len(args) < 4 || args[2] != "dev" || args[3] != expectedDevice {
+		return false
+	}
+	if len(args) == 10 && args[0] == "qdisc" && (args[1] == "add" || args[1] == "replace") {
+		return args[4] == "root" && args[5] == "handle" && args[6] == RootHandle && args[7] == "htb" && args[8] == "default" && args[9] == "ffff"
+	}
+	if args[0] == "class" && args[1] == "replace" {
+		return classWriteAllowed(args)
+	}
+	if args[0] == "filter" && args[1] == "replace" {
+		return filterWriteAllowed(args)
+	}
+	return false
+}
+
+func decimal(s string) bool {
+	if len(s) == 0 || len(s) > 20 || s[0] == '0' && len(s) > 1 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+func mbit(s string) bool {
+	return strings.HasSuffix(s, "mbit") && decimal(strings.TrimSuffix(s, "mbit"))
+}
+func classID(s string) bool {
+	if !strings.HasPrefix(s, RootHandle) || len(s) <= len(RootHandle) || len(s) > len(RootHandle)+4 {
+		return false
+	}
+	_, e := strconv.ParseUint(strings.TrimPrefix(s, RootHandle), 16, 16)
+	return e == nil
+}
+func classWriteAllowed(a []string) bool {
+	if len(a) == 17 && a[4] == "parent" && a[5] == RootHandle && a[6] == "classid" && a[7] == ParentClass && a[8] == "htb" && a[9] == "rate" && mbit(a[10]) && a[11] == "ceil" && a[12] == a[10] && a[13] == "burst" && decimal(a[14]) && a[15] == "cburst" && a[16] == a[14] {
+		return true
+	}
+	return len(a) == 19 && a[4] == "parent" && a[5] == ParentClass && a[6] == "classid" && classID(a[7]) && a[8] == "htb" && a[9] == "rate" && a[10] == "8bit" && a[11] == "ceil" && mbit(a[12]) && a[13] == "quantum" && a[14] == "1514" && a[15] == "burst" && decimal(a[16]) && a[17] == "cburst" && a[18] == a[16]
+}
+func hexMark(s, mask string) bool {
+	parts := strings.Split(s, "/")
+	if len(parts) != 2 || parts[1] != mask || len(parts[0]) != 10 || !strings.HasPrefix(parts[0], "0x") {
+		return false
+	}
+	_, e := strconv.ParseUint(strings.TrimPrefix(parts[0], "0x"), 16, 32)
+	return e == nil
+}
+func filterWriteAllowed(a []string) bool {
+	if len(a) != 15 || a[4] != "parent" || a[5] != RootHandle || a[6] != "protocol" || a[7] != "ip" || a[8] != "prio" || a[10] != "handle" || a[12] != "fw" {
+		return false
+	}
+	if a[9] == "10" {
+		return hexMark(a[11], "0xffffff00") && a[13] == "classid" && classID(a[14])
+	}
+	return a[9] == "20" && hexMark(a[11], "0xff000000") && strings.HasSuffix(strings.Split(a[11], "/")[0], "000000") && a[13] == "action" && a[14] == "drop"
+}
+
 func (b *limitedOutput) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > 8*1024*1024 {
 		return 0, errors.New("tool output too large")
@@ -290,7 +371,7 @@ func (r *execRunner) Run(ctx context.Context, tool Tool, args []string) ([]byte,
 		return nil, errors.New("unsupported command")
 	}
 	read := args[0] == "-j"
-	write := tool == TC && ((args[0] == "qdisc" && args[1] == "add") || (args[0] == "class" && args[1] == "replace") || (args[0] == "filter" && args[1] == "replace"))
+	write := tool == TC && len(args) >= 4 && tcWriteAllowed(args, args[3])
 	if !read && !write {
 		return nil, errors.New("unsupported network operation")
 	}

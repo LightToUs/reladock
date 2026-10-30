@@ -58,7 +58,10 @@ func bits(s string) uint64 {
 	n, _ := strconv.ParseUint(strings.TrimSuffix(s, "bit"), 10, 64)
 	return n
 }
-func (b *fakeBackend) RunTC(_ context.Context, args []string) error {
+func (b *fakeBackend) RunTC(_ context.Context, lease Lease, args []string) error {
+	if value(args, "dev") != lease.Device {
+		return errors.New("device outside lease")
+	}
 	b.calls = append(b.calls, append([]string(nil), args...))
 	if len(b.calls) == b.failAt {
 		if b.foreignOnFailure {
@@ -68,8 +71,11 @@ func (b *fakeBackend) RunTC(_ context.Context, args []string) error {
 	}
 	switch args[0] {
 	case "qdisc":
-		if b.snap.RootKind != "noqueue" && b.snap.RootKind != "" {
+		if args[1] == "add" && b.snap.RootKind != "noqueue" && b.snap.RootKind != "" {
 			return errors.New("root exists")
+		}
+		if args[1] == "replace" && (b.snap.RootKind != "fq" || b.snap.RootHandle != "0:" || len(b.snap.Classes) != 0 || len(b.snap.Filters) != 0) {
+			return errors.New("not a replaceable kernel default root")
 		}
 		b.snap.RootKind = "htb"
 		b.snap.RootHandle = RootHandle
@@ -112,11 +118,95 @@ func (b *fakeBackend) RunTC(_ context.Context, args []string) error {
 }
 func adapter(t *testing.T, b Backend, s Store, l Locker) *Adapter {
 	t.Helper()
-	a, e := NewAdapter(options(), b, s, l)
+	return adapterWithOptions(t, options(), b, s, l)
+}
+func adapterWithOptions(t *testing.T, o Options, b Backend, s Store, l Locker) *Adapter {
+	t.Helper()
+	a, e := NewAdapter(o, b, s, l)
 	if e != nil {
 		t.Fatal(e)
 	}
 	return a
+}
+
+func TestAdapterReplacesOnlyExplicitlyAuthorizedEmptyKernelDefaultFQ(t *testing.T) {
+	ctx := context.Background()
+	const defaultFQFingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	for _, root := range []struct {
+		name   string
+		kind   string
+		handle string
+	}{
+		{name: "kernel-default", kind: "fq", handle: "0:"},
+		{name: "nonzero-fq", kind: "fq", handle: "8001:"},
+		{name: "other-default", kind: "fq_codel", handle: "0:"},
+	} {
+		t.Run(root.name, func(t *testing.T) {
+			b := newBackend()
+			b.snap.RootKind, b.snap.RootHandle = root.kind, root.handle
+			b.snap.RootFingerprint = defaultFQFingerprint
+			s := &memoryStore{}
+			if _, e := adapter(t, b, s, &mutexLock{}).Apply(ctx, config()); e == nil || len(b.calls) != 0 || s.saves != 0 {
+				t.Fatalf("root changed without explicit authorization: err=%v calls=%v saves=%d", e, b.calls, s.saves)
+			}
+
+			o := options()
+			o.Lease.ReplaceDefaultQdisc = true
+			o.Lease.DefaultQdiscFingerprint = defaultFQFingerprint
+			_, e := adapterWithOptions(t, o, b, s, &mutexLock{}).Apply(ctx, config())
+			if root.name != "kernel-default" {
+				if e == nil || len(b.calls) != 0 || s.saves != 0 {
+					t.Fatalf("non-kernel default root was replaced: err=%v calls=%v saves=%d", e, b.calls, s.saves)
+				}
+				return
+			}
+			if e != nil {
+				t.Fatal(e)
+			}
+			want := []string{"qdisc", "replace", "dev", "rd-egress", "root", "handle", RootHandle, "htb", "default", "ffff"}
+			if !reflect.DeepEqual(b.calls[0], want) || s.state.Pending || s.state.Good == nil {
+				t.Fatalf("authorized handoff not durably applied: calls=%v state=%+v", b.calls, s.state)
+			}
+
+			b.snap.RootKind, b.snap.RootHandle, b.snap.RootDefault = "fq", "0:", 0
+			b.snap.RootFingerprint = defaultFQFingerprint
+			b.snap.Classes, b.snap.Filters = nil, nil
+			before := len(b.calls)
+			if _, e = adapterWithOptions(t, o, b, s, &mutexLock{}).Ensure(ctx, config()); e != nil {
+				t.Fatal("restart did not safely rebuild the persisted tree", e)
+			}
+			if len(b.calls) <= before || !reflect.DeepEqual(b.calls[before], want) {
+				t.Fatal("restart did not repeat the exact authorized handoff", b.calls[before:])
+			}
+		})
+	}
+
+	t.Run("nonempty-kernel-default", func(t *testing.T) {
+		b := newBackend()
+		b.snap.RootKind, b.snap.RootHandle = "fq", "0:"
+		b.snap.RootFingerprint = defaultFQFingerprint
+		b.snap.Filters = []FilterState{{Kind: "fw", Parent: RootHandle, Protocol: "ip", Priority: 1}}
+		o := options()
+		o.Lease.ReplaceDefaultQdisc = true
+		o.Lease.DefaultQdiscFingerprint = defaultFQFingerprint
+		s := &memoryStore{}
+		if _, e := adapterWithOptions(t, o, b, s, &mutexLock{}).Apply(ctx, config()); e == nil || len(b.calls) != 0 || s.saves != 0 {
+			t.Fatalf("nonempty kernel root was replaced: err=%v calls=%v saves=%d", e, b.calls, s.saves)
+		}
+	})
+
+	t.Run("fingerprint-drift", func(t *testing.T) {
+		b := newBackend()
+		b.snap.RootKind, b.snap.RootHandle = "fq", "0:"
+		b.snap.RootFingerprint = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		o := options()
+		o.Lease.ReplaceDefaultQdisc = true
+		o.Lease.DefaultQdiscFingerprint = defaultFQFingerprint
+		s := &memoryStore{}
+		if _, e := adapterWithOptions(t, o, b, s, &mutexLock{}).Apply(ctx, config()); e == nil || len(b.calls) != 0 || s.saves != 0 {
+			t.Fatalf("customized kernel default was replaced: err=%v calls=%v saves=%d", e, b.calls, s.saves)
+		}
+	})
 }
 
 func TestAdapterAppliesAndRejectsStaleAcrossRestart(t *testing.T) {
