@@ -21,18 +21,32 @@ type HostReport struct {
 	Checks          map[string]string `json:"checks"`
 	ObservedAt      time.Time         `json:"observedAt"`
 }
-type preflightOutput struct{ bytes.Buffer }
+type preflightOutput struct{ buffer bytes.Buffer }
 
 func (b *preflightOutput) Write(p []byte) (int, error) {
 	n := len(p)
-	if b.Len() < 480 {
-		keep := 480 - b.Len()
+	if b.buffer.Len() < 480 {
+		keep := 480 - b.buffer.Len()
 		if keep > n {
 			keep = n
 		}
-		b.Buffer.Write(p[:keep])
+		b.buffer.Write(p[:keep])
 	}
 	return n, nil
+}
+
+func (b *preflightOutput) Len() int { return b.buffer.Len() }
+func (b *preflightOutput) String() string {
+	value := strings.ToValidUTF8(b.buffer.String(), "?")
+	return strings.Map(func(r rune) rune {
+		// Keep normal line-oriented diagnostics readable while preventing
+		// JSON escaping from expanding one retained byte into six. The command
+		// output is diagnostic metadata, never a byte-exact protocol payload.
+		if r < 0x20 && r != '\n' && r != '\r' && r != '\t' || r == '<' || r == '>' || r == '&' {
+			return '?'
+		}
+		return r
+	}, value)
 }
 func InspectHost(ctx context.Context) (HostReport, error) {
 	report := HostReport{OS: runtime.GOOS, Arch: runtime.GOARCH, Mode: "validation-only", Checks: map[string]string{}, ObservedAt: time.Now().UTC()}
