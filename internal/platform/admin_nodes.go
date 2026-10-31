@@ -25,21 +25,22 @@ type NodeInput struct {
 }
 type ManagedNode struct {
 	Node
-	ListenAddress          string     `json:"listenAddress"`
-	PublicAddress          string     `json:"publicAddress"`
-	CapacityMbps           int        `json:"capacityMbps"`
-	Revision               int64      `json:"revision"`
-	CertificateFingerprint string     `json:"certificateFingerprint"`
-	ContactStatus          string     `json:"contactStatus"`
-	AgentMode              string     `json:"agentMode"`
-	AgentStartedAt         *time.Time `json:"agentStartedAt"`
-	HeartbeatAt            *time.Time `json:"heartbeatAt"`
-	CertificateNotAfter    *time.Time `json:"certificateNotAfter"`
-	RotationState          string     `json:"rotationState"`
-	RotationErrorCode      string     `json:"rotationErrorCode"`
-	RotationErrorSince     *time.Time `json:"rotationErrorSince"`
-	ProbeStatus            string     `json:"probeStatus"`
-	ProbeObservedAt        *time.Time `json:"probeObservedAt"`
+	ListenAddress          string               `json:"listenAddress"`
+	PublicAddress          string               `json:"publicAddress"`
+	CapacityMbps           int                  `json:"capacityMbps"`
+	Revision               int64                `json:"revision"`
+	CertificateFingerprint string               `json:"certificateFingerprint"`
+	ContactStatus          string               `json:"contactStatus"`
+	AgentMode              string               `json:"agentMode"`
+	AgentStartedAt         *time.Time           `json:"agentStartedAt"`
+	HeartbeatAt            *time.Time           `json:"heartbeatAt"`
+	CertificateNotAfter    *time.Time           `json:"certificateNotAfter"`
+	RotationState          string               `json:"rotationState"`
+	RotationErrorCode      string               `json:"rotationErrorCode"`
+	RotationErrorSince     *time.Time           `json:"rotationErrorSince"`
+	ProbeStatus            string               `json:"probeStatus"`
+	ProbeObservedAt        *time.Time           `json:"probeObservedAt"`
+	Upgrade                *AgentUpgradeSummary `json:"upgrade"`
 }
 
 func normalizeNode(input NodeInput) (NodeInput, error) {
@@ -70,8 +71,11 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 	 WHEN EXISTS(SELECT 1 FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation AND p.status='targetReachable') THEN 'targetReachable'
 	 WHEN EXISTS(SELECT 1 FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation AND p.status='unknown') THEN 'udpUnknown'
 	 ELSE 'unknown' END,
-	(SELECT max(p.observed_at) FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation)
-	FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation ORDER BY n.id`, AgentHeartbeatStaleAfter.Seconds())
+	(SELECT max(p.observed_at) FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation),
+	u.id::text,u.target_version,u.previous_version,u.state,u.error_code,u.requested_at,u.updated_at,u.completed_at
+	FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation
+	LEFT JOIN LATERAL (SELECT id,target_version,previous_version,state,error_code,requested_at,updated_at,completed_at FROM node_agent_upgrades WHERE node_id=n.id ORDER BY requested_at DESC,id DESC LIMIT 1) u ON true
+	ORDER BY n.id`, AgentHeartbeatStaleAfter.Seconds())
 	if err != nil {
 		return nil, err
 	}
@@ -79,8 +83,13 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 	items := []ManagedNode{}
 	for rows.Next() {
 		var n ManagedNode
-		if err = rows.Scan(&n.ID, &n.Name, &n.Region, &n.Status, &n.DesiredGeneration, &n.ValidatedGeneration, &n.LastSeenAt, &n.AgentVersion, &n.DeliveryState, &n.DeliveryAttempts, &n.ListenAddress, &n.PublicAddress, &n.CapacityMbps, &n.Revision, &n.CertificateFingerprint, &n.AppliedGeneration, &n.ContactStatus, &n.AgentMode, &n.AgentStartedAt, &n.HeartbeatAt, &n.CertificateNotAfter, &n.RotationState, &n.RotationErrorCode, &n.RotationErrorSince, &n.ProbeStatus, &n.ProbeObservedAt); err != nil {
+		var upgradeID, targetVersion, previousVersion, state, errorCode *string
+		var requestedAt, updatedAt, completedAt *time.Time
+		if err = rows.Scan(&n.ID, &n.Name, &n.Region, &n.Status, &n.DesiredGeneration, &n.ValidatedGeneration, &n.LastSeenAt, &n.AgentVersion, &n.DeliveryState, &n.DeliveryAttempts, &n.ListenAddress, &n.PublicAddress, &n.CapacityMbps, &n.Revision, &n.CertificateFingerprint, &n.AppliedGeneration, &n.ContactStatus, &n.AgentMode, &n.AgentStartedAt, &n.HeartbeatAt, &n.CertificateNotAfter, &n.RotationState, &n.RotationErrorCode, &n.RotationErrorSince, &n.ProbeStatus, &n.ProbeObservedAt, &upgradeID, &targetVersion, &previousVersion, &state, &errorCode, &requestedAt, &updatedAt, &completedAt); err != nil {
 			return nil, err
+		}
+		if upgradeID != nil {
+			n.Upgrade = &AgentUpgradeSummary{ID: *upgradeID, TargetVersion: *targetVersion, PreviousVersion: *previousVersion, State: *state, ErrorCode: *errorCode, RequestedAt: *requestedAt, UpdatedAt: *updatedAt, CompletedAt: completedAt}
 		}
 		items = append(items, n)
 	}

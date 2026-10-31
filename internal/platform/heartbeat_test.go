@@ -11,7 +11,7 @@ import (
 
 func validAgentHeartbeat(now time.Time) AgentHeartbeat {
 	return AgentHeartbeat{
-		Version:             "validation-only/0.8.0",
+		Version:             "v0.8.0",
 		Mode:                "validation",
 		StartedAt:           now.Add(-time.Minute),
 		CertificateNotAfter: now.Add(20 * 24 * time.Hour),
@@ -188,11 +188,11 @@ func TestAdminNodesExposeAgentHeartbeatWithoutCredentialMaterial(t *testing.T) {
 		}
 	}
 	if err := s.Migrate(ctx); err != nil {
-		t.Fatalf("schema v20 rerun: %v", err)
+		t.Fatalf("schema v21 rerun: %v", err)
 	}
 	var version int
-	var rotationsTable bool
-	if err := s.pool.QueryRow(ctx, "SELECT max(version),(to_regclass('node_certificate_rotations') IS NOT NULL) FROM schema_migrations").Scan(&version, &rotationsTable); err != nil || version != 20 || !rotationsTable {
-		t.Fatalf("schema version/table: version=%d rotations=%v err=%v", version, rotationsTable, err)
+	var rotationsTable, upgradesTable bool
+	if err := s.pool.QueryRow(ctx, "SELECT max(version),(to_regclass('node_certificate_rotations') IS NOT NULL),(to_regclass('node_agent_upgrades') IS NOT NULL) FROM schema_migrations").Scan(&version, &rotationsTable, &upgradesTable); err != nil || version != SchemaVersion || !rotationsTable || !upgradesTable {
+		t.Fatalf("schema version/tables: version=%d rotations=%v upgrades=%v err=%v", version, rotationsTable, upgradesTable, err)
 	}
 }
