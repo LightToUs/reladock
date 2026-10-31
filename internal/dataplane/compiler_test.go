@@ -21,6 +21,30 @@ func fixture() platform.NodeConfig {
 }
 func options() Options { return Options{NodeID: "hk-01", SNATAddress: "192.0.2.2"} }
 
+func fixtureV2() platform.NodeConfig {
+	c := fixture()
+	c.SchemaVersion = 2
+	c.Rules[0].Protocol = "tcp"
+	c.Allocations = []platform.ConfigAllocation{{
+		ID:       "11111111-1111-4111-8111-111111111111",
+		RuleID:   c.Rules[0].ID,
+		Protocol: "tcp",
+		Address:  c.ListenAddress,
+		Port:     c.Rules[0].ListenPort,
+	}}
+	c.Retirements = []platform.ConfigRetirement{{
+		ID:                   "22222222-2222-4222-8222-222222222222",
+		AllocationID:         "33333333-3333-4333-8333-333333333333",
+		RuleID:               "44444444-4444-4444-8444-444444444444",
+		Protocol:             "udp",
+		Address:              c.ListenAddress,
+		Port:                 20001,
+		QuarantineGeneration: c.Generation,
+		State:                "queued",
+	}}
+	return c
+}
+
 func TestCompileBothAndPaused(t *testing.T) {
 	cfg := fixture()
 	paused := cfg.Rules[0]
@@ -70,6 +94,147 @@ func TestForwardScopeOnlyExplicitAllocations(t *testing.T) {
 	}
 }
 
+func TestCompileV2BindsQuarantineAndForwardGuardsToAllocation(t *testing.T) {
+	p, err := Compile(context.Background(), fixtureV2(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"chain quarantine",
+		"type filter hook prerouting priority raw; policy accept;",
+		`ip daddr 192.0.2.1 meta l4proto udp udp dport 20001 drop comment "reladock-quarantine-33333333-3333-4333-8333-333333333333"`,
+		`ct status dnat meta l4proto tcp ct original ip daddr 192.0.2.1 ct original proto-dst 20000 jump relay comment "reladock-forward-11111111-1111-4111-8111-111111111111"`,
+		`ct status dnat meta l4proto udp ct original ip daddr 192.0.2.1 ct original proto-dst 20001 jump relay comment "reladock-forward-33333333-3333-4333-8333-333333333333"`,
+	} {
+		if !strings.Contains(p.Script, want) {
+			t.Errorf("missing %q in %s", want, p.Script)
+		}
+	}
+	if strings.Contains(p.Script, "udp dport 20001 dnat") {
+		t.Fatal("retired allocation was reactivated", p.Script)
+	}
+	if len(p.Quarantines) != 1 || len(p.ForwardGuards) != 2 {
+		t.Fatalf("unexpected guards: quarantine=%+v forward=%+v", p.Quarantines, p.ForwardGuards)
+	}
+}
+
+func TestCompileV2RejectsIncompleteOrAmbiguousAllocationIdentity(t *testing.T) {
+	cases := map[string]func(*platform.NodeConfig){
+		"missing active allocation": func(c *platform.NodeConfig) { c.Allocations = nil },
+		"wrong allocation tuple":    func(c *platform.NodeConfig) { c.Allocations[0].Port++ },
+		"duplicate allocation id": func(c *platform.NodeConfig) {
+			a := c.Allocations[0]
+			a.RuleID = "other"
+			a.Protocol = "udp"
+			a.Port = 20002
+			c.Rules = append(c.Rules, platform.ConfigRule{ID: "other", TenantID: "tenant-a", RuleInput: platform.RuleInput{Name: "Other", NodeID: c.NodeID, Protocol: "udp", TargetHost: "198.51.100.3", TargetPort: 443, BandwidthMbps: 100}, ListenPort: 20002, Version: 1, Status: "pending-agent"})
+			c.Allocations = append(c.Allocations, a)
+		},
+		"active retirement overlap": func(c *platform.NodeConfig) {
+			c.Retirements[0].Protocol = "tcp"
+			c.Retirements[0].Port = 20000
+		},
+		"wildcard retirement": func(c *platform.NodeConfig) { c.Retirements[0].Address = "0.0.0.0" },
+		"future generation":   func(c *platform.NodeConfig) { c.Retirements[0].QuarantineGeneration++ },
+		"released retirement": func(c *platform.NodeConfig) { c.Retirements[0].State = "released" },
+		"invalid uuid":        func(c *platform.NodeConfig) { c.Allocations[0].ID = "allocation-a" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			c := fixtureV2()
+			mutate(&c)
+			if _, err := Compile(context.Background(), c, options()); err == nil {
+				t.Fatal("accepted unsafe schema-v2 allocation metadata")
+			}
+		})
+	}
+}
+
+func TestCompileV2OverlaysPurgedAndReusableQuarantines(t *testing.T) {
+	c := fixtureV2()
+	local := AllocationGuard{ID: c.Retirements[0].AllocationID, RetirementID: c.Retirements[0].ID, Address: c.Retirements[0].Address, Protocol: c.Retirements[0].Protocol, Port: c.Retirements[0].Port, State: "purged-pending-ack"}
+	o := options()
+	o.quarantines = []AllocationGuard{local}
+	p, err := Compile(context.Background(), c, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Quarantines) != 1 || len(p.ForwardGuards) != 1 || strings.Contains(p.Script, "reladock-forward-"+local.ID) {
+		t.Fatalf("purged allocation retained obsolete forward guard: %+v", p)
+	}
+
+	c.Retirements = nil
+	local.State = "reusable"
+	o.quarantines = []AllocationGuard{local}
+	p, err = Compile(context.Background(), c, o)
+	if err != nil || len(p.Quarantines) != 1 {
+		t.Fatalf("reusable quarantine was not retained: %+v %v", p, err)
+	}
+
+	replacement := c.Rules[0]
+	replacement.ID = "replacement"
+	replacement.Protocol = "udp"
+	replacement.ListenPort = local.Port
+	c.Rules = append(c.Rules, replacement)
+	c.Allocations = append(c.Allocations, platform.ConfigAllocation{
+		ID:                      "55555555-5555-4555-8555-555555555555",
+		RuleID:                  replacement.ID,
+		Protocol:                "udp",
+		Address:                 c.ListenAddress,
+		Port:                    local.Port,
+		PredecessorRetirementID: local.RetirementID,
+	})
+	p, err = Compile(context.Background(), c, o)
+	if err != nil || len(p.Quarantines) != 0 {
+		t.Fatalf("exact predecessor did not atomically consume quarantine: %+v %v", p, err)
+	}
+	c.Rules[1].Status = "paused"
+	p, err = Compile(context.Background(), c, o)
+	if err != nil || len(p.Quarantines) != 1 {
+		t.Fatalf("paused replacement consumed quarantine: %+v %v", p, err)
+	}
+	c.Rules[1].Status = "pending-agent"
+	c.Allocations[1].PredecessorRetirementID = "66666666-6666-4666-8666-666666666666"
+	if _, err = Compile(context.Background(), c, o); err == nil {
+		t.Fatal("wrong predecessor consumed reusable quarantine")
+	}
+	c.Allocations[1].PredecessorRetirementID = local.RetirementID
+	local.State = "purged-pending-ack"
+	o.quarantines = []AllocationGuard{local}
+	if _, err = Compile(context.Background(), c, o); err == nil {
+		t.Fatal("purged-pending-ack quarantine was consumed before platform ACK")
+	}
+	o.quarantines = nil
+	if _, err = Compile(context.Background(), c, o); err == nil {
+		t.Fatal("unobserved predecessor was accepted without local lineage")
+	}
+	duplicate := c.Rules[1]
+	duplicate.ID = "duplicate-predecessor"
+	duplicate.Protocol = "tcp"
+	duplicate.ListenPort = 20003
+	c.Rules = append(c.Rules, duplicate)
+	c.Allocations = append(c.Allocations, platform.ConfigAllocation{ID: "88888888-8888-4888-8888-888888888888", RuleID: duplicate.ID, Protocol: "tcp", Address: c.ListenAddress, Port: duplicate.ListenPort, PredecessorRetirementID: c.Allocations[1].PredecessorRetirementID})
+	if _, err = Compile(context.Background(), c, o); err == nil {
+		t.Fatal("same predecessor was assigned to multiple allocations")
+	}
+}
+
+func TestCompileV2RetainsIdentityBoundFailedCandidateGuard(t *testing.T) {
+	c := fixtureV2()
+	failed := AllocationGuard{ID: "77777777-7777-4777-8777-777777777777", Address: c.ListenAddress, Protocol: "tcp", Port: 20002, State: "failed-candidate"}
+	o := options()
+	o.retiredGuards = []AllocationGuard{failed}
+	p, err := Compile(context.Background(), c, o)
+	if err != nil || !strings.Contains(p.Script, "reladock-forward-"+failed.ID) {
+		t.Fatalf("failed candidate lost identity guard: %+v %v", p, err)
+	}
+	c.Rules[0].ListenPort = failed.Port
+	c.Allocations[0].Port = failed.Port
+	if _, err = Compile(context.Background(), c, o); err == nil {
+		t.Fatal("failed candidate tuple was reused")
+	}
+}
+
 func TestCompileRejectsInvalidAndInjection(t *testing.T) {
 	cases := map[string]func(*platform.NodeConfig){
 		"node injection":   func(c *platform.NodeConfig) { c.NodeID = "hk; flush ruleset" },
@@ -88,7 +253,7 @@ func TestCompileRejectsInvalidAndInjection(t *testing.T) {
 		"listen port":      func(c *platform.NodeConfig) { c.Rules[0].ListenPort = 19999 },
 		"protocol":         func(c *platform.NodeConfig) { c.Rules[0].Protocol = "tcp;drop" },
 		"version":          func(c *platform.NodeConfig) { c.Rules[0].Version = 0 },
-		"schema":           func(c *platform.NodeConfig) { c.SchemaVersion = 2 },
+		"schema":           func(c *platform.NodeConfig) { c.SchemaVersion = 3 },
 		"generation":       func(c *platform.NodeConfig) { c.Generation = 0 },
 		"wrong node":       func(c *platform.NodeConfig) { c.Rules[0].NodeID = "other" },
 		"bandwidth":        func(c *platform.NodeConfig) { c.Rules[0].BandwidthMbps = 0 },

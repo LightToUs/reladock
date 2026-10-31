@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"reladock/internal/platform"
 )
 
 type memoryStore struct {
@@ -394,6 +396,147 @@ func TestDeletedAllocationsStayScopedAndArePersisted(t *testing.T) {
 	p, e = a.Apply(context.Background(), c)
 	if e != nil || len(p.Allocations) != 2 {
 		t.Fatalf("retired allocations lost on restart: %+v %v", p, e)
+	}
+}
+
+func TestSchemaV2ApplyAndFailedCandidateIdentitySurviveRestart(t *testing.T) {
+	s := &memoryStore{}
+	r := &fakeRunner{}
+	a := newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	if _, err := a.Apply(context.Background(), fixtureV2()); err != nil {
+		t.Fatal(err)
+	}
+	a = newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	if _, err := a.ApplyVerified(context.Background(), fixtureV2()); err != nil {
+		t.Fatal("schema-v2 last-good did not survive restart", err)
+	}
+
+	s = &memoryStore{}
+	r = &fakeRunner{failAt: map[int]bool{3: true}}
+	a = newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	failedConfig := fixtureV2()
+	failedConfig.Retirements = nil
+	if _, err := a.Apply(context.Background(), failedConfig); err == nil {
+		t.Fatal("injected apply failure was accepted")
+	} else if errors.Is(err, ErrRecoveryRequired) {
+		t.Log("rollback remained pending:", err)
+	}
+	if s.state.Pending || s.state.Good == nil || len(s.state.TombstoneGuards) != 1 || len(s.state.Good.ForwardGuards) != 1 {
+		t.Fatalf("failed allocation identity was not durably fenced: %+v", s.state)
+	}
+	if s.state.TombstoneGuards[0].ID != failedConfig.Allocations[0].ID {
+		t.Fatal("wrong failed allocation identity", s.state.TombstoneGuards)
+	}
+	a = newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	next := failedConfig
+	next.Generation = 2
+	next.Allocations[0].ID = "88888888-8888-4888-8888-888888888888"
+	if _, err := a.Apply(context.Background(), next); err == nil {
+		t.Fatal("failed candidate tuple was reused with a different allocation ID")
+	}
+}
+
+func TestReusableQuarantineRequiresPredecessorAndIsConsumedAtomically(t *testing.T) {
+	base := fixtureV2()
+	retirement := base.Retirements[0]
+	guard := AllocationGuard{ID: retirement.AllocationID, RetirementID: retirement.ID, Address: retirement.Address, Protocol: retirement.Protocol, Port: retirement.Port, State: "reusable"}
+	empty := base
+	empty.Rules = nil
+	empty.Allocations = nil
+	empty.Retirements = nil
+	o := options()
+	o.quarantines = []AllocationGuard{guard}
+	p, err := Compile(context.Background(), empty, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &memoryStore{state: State{NodeID: empty.NodeID, HighWater: empty.Generation, Good: &p, ReusableQuarantines: []AllocationGuard{guard}}}
+	r := &fakeRunner{exists: true, token: planToken(p)}
+	a := newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	replacement := empty
+	replacement.Generation++
+	replacement.Rules = []platform.ConfigRule{{ID: "replacement", TenantID: "tenant-a", RuleInput: platform.RuleInput{Name: "Replacement", NodeID: empty.NodeID, Protocol: guard.Protocol, TargetHost: "198.51.100.3", TargetPort: 443, BandwidthMbps: 100}, ListenPort: guard.Port, Version: 1, Status: "pending-agent"}}
+	replacement.Allocations = []platform.ConfigAllocation{{ID: "99999999-9999-4999-8999-999999999999", RuleID: "replacement", Protocol: guard.Protocol, Address: guard.Address, Port: guard.Port}}
+	if _, err = a.Apply(context.Background(), replacement); err == nil {
+		t.Fatal("tuple takeover without predecessor was accepted")
+	}
+	replacement.Allocations[0].PredecessorRetirementID = guard.RetirementID
+	plan, err := a.Apply(context.Background(), replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Quarantines) != 0 || len(s.state.ReusableQuarantines) != 0 || strings.Contains(plan.Script, "reladock-quarantine-"+guard.ID) {
+		t.Fatalf("quarantine was not consumed in the successful replacement: %+v", s.state)
+	}
+	a = newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	if _, err = a.ApplyVerified(context.Background(), replacement); err != nil {
+		t.Fatal("consumed predecessor lineage did not survive restart", err)
+	}
+}
+
+func TestFailedQuarantineTakeoverRestoresQuarantineAndCandidateGuard(t *testing.T) {
+	base := fixtureV2()
+	retirement := base.Retirements[0]
+	quarantine := AllocationGuard{ID: retirement.AllocationID, RetirementID: retirement.ID, Address: retirement.Address, Protocol: retirement.Protocol, Port: retirement.Port, State: "reusable"}
+	empty := base
+	empty.Rules, empty.Allocations, empty.Retirements = nil, nil, nil
+	o := options()
+	o.quarantines = []AllocationGuard{quarantine}
+	good, err := Compile(context.Background(), empty, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &memoryStore{state: State{NodeID: empty.NodeID, HighWater: empty.Generation, Good: &good, ReusableQuarantines: []AllocationGuard{quarantine}}}
+	r := &fakeRunner{exists: true, token: planToken(good)}
+	verify := func(_ context.Context, plan Plan) error {
+		if plan.Generation > empty.Generation && len(plan.Quarantines) == 0 {
+			return errors.New("injected takeover verification failure")
+		}
+		return nil
+	}
+	a := newTestAdapter(t, s, r, &mutexLock{}, verify)
+	replacement := empty
+	replacement.Generation++
+	replacement.Rules = []platform.ConfigRule{{ID: "replacement", TenantID: "tenant-a", RuleInput: platform.RuleInput{Name: "Replacement", NodeID: empty.NodeID, Protocol: quarantine.Protocol, TargetHost: "198.51.100.3", TargetPort: 443, BandwidthMbps: 100}, ListenPort: quarantine.Port, Version: 1, Status: "pending-agent"}}
+	replacement.Allocations = []platform.ConfigAllocation{{ID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", RuleID: "replacement", Protocol: quarantine.Protocol, Address: quarantine.Address, Port: quarantine.Port, PredecessorRetirementID: quarantine.RetirementID}}
+	if _, err = a.Apply(context.Background(), replacement); err == nil || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("takeover failure did not complete safe rollback: %v", err)
+	}
+	if s.state.Pending || s.state.Good == nil || len(s.state.Good.Quarantines) != 1 || len(s.state.Good.ForwardGuards) != 1 || len(s.state.TombstoneGuards) != 1 || len(s.state.ReusableQuarantines) != 1 {
+		t.Fatalf("rollback lost quarantine or candidate guard: %+v", s.state)
+	}
+	a = newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	next := empty
+	next.Generation += 2
+	if _, err = a.Apply(context.Background(), next); err != nil {
+		t.Fatal("safe takeover rollback did not survive restart", err)
+	}
+}
+
+func TestSchemaV2AllocationIdentityCannotMoveAcrossGenerations(t *testing.T) {
+	s := &memoryStore{}
+	r := &fakeRunner{}
+	a := newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	base := fixtureV2()
+	base.Retirements = nil
+	if _, err := a.Apply(context.Background(), base); err != nil {
+		t.Fatal(err)
+	}
+	moved := base
+	moved.Generation++
+	moved.Rules = append([]platform.ConfigRule(nil), base.Rules...)
+	moved.Allocations = append([]platform.ConfigAllocation(nil), base.Allocations...)
+	moved.Rules[0].ListenPort++
+	moved.Allocations[0].Port++
+	if _, err := a.Apply(context.Background(), moved); err == nil {
+		t.Fatal("same allocation ID moved to another tuple")
+	}
+	replaced := base
+	replaced.Generation++
+	replaced.Allocations = append([]platform.ConfigAllocation(nil), base.Allocations...)
+	replaced.Allocations[0].ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	if _, err := a.Apply(context.Background(), replaced); err == nil {
+		t.Fatal("occupied tuple changed allocation ID without predecessor")
 	}
 }
 

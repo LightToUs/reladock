@@ -56,6 +56,11 @@ type State struct {
 	// Tombstones are failed candidate allocations which must never be reused
 	// until a separate explicit conntrack reconciliation (not implemented).
 	Tombstones []Allocation
+	// Schema-v2 retains allocation identity for failed candidates and keeps
+	// purged/reusable pre-conntrack quarantines distinct from legacy tombstones.
+	TombstoneGuards     []AllocationGuard
+	PurgedPendingACK    []AllocationGuard
+	ReusableQuarantines []AllocationGuard
 }
 type Adapter struct {
 	options Options
@@ -129,7 +134,7 @@ func (a *Adapter) load(ctx context.Context) (State, error) {
 	if e != nil {
 		return s, fmt.Errorf("load state: %w", e)
 	}
-	if s.NodeID == "" && s.HighWater == 0 && !s.Pending && s.Good == nil && s.Candidate == nil && s.Recovery == nil && s.PreviousRecovery == nil && len(s.Tombstones) == 0 {
+	if s.NodeID == "" && s.HighWater == 0 && !s.Pending && s.Good == nil && s.Candidate == nil && s.Recovery == nil && s.PreviousRecovery == nil && len(s.Tombstones) == 0 && len(s.TombstoneGuards) == 0 && len(s.PurgedPendingACK) == 0 && len(s.ReusableQuarantines) == 0 {
 		e = a.bindMeter(&s)
 		return s, e
 	}
@@ -142,7 +147,8 @@ func (a *Adapter) load(ctx context.Context) (State, error) {
 		}
 		// Recompile pinned literal targets without a resolver, so corrupt on-disk
 		// Script can never become executable input and rollback never re-resolves DNS.
-		p, e := Compile(ctx, g.Config, Options{NodeID: a.options.NodeID, SNATAddress: g.SNATAddress, retired: g.Allocations, incarnation: g.Incarnation, Shaping: g.Shaping, builtAt: g.BuiltAt, quotaUsed: g.QuotaUsed})
+		o := persistedPlanOptions(*g)
+		p, e := Compile(ctx, g.Config, o)
 		if e != nil || !reflect.DeepEqual(p, *g) || g.Generation > s.HighWater {
 			return s, errors.New("invalid persisted plan")
 		}
@@ -175,8 +181,170 @@ func (a *Adapter) load(ctx context.Context) (State, error) {
 	if s.Good != nil && intersectsActive(s.Good.Config, s.Tombstones) {
 		return s, errors.New("last-good reuses a fenced allocation")
 	}
+	if err := validateLocalGuardState(s); err != nil {
+		return s, err
+	}
 	e = a.bindMeter(&s)
 	return s, e
+}
+
+func persistedPlanOptions(p Plan) Options {
+	nativeForward := map[string]bool{}
+	for _, allocation := range p.Config.Allocations {
+		nativeForward[allocation.ID] = true
+	}
+	for _, retirement := range p.Config.Retirements {
+		nativeForward[retirement.AllocationID] = true
+	}
+	o := Options{NodeID: p.NodeID, SNATAddress: p.SNATAddress, retired: p.Allocations, incarnation: p.Incarnation, Shaping: p.Shaping, builtAt: p.BuiltAt, quotaUsed: p.QuotaUsed, acceptedPredecessors: acceptedPredecessorsForPlan(p)}
+	for _, guard := range p.ForwardGuards {
+		if !nativeForward[guard.ID] {
+			o.retiredGuards = append(o.retiredGuards, guard)
+		}
+	}
+	forward := map[string]bool{}
+	for _, guard := range p.ForwardGuards {
+		forward[guard.ID] = true
+	}
+	for _, guard := range p.Quarantines {
+		if !forward[guard.ID] {
+			o.quarantines = append(o.quarantines, guard)
+		}
+	}
+	return o
+}
+
+func acceptedPredecessorsForPlan(p Plan) map[string]platform.ConfigAllocation {
+	quarantined := map[string]bool{}
+	for _, guard := range p.Quarantines {
+		if guard.RetirementID != "" {
+			quarantined[guard.RetirementID] = true
+		}
+	}
+	accepted := map[string]platform.ConfigAllocation{}
+	for _, allocation := range p.Config.Allocations {
+		if allocation.PredecessorRetirementID != "" && !quarantined[allocation.PredecessorRetirementID] {
+			accepted[allocation.PredecessorRetirementID] = allocation
+		}
+	}
+	return accepted
+}
+
+func localQuarantineOverlay(s State) []AllocationGuard {
+	result := append([]AllocationGuard(nil), s.PurgedPendingACK...)
+	return append(result, s.ReusableQuarantines...)
+}
+
+func validateLocalGuardState(s State) error {
+	ids := map[string]bool{}
+	quarantineTuples := map[string]AllocationGuard{}
+	for expected, guards := range map[string][]AllocationGuard{"purged-pending-ack": s.PurgedPendingACK, "reusable": s.ReusableQuarantines} {
+		for _, guard := range guards {
+			tuple := guardTuple(guard.Address, guard.Protocol, guard.Port)
+			if guard.State != expected || ids[guard.ID] || quarantineTuples[tuple].ID != "" {
+				return errors.New("invalid persisted allocation guard classification")
+			}
+			ids[guard.ID] = true
+			quarantineTuples[tuple] = guard
+		}
+	}
+	tombstoneTuples := map[string]bool{}
+	for _, guard := range s.TombstoneGuards {
+		tuple := guardTuple(guard.Address, guard.Protocol, guard.Port)
+		if guard.State != "failed-candidate" || ids[guard.ID] || tombstoneTuples[tuple] {
+			return errors.New("invalid persisted allocation guard classification")
+		}
+		if quarantine, overlap := quarantineTuples[tuple]; overlap && (quarantine.State != "reusable" || guard.PredecessorRetirementID != quarantine.RetirementID) {
+			return errors.New("failed allocation overlaps unrelated quarantine")
+		}
+		ids[guard.ID] = true
+		tombstoneTuples[tuple] = true
+	}
+	if !s.Pending && s.Good != nil {
+		goodQuarantines := map[string]AllocationGuard{}
+		goodForward := map[string]AllocationGuard{}
+		for _, guard := range s.Good.Quarantines {
+			goodQuarantines[guard.ID] = guard
+		}
+		for _, guard := range s.Good.ForwardGuards {
+			goodForward[guard.ID] = guard
+		}
+		for _, guard := range append(append([]AllocationGuard(nil), s.PurgedPendingACK...), s.ReusableQuarantines...) {
+			if goodQuarantines[guard.ID] != guard {
+				return errors.New("persisted quarantine classification differs from last-good kernel plan")
+			}
+		}
+		for _, guard := range s.TombstoneGuards {
+			if goodForward[guard.ID] != guard {
+				return errors.New("persisted tombstone classification differs from last-good kernel plan")
+			}
+		}
+	}
+	return nil
+}
+
+func consumeReusableQuarantines(cfg platform.NodeConfig, guards []AllocationGuard) []AllocationGuard {
+	consumed := map[string]bool{}
+	status := map[string]string{}
+	for _, rule := range cfg.Rules {
+		status[rule.ID] = rule.Status
+	}
+	for _, allocation := range cfg.Allocations {
+		if allocation.PredecessorRetirementID != "" && status[allocation.RuleID] == "pending-agent" {
+			consumed[allocation.PredecessorRetirementID] = true
+		}
+	}
+	result := make([]AllocationGuard, 0, len(guards))
+	for _, guard := range guards {
+		if !consumed[guard.RetirementID] {
+			result = append(result, guard)
+		}
+	}
+	return result
+}
+
+type allocationIdentity struct {
+	id, retirementID, ruleID, address, protocol string
+	port                                        int
+}
+
+func configAllocationIdentities(cfg platform.NodeConfig) (map[string]allocationIdentity, map[string]allocationIdentity) {
+	byID := map[string]allocationIdentity{}
+	byTuple := map[string]allocationIdentity{}
+	for _, allocation := range cfg.Allocations {
+		identity := allocationIdentity{id: allocation.ID, ruleID: allocation.RuleID, address: allocation.Address, protocol: allocation.Protocol, port: allocation.Port}
+		byID[identity.id] = identity
+		byTuple[guardTuple(identity.address, identity.protocol, identity.port)] = identity
+	}
+	for _, retirement := range cfg.Retirements {
+		identity := allocationIdentity{id: retirement.AllocationID, retirementID: retirement.ID, ruleID: retirement.RuleID, address: retirement.Address, protocol: retirement.Protocol, port: retirement.Port}
+		byID[identity.id] = identity
+		byTuple[guardTuple(identity.address, identity.protocol, identity.port)] = identity
+	}
+	return byID, byTuple
+}
+
+func validateAllocationTransition(old, next platform.NodeConfig) error {
+	if old.SchemaVersion != 2 || next.SchemaVersion != 2 {
+		return nil
+	}
+	oldByID, oldByTuple := configAllocationIdentities(old)
+	nextByID, _ := configAllocationIdentities(next)
+	for id, current := range nextByID {
+		if previous, ok := oldByID[id]; ok && (previous.ruleID != current.ruleID || previous.address != current.address || previous.protocol != current.protocol || previous.port != current.port) {
+			return errors.New("allocation identity changed across generations")
+		}
+	}
+	for _, allocation := range next.Allocations {
+		previous, occupied := oldByTuple[guardTuple(allocation.Address, allocation.Protocol, allocation.Port)]
+		if !occupied || previous.id == allocation.ID {
+			continue
+		}
+		if previous.retirementID == "" || allocation.PredecessorRetirementID != previous.retirementID {
+			return errors.New("allocation tuple changed identity without exact retired predecessor")
+		}
+	}
+	return nil
 }
 
 func activeAllocations(cfg platform.NodeConfig) map[Allocation]bool {
@@ -335,7 +503,13 @@ func (a *Adapter) apply(ctx context.Context, cfg platform.NodeConfig, retry bool
 	}
 	if s.Good != nil {
 		o.retired = s.Good.Allocations
+		o.acceptedPredecessors = acceptedPredecessorsForPlan(*s.Good)
+		if e = validateAllocationTransition(s.Good.Config, cfg); e != nil {
+			return Plan{}, e
+		}
 	}
+	o.retiredGuards = append([]AllocationGuard(nil), s.TombstoneGuards...)
+	o.quarantines = localQuarantineOverlay(s)
 	p, e := Compile(ctx, cfg, o)
 	if e != nil {
 		return Plan{}, e
@@ -414,6 +588,7 @@ func (a *Adapter) apply(ctx context.Context, cfg platform.NodeConfig, retry bool
 	}
 	committed.GoodDesired = &desired
 	committed.Candidate = nil
+	committed.ReusableQuarantines = consumeReusableQuarantines(p.Config, committed.ReusableQuarantines)
 	if e = a.store.Save(ctx, committed); e != nil {
 		return Plan{}, a.failed(ctx, s, fmt.Errorf("persist last-good: %w", e), true)
 	}
@@ -474,23 +649,13 @@ func (a *Adapter) restore(ctx context.Context, s State) error {
 		history = append(history, s.Good.Allocations...)
 	} else {
 		cfg.Rules = nil
+		cfg.Allocations = nil
 	}
 	history = append(history, s.Candidate.Allocations...)
 	history = append(history, s.Tombstones...)
-	o := Options{NodeID: s.NodeID, SNATAddress: snat, retired: history, Shaping: a.options.Shaping}
-	if h, ok := a.hooks.(TransitionBudget); ok {
-		var err error
-		o.quotaUsed, err = h.QuotaUsed(ctx, cfg)
-		if err != nil {
-			return err
-		}
-	}
-	if a.hooks != nil {
-		o.incarnation = newIncarnation()
-	}
-	p, e := Compile(ctx, cfg, o)
-	if e != nil {
-		return fmt.Errorf("compile rollback protection: %w", e)
+	o := Options{NodeID: s.NodeID, SNATAddress: snat, retired: history, Shaping: a.options.Shaping, quarantines: localQuarantineOverlay(s), retiredGuards: append([]AllocationGuard(nil), s.TombstoneGuards...)}
+	if s.Good != nil {
+		o.acceptedPredecessors = acceptedPredecessorsForPlan(*s.Good)
 	}
 	// Only the prior Good's active tuples may forward. New active candidate
 	// tuples become permanent exact tombstones, including initial failures.
@@ -506,6 +671,43 @@ func (a *Adapter) restore(ctx context.Context, s State) error {
 		if !goodActive[v] {
 			blocked[v] = true
 		}
+	}
+	if s.Candidate.Config.SchemaVersion == 2 {
+		goodIDs := map[string]bool{}
+		if s.Good != nil {
+			for _, guard := range s.Good.ForwardGuards {
+				goodIDs[guard.ID] = true
+			}
+		}
+		for _, allocation := range s.Candidate.Config.Allocations {
+			if goodIDs[allocation.ID] {
+				continue
+			}
+			guard := AllocationGuard{ID: allocation.ID, Address: allocation.Address, Protocol: allocation.Protocol, Port: allocation.Port, State: "failed-candidate", PredecessorRetirementID: allocation.PredecessorRetirementID}
+			found := false
+			for _, existing := range o.retiredGuards {
+				found = found || existing.ID == guard.ID
+			}
+			if !found {
+				o.retiredGuards = append(o.retiredGuards, guard)
+				s.TombstoneGuards = append(s.TombstoneGuards, guard)
+			}
+			blocked[Allocation{allocation.Address, allocation.Protocol, allocation.Port}] = true
+		}
+	}
+	if h, ok := a.hooks.(TransitionBudget); ok {
+		var err error
+		o.quotaUsed, err = h.QuotaUsed(ctx, cfg)
+		if err != nil {
+			return err
+		}
+	}
+	if a.hooks != nil {
+		o.incarnation = newIncarnation()
+	}
+	p, e := Compile(ctx, cfg, o)
+	if e != nil {
+		return fmt.Errorf("compile rollback protection: %w", e)
 	}
 	s.Tombstones = nil
 	for _, v := range p.Allocations {

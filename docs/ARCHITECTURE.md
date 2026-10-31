@@ -52,7 +52,7 @@ flowchart TD
 - `internal/web`：认证、租户写授权、同源/Host 检查、定制请求头、严格 JSON、8 KiB 业务正文限制和 HTTP 超时。开发模式进程内限流，生产模式 PostgreSQL 共享限流；Cookie 为 HttpOnly、SameSite=Strict，HTTPS 下启用 Secure/HSTS。独立支付 webhook 验签原始报文，上限 256 KiB，具有独立预算。
 - 端口按 `(node_id, listen_address, protocol, listen_port)` 数据库主键唯一；节点级事务锁分配 20000–60000 范围最小可用端口。TCP/UDP 可共用相同数字端口；both 同时预留，两者与规则、幂等记录、审计一起提交或回滚。
 - 创建规则必须提交企业内唯一的 `Idempotency-Key`（8–128 位字母数字及 `._:-`）；相同规范化请求重放返回原规则，不同请求返回冲突。幂等记录暂不自动过期。
-- 暂停保留端口；删除软删除规则并入队缺席快照。未曾进入 applying 的端口可以释放；曾下发端口永久保留隔离，移除 ACK 之后仍需独立 conntrack 安全回收，当前不自动复用。重复暂停/删除不增加版本或审计。
+- 暂停保留端口；删除软删除规则并为每个 TCP/UDP allocation 建立 retirement，入队 schema-2 缺席快照。快照在 raw prerouting 安装新连接 quarantine，并保留 allocation-ID forward guard；平台只有在 applied quarantine 之后才允许领取精确清理任务。Agent 侧 conntrack 执行器与最终 ACK 编排仍未接入，因此当前不会自动释放或复用曾下发端口。重复暂停/删除不增加版本或审计。
 - 规则期望版本从 1 开始；仅 applied 回报推进对应快照的生效版本与 applied_status，校验不推进。节点 generation 与规则版本分开。applied 不代表端到端健康，页面不得显示运行中；无虚构充值、流量或余额。
 - 审计记录账户注册/登录/退出与规则创建/暂停/删除，查询仅返回本企业最近 50 条；尚未提供独立防篡改审计存储。
 - 注册只创建 owner。邀请仅生成 admin/viewer；角色变化撤销旧会话和 Key。Key 仅保存摘要，按 read/write 范围与当前数据库角色复核，不具备平台权限。每直接连接 IP 每分钟 120 次 API，认证预算 10 次；不信任代理转发头。

@@ -2,6 +2,7 @@ package dataplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,39 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSchemaV1StateFromPreviousAgentLoadsAfterUpgrade(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "private")
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Compile(context.Background(), fixture(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := State{NodeID: p.NodeID, HighWater: p.Generation, Good: &p, GoodDesired: &p.Config}
+	raw, _ := json.Marshal(state)
+	var legacy map[string]any
+	if err = json.Unmarshal(raw, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	good := legacy["Good"].(map[string]any)
+	delete(good, "Quarantines")
+	delete(good, "ForwardGuards")
+	delete(legacy, "TombstoneGuards")
+	delete(legacy, "PurgedPendingACK")
+	delete(legacy, "ReusableQuarantines")
+	raw, _ = json.Marshal(legacy)
+	if err = os.WriteFile(filepath.Join(dir, "state.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{exists: true, token: planToken(p)}
+	adapter := newTestAdapter(t, store, runner, store.Locker(), goodVerify)
+	if _, err = adapter.ApplyVerified(context.Background(), fixture()); err != nil {
+		t.Fatal("legacy schema-v1 state was not recoverable after upgrade", err)
+	}
+}
 
 func TestFileStateRestartAndCorruption(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "private")

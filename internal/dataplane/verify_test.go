@@ -13,12 +13,37 @@ type runnerFunc func(context.Context, []string, string) ([]byte, error)
 
 func (f runnerFunc) Run(c context.Context, a []string, s string) ([]byte, error) { return f(c, a, s) }
 
+func guardExpressions(g AllocationGuard, quarantine bool) []any {
+	if quarantine {
+		return []any{
+			map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": "ip", "field": "daddr"}}, "right": g.Address}},
+			map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"meta": map[string]any{"key": "l4proto"}}, "right": g.Protocol}},
+			map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": g.Protocol, "field": "dport"}}, "right": g.Port}},
+			map[string]any{"drop": nil},
+		}
+	}
+	return []any{
+		map[string]any{"match": map[string]any{"op": "in", "left": map[string]any{"ct": map[string]any{"key": "status"}}, "right": "dnat"}},
+		map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"meta": map[string]any{"key": "l4proto"}}, "right": g.Protocol}},
+		map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"ct": map[string]any{"key": "daddr", "dir": "original", "family": "ip"}}, "right": g.Address}},
+		map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"ct": map[string]any{"key": "proto-dst", "dir": "original"}}, "right": g.Port}},
+		map[string]any{"jump": map[string]any{"target": "relay"}},
+	}
+}
+
 func readbackFixture(p Plan) []map[string]any {
 	items := []map[string]any{{"table": map[string]any{"family": "ip", "name": "reladock", "comment": owner}}}
-	for _, v := range []struct {
+	chains := []struct {
 		name, kind, hook string
 		prio             int
-	}{{"prerouting", "nat", "prerouting", -100}, {"postrouting", "nat", "postrouting", 100}, {"forward", "filter", "forward", 0}, {"relay", "", "", 0}} {
+	}{{"prerouting", "nat", "prerouting", -100}, {"postrouting", "nat", "postrouting", 100}, {"forward", "filter", "forward", 0}, {"relay", "", "", 0}}
+	if p.Config.SchemaVersion == 2 {
+		chains = append([]struct {
+			name, kind, hook string
+			prio             int
+		}{{"quarantine", "filter", "prerouting", -300}}, chains...)
+	}
+	for _, v := range chains {
 		chain := map[string]any{"family": "ip", "table": "reladock", "name": v.name}
 		if v.kind != "" {
 			chain["type"] = v.kind
@@ -34,12 +59,80 @@ func readbackFixture(p Plan) []map[string]any {
 		items = append(items, map[string]any{"counter": map[string]any{"family": "ip", "table": "reladock", "name": v.Name, "packets": 17, "bytes": 1234}})
 	}
 	n := len(p.Counters) / 2
-	for chain, count := range map[string]int{"prerouting": n, "postrouting": n, "forward": len(p.Allocations), "relay": 2*n + 1} {
+	counts := map[string]int{"prerouting": n, "postrouting": n, "forward": len(p.Allocations), "relay": 2*n + 1}
+	if p.Config.SchemaVersion == 2 {
+		counts["forward"] = len(p.ForwardGuards)
+		counts["quarantine"] = len(p.Quarantines)
+	}
+	for chain, count := range counts {
 		for i := 0; i < count; i++ {
-			items = append(items, map[string]any{"rule": map[string]any{"family": "ip", "table": "reladock", "chain": chain}})
+			rule := map[string]any{"family": "ip", "table": "reladock", "chain": chain}
+			if p.Config.SchemaVersion == 2 && chain == "quarantine" {
+				guard := p.Quarantines[i]
+				rule["comment"] = "reladock-quarantine-" + guard.ID
+				rule["expr"] = guardExpressions(guard, true)
+			}
+			if p.Config.SchemaVersion == 2 && chain == "forward" {
+				guard := p.ForwardGuards[i]
+				rule["comment"] = "reladock-forward-" + guard.ID
+				rule["expr"] = guardExpressions(guard, false)
+			}
+			items = append(items, map[string]any{"rule": rule})
 		}
 	}
 	return items
+}
+
+func TestReadbackV2RequiresRawQuarantineChainAndExactRuleCounts(t *testing.T) {
+	p, err := Compile(context.Background(), fixtureV2(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"valid", "missing quarantine", "wrong priority", "missing quarantine rule", "wrong quarantine expression", "wrong quarantine operator", "wrong guard comment", "extra forward guard"} {
+		t.Run(mode, func(t *testing.T) {
+			items := readbackFixture(p)
+			switch mode {
+			case "missing quarantine":
+				items = append(items[:1], items[2:]...)
+			case "wrong priority":
+				items[1]["chain"].(map[string]any)["prio"] = -299
+			case "missing quarantine rule":
+				for i := range items {
+					if rule, ok := items[i]["rule"].(map[string]any); ok && rule["chain"] == "quarantine" {
+						items = append(items[:i], items[i+1:]...)
+						break
+					}
+				}
+			case "wrong quarantine expression":
+				for i := range items {
+					if rule, ok := items[i]["rule"].(map[string]any); ok && rule["chain"] == "quarantine" {
+						rule["expr"].([]any)[2].(map[string]any)["match"].(map[string]any)["right"] = 20002
+					}
+				}
+			case "wrong quarantine operator":
+				for i := range items {
+					if rule, ok := items[i]["rule"].(map[string]any); ok && rule["chain"] == "quarantine" {
+						rule["expr"].([]any)[0].(map[string]any)["match"].(map[string]any)["op"] = "!="
+					}
+				}
+			case "wrong guard comment":
+				for i := range items {
+					if rule, ok := items[i]["rule"].(map[string]any); ok && rule["chain"] == "forward" {
+						rule["comment"] = "reladock-forward-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+						break
+					}
+				}
+			case "extra forward guard":
+				items = append(items, map[string]any{"rule": map[string]any{"family": "ip", "table": "reladock", "chain": "forward"}})
+			}
+			b, _ := json.Marshal(map[string]any{"nftables": items})
+			r := runnerFunc(func(context.Context, []string, string) ([]byte, error) { return b, nil })
+			err := ReadbackVerifier(r)(context.Background(), p)
+			if (err == nil) != (mode == "valid") {
+				t.Fatalf("%s: %v", mode, err)
+			}
+		})
+	}
 }
 
 func TestReadbackRejectsMissingCountersWrongGenerationAndCommandFailure(t *testing.T) {
@@ -132,5 +225,16 @@ func TestNFTTextCommentParserFailsClosed(t *testing.T) {
 				t.Fatalf("unsafe text accepted: %+v", comments)
 			}
 		})
+	}
+}
+
+func TestSchemaV1PlanTokenRemainsUpgradeCompatible(t *testing.T) {
+	p, err := Compile(context.Background(), fixture(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const legacy = "reladock-plan-c4ed25d045c8013defd3680cc526a7b7dc0932bc3f34f2e3cece8f686a0d5916"
+	if got := planToken(p); got != legacy {
+		t.Fatalf("schema-v1 token changed across Agent upgrade: got %s", got)
 	}
 }

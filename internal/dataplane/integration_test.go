@@ -499,6 +499,33 @@ func TestDockerIntegration(t *testing.T) {
 	if _, ok, e := replacementWAL.Next(); e != nil || ok {
 		t.Fatal("replacement WAL rebilled existing traffic", e)
 	}
+	// Migrate a clean v1 allocation to schema-v2 and prove the retirement
+	// quarantine is a real raw-priority pre-conntrack guard for both protocols.
+	composedAdapter.SetTransitionHooks(ShapedMeterHooks{MeterHooks: composedMeter, Shaper: shapeAdapter})
+	composedCfg.SchemaVersion = 2
+	composedCfg.Generation = 4
+	composedCfg.Allocations = []platform.ConfigAllocation{{ID: "11111111-1111-4111-8111-111111111111", RuleID: composedCfg.Rules[0].ID, Protocol: "tcp", Address: composedIP, Port: composedCfg.Rules[0].ListenPort}}
+	composedCfg.Retirements = []platform.ConfigRetirement{
+		{ID: "22222222-2222-4222-8222-222222222222", AllocationID: "33333333-3333-4333-8333-333333333333", RuleID: "44444444-4444-4444-8444-444444444444", Protocol: "tcp", Address: composedIP, Port: 20007, QuarantineGeneration: 4, State: "queued"},
+		{ID: "55555555-5555-4555-8555-555555555555", AllocationID: "66666666-6666-4666-8666-666666666666", RuleID: "44444444-4444-4444-8444-444444444444", Protocol: "udp", Address: composedIP, Port: 20007, QuarantineGeneration: 4, State: "queued"},
+	}
+	quarantinePlan, e := composedAdapter.Apply(ctx, composedCfg)
+	if e != nil {
+		t.Fatal("schema-v2 quarantine apply/readback:", e)
+	}
+	if len(quarantinePlan.Quarantines) != 2 || !strings.Contains(quarantinePlan.Script, "priority raw") {
+		t.Fatal("schema-v2 quarantine plan incomplete")
+	}
+	assertNewBlocked(composedIP, "20007")
+	if got := strings.TrimSpace(string(must("", "exec", names[2], "python3", "-c", newUDPMustBlock, composedIP, "20007"))); got != "BLOCKED" {
+		t.Fatal("UDP quarantine did not block:", got)
+	}
+	must("", "exec", names[4], "conntrack", "--version")
+	for _, protocol := range []string{"tcp", "udp"} {
+		if out, queryErr := docker(ctx, "", "exec", names[4], "conntrack", "-L", "-p", protocol, "--orig-dst", composedIP, "--dport", "20007"); queryErr == nil || len(bytes.TrimSpace(out)) != 0 {
+			t.Fatalf("%s packet created conntrack state behind quarantine: output=%q err=%v", protocol, out, queryErr)
+		}
+	}
 	if e = initialFlow.expect("BLOCKED"); e != nil {
 		t.Fatal("restart lost initial candidate fence:", e)
 	}
@@ -592,6 +619,14 @@ try:
  if got: raise RuntimeError('failed candidate port still echoes')
  print('BLOCKED')
 except (socket.timeout,ConnectionRefusedError,ConnectionResetError,BrokenPipeError): print('BLOCKED')
+finally: s.close()
+`
+const newUDPMustBlock = `import socket,sys
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(.5); s.connect((sys.argv[1],int(sys.argv[2])))
+try:
+ s.sendall(b'new-udp-probe'); got=s.recv(4096)
+ print('INVALID' if got else 'BLOCKED')
+except (socket.timeout,ConnectionRefusedError,ConnectionResetError): print('BLOCKED')
 finally: s.close()
 `
 
