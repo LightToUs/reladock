@@ -36,6 +36,10 @@ func versionResult() CommandResult {
 	return CommandResult{Stdout: []byte("conntrack v1.4.7 (conntrack-tools)\n")}
 }
 
+func version146Result() CommandResult {
+	return CommandResult{Stdout: []byte("conntrack v1.4.6 (conntrack-tools)\n")}
+}
+
 func zeroXML() []byte { return []byte(`<?xml version="1.0"?><conntrack></conntrack>`) }
 
 func flowXML() []byte {
@@ -83,6 +87,60 @@ func TestPurgeIsIdempotentAndWaitsForStrictZero(t *testing.T) {
 	result, err := (Executor{Runner: runner, QueryAttempts: 3}).Purge(context.Background(), allocation("tcp"))
 	if err != nil || result.DeletedEntries != 0 || len(runner.calls) != 4 {
 		t.Fatalf("result=%+v calls=%d err=%v", result, len(runner.calls), err)
+	}
+}
+
+func TestPurgeAcceptsV146EmptyZeroQueryOnlyWithAuthoritativeSummary(t *testing.T) {
+	runner := &scriptedRunner{responses: []CommandResult{
+		version146Result(),
+		{Stderr: []byte("conntrack v1.4.6 (conntrack-tools): 0 flow entries have been deleted.\n"), ExitCode: 1},
+		{Stderr: []byte("conntrack v1.4.6 (conntrack-tools): 0 flow entries have been shown.\n")},
+	}}
+	result, err := (Executor{Runner: runner}).Purge(context.Background(), allocation("udp"))
+	if err != nil || result.DeletedEntries != 0 || len(runner.calls) != 3 {
+		t.Fatalf("result=%+v calls=%d err=%v", result, len(runner.calls), err)
+	}
+
+	for name, stderr := range map[string]string{
+		"missing summary":   "",
+		"nonzero summary":   "conntrack v1.4.6 (conntrack-tools): 1 flow entries have been shown.\n",
+		"malformed summary": "0 entries\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := &scriptedRunner{responses: []CommandResult{
+				version146Result(),
+				{Stderr: []byte("conntrack v1.4.6 (conntrack-tools): 0 flow entries have been deleted.\n"), ExitCode: 1},
+				{Stderr: []byte(stderr)},
+			}}
+			if _, err := (Executor{Runner: bad}).Purge(context.Background(), allocation("udp")); ErrorCode(err) != "output-invalid" {
+				t.Fatalf("empty query accepted without exact zero summary: %v", err)
+			}
+		})
+	}
+
+	for name, responses := range map[string][]CommandResult{
+		"newer version empty output": {
+			versionResult(),
+			{Stderr: []byte("conntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.\n"), ExitCode: 1},
+			{Stderr: []byte("conntrack v1.4.7 (conntrack-tools): 0 flow entries have been shown.\n")},
+		},
+		"newer version old summary": {
+			versionResult(),
+			{Stderr: []byte("conntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.\n"), ExitCode: 1},
+			{Stderr: []byte("conntrack v1.4.6 (conntrack-tools): 0 flow entries have been shown.\n")},
+		},
+		"old version newer summary": {
+			version146Result(),
+			{Stderr: []byte("conntrack v1.4.6 (conntrack-tools): 0 flow entries have been deleted.\n"), ExitCode: 1},
+			{Stderr: []byte("conntrack v1.4.7 (conntrack-tools): 0 flow entries have been shown.\n")},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := &scriptedRunner{responses: responses}
+			if _, err := (Executor{Runner: bad}).Purge(context.Background(), allocation("udp")); ErrorCode(err) != "output-invalid" {
+				t.Fatalf("empty query accepted across version boundary: %v", err)
+			}
+		})
 	}
 }
 

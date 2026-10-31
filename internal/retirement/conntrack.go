@@ -328,6 +328,11 @@ func validateShown(stderr []byte, flows int) bool {
 	return err == nil && count == flows
 }
 
+func validateExactShown(stderr []byte, version string, flows int) bool {
+	want := version + ": " + strconv.Itoa(flows) + " flow entries have been shown."
+	return string(stderr) == want || string(stderr) == want+"\n"
+}
+
 func tupleArgs(allocation Allocation) []string {
 	return []string{"-f", "ipv4", "-p", allocation.Protocol, "--orig-dst", allocation.Address, "--dport", strconv.Itoa(allocation.Port), "--zone", "0"}
 }
@@ -365,9 +370,21 @@ func (e Executor) Purge(ctx context.Context, input Allocation) (PurgeResult, err
 		if queryErr != nil || queryOutput.ExitCode != 0 {
 			return PurgeResult{}, classify(queryOutput, queryErr, true)
 		}
-		flows, parseErr := strictFlowCount(queryOutput.Stdout, allocation)
-		if parseErr != nil || !validateShown(queryOutput.Stderr, flows) {
-			return PurgeResult{}, fail("output-invalid")
+		flows := 0
+		if len(queryOutput.Stdout) == 0 {
+			// conntrack-tools 1.4.6 emits no XML document for an empty
+			// filtered query. Accept that representation only when its exact,
+			// authoritative summary independently says that zero entries were
+			// shown; an absent, malformed, or non-zero summary remains fatal.
+			if version != "conntrack v1.4.6 (conntrack-tools)" || !validateExactShown(queryOutput.Stderr, version, 0) {
+				return PurgeResult{}, fail("output-invalid")
+			}
+		} else {
+			var parseErr error
+			flows, parseErr = strictFlowCount(queryOutput.Stdout, allocation)
+			if parseErr != nil || !validateShown(queryOutput.Stderr, flows) {
+				return PurgeResult{}, fail("output-invalid")
+			}
 		}
 		if flows == 0 {
 			return PurgeResult{ConntrackVersion: version, DeletedEntries: deleted}, nil
