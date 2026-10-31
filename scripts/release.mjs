@@ -27,6 +27,10 @@ for (const name of ['reladock.service', 'reladock-agent.service','reladock-agent
 }
 await copyFile(new URL('../docs/DEPLOYMENT.md', import.meta.url), new URL('DEPLOYMENT.md', output));
 hashes.push(`${createHash('sha256').update(await readFile(new URL('DEPLOYMENT.md',output))).digest('hex')}  DEPLOYMENT.md`);
+for(const [source,name] of [['LINK_AND_CAPACITY.md','LINK-AND-CAPACITY.md'],['OFFSITE_RECOVERY.md','OFFSITE-RECOVERY.md'],['SAFE_RETIREMENT.md','SAFE-RETIREMENT.md']]){
+  await copyFile(new URL(`../docs/acceptance/${source}`,import.meta.url),new URL(name,output));
+  hashes.push(`${createHash('sha256').update(await readFile(new URL(name,output))).digest('hex')}  ${name}`);
+}
 await writeFile(new URL('RELEASE.json',output),JSON.stringify({name:'RelaDock',version:metadata.version,os:'linux',arch,productionReady:false,agentMode:'validation-default; explicit composed Linux application',unverified:['production VPS acceptance and capacity','end-to-end cooperative protocol health','merchant activation and reconciliation','off-host backup replication, key custody and measured replacement-host recovery drill','privileged full safe-retirement lifecycle on a production-like VPS']},null,2)+'\n');
 hashes.push(`${createHash('sha256').update(await readFile(new URL('RELEASE.json',output))).digest('hex')}  RELEASE.json`);
 await writeFile(new URL('SHA256SUMS', output), `${hashes.join('\n')}\n`);

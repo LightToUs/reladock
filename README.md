@@ -157,4 +157,5 @@ docker compose exec -T postgres pg_dump -U reladock -d reladock > reladock-backu
 - [需求基线](docs/REQUIREMENTS.md)
 - [技术架构](docs/ARCHITECTURE.md)
 - [开发计划和状态](docs/ROADMAP.md)
+- [真实链路、VPN 客户端与容量验收](docs/acceptance/LINK_AND_CAPACITY.md)
 - [编程助手说明](AGENTS.md)

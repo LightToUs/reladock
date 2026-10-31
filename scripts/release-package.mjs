@@ -8,7 +8,7 @@ export const releaseFiles = [
  'reladock.service','reladock-agent.service','reladock-agent-apply.service',
  'reladock-updater.service','reladock-updater.timer',
  'control.env.example','agent.env.example','install-linux.sh','bootstrap-agent.sh',
- 'DEPLOYMENT.md','RELEASE.json','SHA256SUMS',
+ 'DEPLOYMENT.md','LINK-AND-CAPACITY.md','OFFSITE-RECOVERY.md','SAFE-RETIREMENT.md','RELEASE.json','SHA256SUMS',
 ];
 
 export async function packRelease(directory,version,arch,names) {
