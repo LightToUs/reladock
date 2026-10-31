@@ -23,6 +23,7 @@ const (
 
 type FileRecord struct {
 	Path   string `json:"path"`
+	Type   string `json:"type"`
 	Mode   uint32 `json:"mode"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
@@ -65,7 +66,7 @@ func ValidateManifest(m Manifest, expected Kind) error {
 			return fmt.Errorf("duplicate recovery path %q", f.Path)
 		}
 		seen[f.Path] = struct{}{}
-		if f.Mode&^0777 != 0 || f.Size < 0 || !sha256Pattern.MatchString(f.SHA256) {
+		if (f.Type != "file" && f.Type != "directory") || f.Mode&^0777 != 0 || f.Size < 0 || !sha256Pattern.MatchString(f.SHA256) || (f.Type == "directory" && f.Size != 0) {
 			return fmt.Errorf("invalid recovery metadata for %q", f.Path)
 		}
 	}

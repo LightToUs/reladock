@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"syscall"
 )
 
 const (
@@ -18,9 +19,41 @@ const (
 	maxArchiveBytes   = int64(8 << 30)
 )
 
+const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+func modeOr(value, fallback uint32) uint32 {
+	if value != 0 {
+		return value
+	}
+	return fallback
+}
+
+func openRegularNoFollow(name string) (*os.File, os.FileInfo, error) {
+	fd, err := syscall.Open(name, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	f := os.NewFile(uintptr(fd), name)
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("recovery source %q is not a regular file", name)
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
+		_ = f.Close()
+		return nil, nil, fmt.Errorf("recovery source %q is multiply linked", name)
+	}
+	return f, info, nil
+}
+
 type SourceFile struct {
 	Path, Source string
 	Mode         uint32
+	Directory    bool
 }
 
 func WriteBundle(w io.Writer, base Manifest, sources []SourceFile) (Manifest, error) {
@@ -38,15 +71,26 @@ func WriteBundle(w io.Writer, base Manifest, sources []SourceFile) (Manifest, er
 		if err != nil {
 			return base, err
 		}
-		if !info.Mode().IsRegular() {
+		if s.Directory && !info.IsDir() {
+			return base, fmt.Errorf("recovery source %q is not a directory", s.Source)
+		}
+		if !s.Directory && !info.Mode().IsRegular() {
 			return base, fmt.Errorf("recovery source %q is not a regular file", s.Source)
 		}
 		if info.Size() > maxFileBytes {
 			return base, fmt.Errorf("recovery source %q exceeds size limit", s.Source)
 		}
-		f, err := os.Open(s.Source)
+		if s.Directory {
+			base.Files = append(base.Files, FileRecord{Path: s.Path, Type: "directory", Mode: modeOr(s.Mode, uint32(info.Mode().Perm())), Size: 0, SHA256: emptySHA256})
+			continue
+		}
+		f, currentInfo, err := openRegularNoFollow(s.Source)
 		if err != nil {
 			return base, err
+		}
+		if !os.SameFile(info, currentInfo) {
+			_ = f.Close()
+			return base, fmt.Errorf("recovery source %q changed during collection", s.Source)
 		}
 		h := sha256.New()
 		_, copyErr := io.Copy(h, io.LimitReader(f, maxFileBytes+1))
@@ -61,7 +105,7 @@ func WriteBundle(w io.Writer, base Manifest, sources []SourceFile) (Manifest, er
 		if mode == 0 {
 			mode = uint32(info.Mode().Perm())
 		}
-		base.Files = append(base.Files, FileRecord{Path: s.Path, Mode: mode, Size: info.Size(), SHA256: hex.EncodeToString(h.Sum(nil))})
+		base.Files = append(base.Files, FileRecord{Path: s.Path, Type: "file", Mode: mode, Size: info.Size(), SHA256: hex.EncodeToString(h.Sum(nil))})
 	}
 	manifest, err := EncodeManifest(base)
 	if err != nil {
@@ -76,20 +120,35 @@ func WriteBundle(w io.Writer, base Manifest, sources []SourceFile) (Manifest, er
 	}
 	for i, s := range sources {
 		r := base.Files[i]
-		if err := tw.WriteHeader(&tar.Header{Name: r.Path, Mode: int64(r.Mode), Size: r.Size, Typeflag: tar.TypeReg}); err != nil {
+		typeflag := byte(tar.TypeReg)
+		if r.Type == "directory" {
+			typeflag = tar.TypeDir
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: r.Path, Mode: int64(r.Mode), Size: r.Size, Typeflag: typeflag}); err != nil {
 			return base, err
 		}
-		f, err := os.Open(s.Source)
+		if r.Type == "directory" {
+			continue
+		}
+		f, currentInfo, err := openRegularNoFollow(s.Source)
 		if err != nil {
 			return base, err
 		}
-		_, copyErr := io.CopyN(tw, f, r.Size)
+		if currentInfo.Size() != r.Size {
+			_ = f.Close()
+			return base, fmt.Errorf("recovery source %q changed during collection", s.Source)
+		}
+		hash := sha256.New()
+		_, copyErr := io.CopyN(io.MultiWriter(tw, hash), f, r.Size)
 		closeErr := f.Close()
 		if copyErr != nil {
 			return base, copyErr
 		}
 		if closeErr != nil {
 			return base, closeErr
+		}
+		if hex.EncodeToString(hash.Sum(nil)) != r.SHA256 {
+			return base, fmt.Errorf("recovery source %q changed during collection", s.Source)
 		}
 	}
 	if err := tw.Close(); err != nil {
@@ -129,7 +188,7 @@ func ExtractBundle(r io.Reader, staging string, expected Kind) (m Manifest, err 
 		if nextErr != nil {
 			return m, nextErr
 		}
-		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
+		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA && h.Typeflag != tar.TypeDir {
 			return m, fmt.Errorf("unsupported recovery entry type for %q", h.Name)
 		}
 		if !cleanBundlePath(h.Name) || h.Size < 0 || h.Size > maxFileBytes {
@@ -143,6 +202,9 @@ func ExtractBundle(r io.Reader, staging string, expected Kind) (m Manifest, err 
 			return m, errors.New("recovery archive exceeds size limit")
 		}
 		if h.Name == "manifest.json" {
+			if h.Typeflag == tar.TypeDir {
+				return m, errors.New("recovery manifest is not a file")
+			}
 			manifestData, err = io.ReadAll(io.LimitReader(tr, maxFileBytes+1))
 			if err != nil {
 				return m, err
@@ -150,6 +212,13 @@ func ExtractBundle(r io.Reader, staging string, expected Kind) (m Manifest, err 
 			continue
 		}
 		destination := filepath.Join(staging, filepath.FromSlash(h.Name))
+		if h.Typeflag == tar.TypeDir {
+			if err = os.Mkdir(destination, os.FileMode(h.Mode)&0777); err != nil {
+				return m, err
+			}
+			seen[h.Name] = FileRecord{Path: h.Name, Type: "directory", Mode: uint32(h.Mode) & 0777, Size: 0, SHA256: emptySHA256}
+			continue
+		}
 		if err = os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
 			return m, err
 		}
@@ -170,7 +239,7 @@ func ExtractBundle(r io.Reader, staging string, expected Kind) (m Manifest, err 
 		if closeErr != nil {
 			return m, closeErr
 		}
-		seen[h.Name] = FileRecord{Path: h.Name, Mode: uint32(h.Mode) & 0777, Size: h.Size, SHA256: hex.EncodeToString(hash.Sum(nil))}
+		seen[h.Name] = FileRecord{Path: h.Name, Type: "file", Mode: uint32(h.Mode) & 0777, Size: h.Size, SHA256: hex.EncodeToString(hash.Sum(nil))}
 	}
 	if manifestData == nil {
 		return m, errors.New("recovery manifest is missing")

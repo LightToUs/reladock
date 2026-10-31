@@ -12,8 +12,8 @@ import (
 
 func TestManifestCanonicalAndValidated(t *testing.T) {
 	m := Manifest{Version: FormatVersion, Kind: KindNode, CreatedAt: time.Date(2026, 10, 31, 1, 2, 3, 0, time.UTC), SourceID: "node-1", Files: []FileRecord{
-		{Path: "state/z", Mode: 0600, Size: 1, SHA256: strings.Repeat("a", 64)},
-		{Path: "state/a", Mode: 0640, Size: 2, SHA256: strings.Repeat("b", 64)},
+		{Path: "state/z", Type: "file", Mode: 0600, Size: 1, SHA256: strings.Repeat("a", 64)},
+		{Path: "state/a", Type: "file", Mode: 0640, Size: 2, SHA256: strings.Repeat("b", 64)},
 	}}
 	b, err := EncodeManifest(m)
 	if err != nil {
