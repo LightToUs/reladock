@@ -38,3 +38,13 @@ func (c *Client) ReportHeartbeat(ctx context.Context, heartbeat platform.AgentHe
 	}
 	return nil
 }
+
+// ReportRuntimeHeartbeat attaches one bounded local observation immediately
+// before transport. The observation is operational evidence, not path health.
+func (c *Client) ReportRuntimeHeartbeat(ctx context.Context, heartbeat platform.AgentHeartbeat, collector *ResourceCollector, inspector DataplaneInspector) error {
+	if collector == nil {
+		return errors.New("resource collector required")
+	}
+	heartbeat.Resources = collector.Collect(ctx, inspector)
+	return c.ReportHeartbeat(ctx, heartbeat)
+}

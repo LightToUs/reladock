@@ -123,6 +123,7 @@ func main() {
 		mode = "apply"
 	}
 	upgradeHealth := agent.NewUpgradeHealth("/run/reladock-updater/health-request.json", "/run/reladock-agent", buildinfo.Current())
+	resourceCollector := agent.NewResourceCollector()
 	hooks := agent.RuntimeHooks{Preflight: func(parent context.Context) error {
 		// Contact and inspection are distinct from configuration/application health.
 		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
@@ -168,7 +169,7 @@ func main() {
 			}
 		}
 		rotationState, rotationError := credentials.RotationStatus()
-		if err := runner.ReportHeartbeat(activityCtx, platform.AgentHeartbeat{Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError, KernelBootID: kernelBootID, JournalSequence: journalSequence}); err != nil {
+		if err := runner.ReportRuntimeHeartbeat(activityCtx, platform.AgentHeartbeat{Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError, KernelBootID: kernelBootID, JournalSequence: journalSequence}, resourceCollector, engine); err != nil {
 			return err
 		}
 		return upgradeHealth.HeartbeatSucceeded()

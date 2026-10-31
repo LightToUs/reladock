@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -44,6 +45,39 @@ func TestReportHeartbeatPostsBoundedJSONWithoutFollowingRedirects(t *testing.T) 
 	}
 	if received != heartbeat {
 		t.Fatalf("heartbeat changed in transit: %+v", received)
+	}
+}
+
+func TestReportRuntimeHeartbeatCollectsResourcesBeforePosting(t *testing.T) {
+	var received platform.AgentHeartbeat
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	collector := &ResourceCollector{
+		now: func() time.Time { return now },
+		readFile: func(path string) ([]byte, error) {
+			switch path {
+			case "/proc/meminfo":
+				return []byte("MemTotal: 100 kB\nMemAvailable: 25 kB\n"), nil
+			default:
+				return nil, os.ErrNotExist
+			}
+		},
+		statFS: func(string) (filesystemUsage, error) { return filesystemUsage{}, os.ErrNotExist },
+	}
+	c := Client{HTTP: srv.Client(), BaseURL: srv.URL, NodeID: "hk-01"}
+	heartbeat := platform.AgentHeartbeat{Version: "v0.9.0", Mode: "validation", StartedAt: now.Add(-time.Minute), CertificateNotAfter: now.Add(time.Hour), RotationState: "idle"}
+	if err := c.ReportRuntimeHeartbeat(context.Background(), heartbeat, collector, nil); err != nil {
+		t.Fatal(err)
+	}
+	if received.Resources.SampledAt != now || received.Resources.MemoryPercent == nil || *received.Resources.MemoryPercent != 75 || received.Resources.DataplaneState != "not-applicable" {
+		t.Fatalf("runtime heartbeat omitted resource sample: %+v", received.Resources)
 	}
 }
 

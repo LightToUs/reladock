@@ -141,6 +141,19 @@ func TestAgentHeartbeatRequiresPostAndStrictJSON(t *testing.T) {
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("unknown heartbeat field status=%d", response.StatusCode)
 	}
+	value := 20
+	valid := platform.AgentHeartbeat{Version: "v0.9.0", Mode: "validation", StartedAt: time.Now().Add(-time.Minute), CertificateNotAfter: cert.NotAfter, RotationState: "idle", Resources: platform.ResourceObservation{SampledAt: time.Now().UTC(), CPUPercent: &value, DataplaneState: "not-applicable"}}
+	body, _ = json.Marshal(valid)
+	request, _ = http.NewRequest(http.MethodPost, srv.URL+"/agent/heartbeat", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	response, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("resource heartbeat status=%d", response.StatusCode)
+	}
 }
 
 func TestAgentCertificateRenewAndActivateEndpoints(t *testing.T) {
