@@ -24,7 +24,7 @@
 
 ## 尚未实现
 
-真实 VPS/容量验收、合作端到端协议探针、商户激活与人工对账流程、生产离机恢复、已退役端口 conntrack 执行/ACK 闭环、Redis 与后续企业组网。平台 retirement 状态机与 schema-2 allocation-ID quarantine/回滚底座已实现，但固定 conntrack 执行器、Agent journal、mTLS 编排和节点最终退役门禁仍待完成。Agent updater 已实现但尚未完成真实 VPS 上安装中断、健康超时、回滚失败及离机状态恢复演练；节点应用日志/WAL 丢失后的人工重建流程仍需专门运维验收，不能自动清屏障或重置计量。生产服务器/域名/支付渠道由用户之后确定。
+真实 VPS/容量验收、合作端到端协议探针、商户激活与人工对账流程、生产离机恢复、已退役端口 conntrack/ACK 闭环、Redis 与后续企业组网。平台 retirement 状态机、schema-2 allocation-ID quarantine/回滚底座，以及固定路径/参数、严格有界输出和 canonical proof 的 conntrack 执行器已实现；Adapter purge journal、mTLS Agent 编排和节点最终退役门禁仍待完成。Agent updater 已实现但尚未完成真实 VPS 上安装中断、健康超时、回滚失败及离机状态恢复演练；节点应用日志/WAL 丢失后的人工重建流程仍需专门运维验收，不能自动清屏障或重置计量。生产服务器/域名/支付渠道由用户之后确定。
 
 ## 实施顺序
 
