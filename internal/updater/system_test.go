@@ -83,16 +83,22 @@ func TestLocalHostRefusesPendingDeliveryAndRequiresExactHealthMarker(t *testing.
 	if err := os.WriteFile(filepath.Join(control, "delivery.json"), []byte("{}"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	host := &LocalHost{ControlDir: control, HealthDir: filepath.Join(root, "health")}
-	if err := host.EnsureControlIdle(context.Background()); err == nil {
+	lockPath := filepath.Join(root, "control.lock")
+	if err := os.WriteFile(lockPath, nil, 0640); err != nil {
+		t.Fatal(err)
+	}
+	host := &LocalHost{ControlDir: control, ControlLock: lockPath, HealthDir: filepath.Join(root, "health")}
+	if _, err := host.LockControlIdle(context.Background()); err == nil {
 		t.Fatal("pending delivery accepted")
 	}
 	if err := os.Remove(filepath.Join(control, "delivery.json")); err != nil {
 		t.Fatal(err)
 	}
-	if err := host.EnsureControlIdle(context.Background()); err != nil {
+	unlock, err := host.LockControlIdle(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
+	unlock()
 	request := HealthRequest{TaskID: "11111111-1111-4111-8111-111111111111", Challenge: strings.Repeat("c", 64), TargetVersion: "v0.9.0"}
 	if err := os.MkdirAll(host.HealthDir, 0750); err != nil {
 		t.Fatal(err)

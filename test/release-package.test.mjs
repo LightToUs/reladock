@@ -25,8 +25,16 @@ test('production release manifest includes the hardened root updater',async()=>{
  assert.match(service,/^User=root$/m);
  assert.match(service,/^Group=reladock$/m);
  assert.match(service,/^ProtectSystem=strict$/m);
- assert.match(service,/^CapabilityBoundingSet=$/m);
+ assert.match(service,/^TimeoutStartSec=10min$/m);
+ assert.match(service,/^CapabilityBoundingSet=CAP_DAC_READ_SEARCH$/m);
+ assert.match(service,/^AmbientCapabilities=CAP_DAC_READ_SEARCH$/m);
  assert.doesNotMatch(service,/CAP_NET_ADMIN|bash|sh -c/);
  const timer=await readFile(join(process.cwd(),'deploy','reladock-updater.timer'),'utf8');
  assert.match(timer,/^RandomizedDelaySec=/m);
+ const bootstrap=await readFile(join(process.cwd(),'deploy','bootstrap-agent.sh'),'utf8');
+ const installer=await readFile(join(process.cwd(),'deploy','install-linux.sh'),'utf8');
+ for(const script of [bootstrap,installer]){
+  assert.match(script,/install -d -o reladock -g reladock -m 0700 \/var\/lib\/reladock-agent\/control/);
+  assert.match(script,/install -o root -g reladock -m 0640 \/dev\/null \/var\/lib\/reladock-locks\/control\.lock/);
+ }
 });

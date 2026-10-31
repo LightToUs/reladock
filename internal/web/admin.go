@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"reladock/internal/buildinfo"
 	"reladock/internal/platform"
 )
 
@@ -42,6 +43,35 @@ func (s *server) serveAdmin(w http.ResponseWriter, r *http.Request, who platform
 		if err != nil {
 			failure(w, err)
 			return
+		}
+		active := false
+		for _, node := range value {
+			if node.Upgrade != nil && (node.Upgrade.State == "queued" || node.Upgrade.State == "claimed" || node.Upgrade.State == "installing" || node.Upgrade.State == "verifying") {
+				active = true
+				break
+			}
+		}
+		releaseEnabled := s.bootstrap != nil && s.bootstrap.Config.ReleaseEnabled()
+		for i := range value {
+			value[i].UpgradeTargetVersion = ""
+			value[i].UpgradeBlockedReason = "release-unconfigured"
+			if !releaseEnabled {
+				continue
+			}
+			value[i].UpgradeTargetVersion = s.bootstrap.Config.Version
+			switch {
+			case active:
+				value[i].UpgradeBlockedReason = "upgrade-active"
+			case value[i].ContactStatus != "online":
+				value[i].UpgradeBlockedReason = "agent-offline"
+			case value[i].Status == "maintenance":
+				value[i].UpgradeBlockedReason = "maintenance"
+			case !buildinfo.CanUpgrade(value[i].AgentVersion, s.bootstrap.Config.Version):
+				value[i].UpgradeBlockedReason = "version-ineligible"
+			default:
+				value[i].UpgradeEligible = true
+				value[i].UpgradeBlockedReason = ""
+			}
 		}
 		respond(w, 200, value)
 	case r.Method == "POST" && path == "nodes":

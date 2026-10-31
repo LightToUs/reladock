@@ -54,7 +54,7 @@ func main() {
 	if err := agent.ValidateEndpoint(*endpoint, *nodeID); err != nil {
 		log.Fatal(err)
 	}
-	state, applier, err := agent.PrepareApply(agent.RuntimeOptions{Apply: *apply, StateDir: *stateDir, SNATAddress: *snat, ShapingInterface: *shapingInterface, WALDir: *walDir, NFTBinary: *nftBinary, TCBinary: *tcBinary, IPBinary: *ipBinary, ShapingLeaseFile: *shapingLease, EthtoolBinary: *ethtoolBinary}, *nodeID)
+	state, applier, err := agent.PrepareApply(agent.RuntimeOptions{Apply: *apply, StateDir: *stateDir, SNATAddress: *snat, ShapingInterface: *shapingInterface, WALDir: *walDir, NFTBinary: *nftBinary, TCBinary: *tcBinary, IPBinary: *ipBinary, ShapingLeaseFile: *shapingLease, EthtoolBinary: *ethtoolBinary, ControlLockPath: "/var/lib/reladock-locks/control.lock"}, *nodeID)
 	if err != nil {
 		log.Fatal(err)
 	}

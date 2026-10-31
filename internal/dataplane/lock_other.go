@@ -7,7 +7,10 @@ import (
 	"errors"
 )
 
-type fileLock struct{ path string }
+type fileLock struct {
+	path   string
+	create bool
+}
 
 func (*fileLock) Lock(context.Context) (func(), error) {
 	return nil, errors.New("file locking unsupported on this OS")

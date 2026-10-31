@@ -21,6 +21,8 @@ import (
 
 const maxControlResponseBytes = 64 << 10
 
+var ErrReportRejected = errors.New("upgrade report rejected")
+
 var (
 	upgradeID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	hexSHA256 = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -109,6 +111,9 @@ func (c Client) Report(ctx context.Context, report platform.UpgradeReport) error
 	status, _, err := c.post(ctx, "/agent/upgrade/report", report)
 	if err != nil {
 		return err
+	}
+	if status == http.StatusUnauthorized || status == http.StatusConflict || status == http.StatusGone {
+		return ErrReportRejected
 	}
 	if status != http.StatusOK {
 		return errors.New("upgrade report rejected")

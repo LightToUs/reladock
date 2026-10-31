@@ -225,6 +225,9 @@ func (s *Store) ClaimAgentUpgrade(ctx context.Context, nodeID, fingerprint, arch
 	if state == "installing" || state == "verifying" {
 		return nil, tx.Commit(ctx)
 	}
+	if state == "claimed" && leaseExpires != nil && leaseExpires.After(time.Now().UTC()) {
+		return nil, tx.Commit(ctx)
+	}
 	if currentVersion != previousVersion || !buildinfo.CanUpgrade(currentVersion, targetVersion) {
 		return nil, ErrConflict
 	}
@@ -288,7 +291,8 @@ func (s *Store) ReportAgentUpgrade(ctx context.Context, nodeID, fingerprint stri
 		return AgentUpgrade{}, err
 	}
 	var current, targetVersion, storedError, leaseDigest string
-	err = tx.QueryRow(ctx, `SELECT state,target_version,error_code,COALESCE(lease_token_hash,'') FROM node_agent_upgrades WHERE id=$1 AND node_id=$2 FOR UPDATE`, report.ID, nodeID).Scan(&current, &targetVersion, &storedError, &leaseDigest)
+	var leaseExpires *time.Time
+	err = tx.QueryRow(ctx, `SELECT state,target_version,error_code,COALESCE(lease_token_hash,''),lease_expires_at FROM node_agent_upgrades WHERE id=$1 AND node_id=$2 FOR UPDATE`, report.ID, nodeID).Scan(&current, &targetVersion, &storedError, &leaseDigest, &leaseExpires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AgentUpgrade{}, ErrNotFound
 	}
@@ -296,6 +300,9 @@ func (s *Store) ReportAgentUpgrade(ctx context.Context, nodeID, fingerprint stri
 		return AgentUpgrade{}, err
 	}
 	if leaseDigest == "" || leaseDigest != bootstrapHash([]byte(report.LeaseToken)) {
+		return AgentUpgrade{}, ErrUnauthorized
+	}
+	if current == "claimed" && report.State != current && (leaseExpires == nil || !leaseExpires.After(time.Now().UTC())) {
 		return AgentUpgrade{}, ErrUnauthorized
 	}
 	if current == report.State {

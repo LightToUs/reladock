@@ -114,4 +114,17 @@ func (s *FileStore) Save(ctx context.Context, state State) error {
 	return nil
 }
 
-func (s *FileStore) Locker() Locker { return &fileLock{path: filepath.Join(s.dir, "lock")} }
+func (s *FileStore) Locker() Locker {
+	return &fileLock{path: filepath.Join(s.dir, "lock"), create: true}
+}
+
+func ExistingFileLocker(path string) (Locker, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || path == string(filepath.Separator) {
+		return nil, errors.New("lock path must be absolute")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0004 != 0 {
+		return nil, errors.New("unsafe existing lock file")
+	}
+	return &fileLock{path: path}, nil
+}

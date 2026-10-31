@@ -185,12 +185,24 @@ func TestAgentUpgradeClaimSelectsArchitectureAndProtectsLease(t *testing.T) {
 	if digest == claim.LeaseToken || len(digest) != 64 {
 		t.Fatal("plaintext or malformed lease persisted")
 	}
+	if duplicate, err := s.ClaimAgentUpgrade(ctx, "hk-01", fingerprint, "arm64", "v0.8.0"); err != nil || duplicate != nil {
+		t.Fatalf("unexpired lease was replaced: %+v %v", duplicate, err)
+	}
 	if _, err = s.pool.Exec(ctx, "UPDATE node_agent_upgrades SET lease_expires_at=now()-interval '1 second' WHERE id=$1", task.ID); err != nil {
 		t.Fatal(err)
 	}
 	reclaimed, err := s.ClaimAgentUpgrade(ctx, "hk-01", fingerprint, "arm64", "v0.8.0")
 	if err != nil || reclaimed.ID != task.ID || reclaimed.LeaseToken == claim.LeaseToken {
 		t.Fatalf("expired pre-install lease was not safely replaced: %+v %v", reclaimed, err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE node_agent_upgrades SET lease_expires_at=now()-interval '1 second' WHERE id=$1", task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReportAgentUpgrade(ctx, "hk-01", fingerprint, UpgradeReport{ID: task.ID, LeaseToken: reclaimed.LeaseToken, State: "installing"}); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expired pre-install lease accepted: %v", err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE node_agent_upgrades SET lease_expires_at=now()+interval '5 minutes' WHERE id=$1", task.ID); err != nil {
+		t.Fatal(err)
 	}
 	if _, err = s.ReportAgentUpgrade(ctx, "hk-01", fingerprint, UpgradeReport{ID: task.ID, LeaseToken: reclaimed.LeaseToken, State: "installing"}); err != nil {
 		t.Fatal(err)

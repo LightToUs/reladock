@@ -30,6 +30,7 @@ type RuntimeOptions struct {
 	IPBinary         string
 	ShapingLeaseFile string
 	EthtoolBinary    string
+	ControlLockPath  string
 }
 
 func ValidateRuntimeOptions(o RuntimeOptions) error { return validateRuntimeOptions(o, runtime.GOOS) }
@@ -111,7 +112,7 @@ func PrepareApply(o RuntimeOptions, nodeID string) (*ApplyState, Applier, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	state, err := NewApplyState(o.StateDir)
+	state, err := NewApplyStateWithLock(o.StateDir, o.ControlLockPath)
 	if err != nil {
 		return nil, nil, err
 	}

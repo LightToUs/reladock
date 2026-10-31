@@ -11,13 +11,20 @@ import (
 	"time"
 )
 
-type fileLock struct{ path string }
+type fileLock struct {
+	path   string
+	create bool
+}
 
 func (l *fileLock) Lock(ctx context.Context) (func(), error) {
 	if e := ctx.Err(); e != nil {
 		return nil, e
 	}
-	f, e := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
+	flags := os.O_RDONLY | syscall.O_NOFOLLOW
+	if l.create {
+		flags = os.O_CREATE | os.O_RDWR | syscall.O_NOFOLLOW
+	}
+	f, e := os.OpenFile(l.path, flags, 0600)
 	if e != nil {
 		return nil, e
 	}

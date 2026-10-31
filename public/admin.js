@@ -5,7 +5,9 @@ const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], editingNode: null, certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '' };
 const titles = { overview: '平台总览', nodes: '入口节点', tenants: '企业客户', rules: '全局规则', deliveries: '配置交付', plans:'规则套餐',operations:'告警工单',costs:'成本与经营差额',audit: '操作审计' };
 const deliveries = { queued: '等待领取', leased: '领取处理中', applying: '应用中 · 等待确认', applied: '已应用 · 健康未知', validated: '校验通过 · 未应用', failed: '配置失败', superseded: '已被新版本替代' };
-const actions = { 'node.add': '新增节点', 'node.edit': '编辑节点', 'node.maintenance': '进入维护', 'node.enable': '恢复分配', 'node.enroll': '绑定 / 轮换证书', 'node.revoke-certificate': '撤销证书', 'config.retry': '重新交付', 'tenant.access': '修改企业登录状态', 'platform.admin-access': '修改平台权限', 'rule.pause': '暂停规则', 'rule.resume': '恢复规则', 'rule.delete': '删除规则' };
+const upgradeStates = { queued: '等待 Agent 领取', claimed: '已领取', installing: '正在安装', verifying: '正在验证', succeeded: '升级成功', 'rolled-back': '已自动回滚', failed: '升级失败', cancelled: '已取消' };
+const upgradeErrors = { 'download-unavailable': '发布包下载失败', 'archive-invalid': '发布包格式无效', 'checksum-mismatch': '发布包摘要不匹配', 'install-failed': '安装失败', 'service-failed': 'Agent 启动失败', 'health-timeout': '控制链路验证超时', 'rollback-failed': '回滚失败，需要人工处理', 'state-invalid': '升级状态不一致' };
+const actions = { 'node.add': '新增节点', 'node.edit': '编辑节点', 'node.maintenance': '进入维护', 'node.enable': '恢复分配', 'node.enroll': '绑定 / 轮换证书', 'node.revoke-certificate': '撤销证书', 'node.agent-upgrade-request': '创建 Agent 升级', 'node.agent-upgrade-cancel': '取消 Agent 升级', 'node.agent-upgrade-claimed': 'Agent 领取升级', 'node.agent-upgrade-installing': 'Agent 安装升级', 'node.agent-upgrade-verifying': 'Agent 验证升级', 'node.agent-upgrade-succeeded': 'Agent 升级成功', 'node.agent-upgrade-rolled-back': 'Agent 已自动回滚', 'node.agent-upgrade-failed': 'Agent 升级失败', 'config.retry': '重新交付', 'tenant.access': '修改企业登录状态', 'platform.admin-access': '修改平台权限', 'rule.pause': '暂停规则', 'rule.resume': '恢复规则', 'rule.delete': '删除规则' };
 const costNav = document.createElement('button'); costNav.dataset.view = 'costs'; costNav.textContent = '成本与经营差额'; document.querySelector('.admin-nav nav').append(costNav);
 const notificationNav = document.createElement('button'); notificationNav.dataset.view = 'notifications'; notificationNav.textContent = '通知交付'; document.querySelector('.admin-nav nav').append(notificationNav); titles.notifications = '通知交付';
 function access(mode) { if(mode!=='admin')bootstrapUI.clear(); $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
@@ -21,6 +23,27 @@ async function api(path, body, key) {
 function cell(row, value, detail) { const td = row.insertCell(); td.textContent = value; if (detail) { const span = document.createElement('span'); span.className = 'detail'; span.textContent = detail; td.append(span); } return td; }
 function empty(root, span, text) { if (!root.children.length) { const td = root.insertRow().insertCell(); td.colSpan = span; td.className = 'table-empty'; td.textContent = text; } }
 function button(label, task, danger = false) { const el = document.createElement('button'); el.type = 'button'; el.textContent = label; el.className = `secondary${danger ? ' danger' : ''}`; el.addEventListener('click', async () => { el.disabled = true; try { await task(); } catch (error) { message(error.message); } finally { el.disabled = false; } }); return el; }
+function upgradePresentation(node) {
+  const upgrade = node.upgrade; const current = node.agentVersion || '未报告';
+  const fixedTarget = node.upgradeTargetVersion || '未配置';
+  if (!upgrade) return { label: `当前版本 ${current}`, detail: `目标版本 ${fixedTarget} · 尚无升级记录` };
+  const target = upgrade.targetVersion || fixedTarget; const status = upgradeStates[upgrade.state] || '未知状态';
+  const error = upgrade.errorCode ? (upgradeErrors[upgrade.errorCode] || '未知错误，需要查看服务日志') : '';
+  const changed = upgrade.updatedAt ? new Date(upgrade.updatedAt).toLocaleString() : '时间未知';
+  return { label: `当前版本 ${current}`, detail: `目标版本 ${target} · ${status} · ${changed}${error ? ` · ${error}` : ''}` };
+}
+function appendUpgradeControls(controls, node) {
+  const active = ['queued', 'claimed', 'installing', 'verifying'].includes(node.upgrade?.state);
+  if (!active && node.upgradeEligible) controls.append(button('升级到当前固定版本', async () => {
+    if (!confirm(`升级“${node.name}”的 Agent？平台只使用已配置的固定版本；成功仅证明控制连接与配置轮询恢复，不代表实际转发健康。`)) return;
+    await mutate(`/api/admin/nodes/${node.id}/upgrade`, { revision: node.revision }, '升级任务已创建，等待节点领取。');
+  }));
+  if (['queued', 'claimed'].includes(node.upgrade?.state)) controls.append(button('取消升级', async () => {
+    if (!confirm(`取消“${node.name}”尚未开始安装的升级任务？`)) return;
+    await mutate(`/api/admin/nodes/${node.id}/upgrade-cancel`, { revision: node.revision }, '升级任务已取消。');
+  }));
+  if (['installing', 'verifying'].includes(node.upgrade?.state)) { const locked = button('升级中，操作已锁定', async () => {}); locked.disabled = true; controls.append(locked); }
+}
 function showView(view) { state.view = view; for (const pane of document.querySelectorAll('[data-pane]')) pane.hidden = pane.dataset.pane !== view; for (const nav of document.querySelectorAll('[data-view]')) nav.classList.toggle('selected', nav.dataset.view === view); $('#view-title').textContent = titles[view]; if (view === 'deliveries') loadDeliveries().catch(error => message(error.message)); if(view==='plans')loadPlans().catch(e=>message(e.message));if(view==='operations')operations.refresh().catch(e=>message(e.message)); }
 for (const nav of document.querySelectorAll('[data-view]')) nav.addEventListener('click', () => showView(nav.dataset.view));
 costNav.addEventListener('click', () => loadCosts().catch(error => message(error.message)));
@@ -50,12 +73,12 @@ async function mutate(path, body, success) {
 }
 function renderNodes(nodes) {
   const root = $('#admin-nodes'); root.replaceChildren();
-  for (const node of nodes) { const row = root.insertRow(); cell(row, node.name, node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`); cell(row, node.status === 'maintenance' ? '维护中' : '尚未部署'); const contact = agentContactPresentation(node.contactStatus); const agentDetail = `${contact.detail}${node.agentVersion ? `；${node.agentVersion} · ${node.agentMode || '模式未知'}` : ''}`; const contactCell = cell(row, contact.label, agentDetail); contactCell.classList.add('agent-status', `agent-status-${contact.tone}`); const configuration = configurationPresentation(node); cell(row, configuration.label, configuration.detail); cell(row, node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试耗尽 · 待处理' : deliveries[node.deliveryState] || '未知'); const probe = probePresentation(node); const probeCell = cell(row, probe.label, probe.detail); probeCell.classList.add('agent-status', `agent-status-${probe.tone}`); const certificate = certificatePresentation(node); const certificateCell = cell(row, certificate.label, certificate.detail); certificateCell.classList.add('agent-status', `agent-status-${certificate.tone}`); const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('编辑', () => editNode(node)), button(node.status === 'maintenance' ? '恢复分配' : '进入维护', () => mutate(`/api/admin/nodes/${node.id}/${node.status === 'maintenance' ? 'enable' : 'maintenance'}`, { revision: node.revision }, '节点分配状态已更新。')), button('证书', () => editCertificate(node)), button('重试交付', () => mutate(`/api/admin/nodes/${node.id}/retry`, { revision: node.revision }, '已生成最新完整快照，等待 Agent 领取。')), button('交付记录', () => { $('#delivery-node').value = node.id; showView('deliveries'); })); }
-  empty(root, 10, '暂无节点，请先登记入口资源。');
+  for (const node of nodes) { const row = root.insertRow(); cell(row, node.name, node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`); cell(row, node.status === 'maintenance' ? '维护中' : '尚未部署'); const contact = agentContactPresentation(node.contactStatus); const agentDetail = `${contact.detail}${node.agentMode ? `；${node.agentMode}` : ''}`; const contactCell = cell(row, contact.label, agentDetail); contactCell.classList.add('agent-status', `agent-status-${contact.tone}`); const upgrade = upgradePresentation(node); const upgradeCell = cell(row, upgrade.label, upgrade.detail); upgradeCell.classList.add('upgrade-status'); const configuration = configurationPresentation(node); cell(row, configuration.label, configuration.detail); cell(row, node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试耗尽 · 待处理' : deliveries[node.deliveryState] || '未知'); const probe = probePresentation(node); const probeCell = cell(row, probe.label, probe.detail); probeCell.classList.add('agent-status', `agent-status-${probe.tone}`); const certificate = certificatePresentation(node); const certificateCell = cell(row, certificate.label, certificate.detail); certificateCell.classList.add('agent-status', `agent-status-${certificate.tone}`); const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('编辑', () => editNode(node)), button(node.status === 'maintenance' ? '恢复分配' : '进入维护', () => mutate(`/api/admin/nodes/${node.id}/${node.status === 'maintenance' ? 'enable' : 'maintenance'}`, { revision: node.revision }, '节点分配状态已更新。')), button('证书', () => editCertificate(node)), button('重试交付', () => mutate(`/api/admin/nodes/${node.id}/retry`, { revision: node.revision }, '已生成最新完整快照，等待 Agent 领取。')), button('交付记录', () => { $('#delivery-node').value = node.id; showView('deliveries'); })); appendUpgradeControls(controls, node); }
+  empty(root, 11, '暂无节点，请先登记入口资源。');
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i]; const row = root.rows[i];
     row.cells[3].textContent = node.status === 'maintenance' ? '维护中' : node.appliedGeneration > 0 ? '已有应用确认 · 健康未知' : '尚未部署';
-    row.cells[9].append(button('安装 Agent',()=>bootstrapUI.open(node)));
+    row.cells[10].append(button('安装 Agent',()=>bootstrapUI.open(node)));
   }
 }
 function editNode(node) { state.editingNode = node; const form = $('#node-form'); for (const name of ['id', 'name', 'region', 'listenAddress', 'publicAddress', 'capacityMbps']) form.elements.namedItem(name).value = node[name]; form.elements.namedItem('id').readOnly = true; $('#node-form-title').textContent = `编辑节点 · ${node.name}`; $('#node-save').textContent = '保存节点修改'; $('#node-form-title').scrollIntoView({ behavior: 'smooth', block: 'start' }); }

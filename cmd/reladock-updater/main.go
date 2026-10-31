@@ -66,6 +66,17 @@ func readAgentEnvironment(path string) (map[string]string, error) {
 	return values, nil
 }
 
+func agentStateDir(values map[string]string) (string, error) {
+	dir := values["RELADOCK_STATE_DIR"]
+	if dir == "" {
+		dir = "/var/lib/reladock-agent"
+	}
+	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || dir == string(filepath.Separator) {
+		return "", errors.New("invalid Agent state directory")
+	}
+	return dir, nil
+}
+
 func execute(ctx context.Context) error {
 	values, err := readAgentEnvironment("/etc/reladock/agent.env")
 	if err != nil {
@@ -94,6 +105,10 @@ func execute(ctx context.Context) error {
 	if arch != "amd64" && arch != "arm64" {
 		return errors.New("unsupported updater architecture")
 	}
+	stateDir, err := agentStateDir(values)
+	if err != nil {
+		return err
+	}
 	stage := func(stageCtx context.Context, claim platform.UpgradeClaim) (updater.StagedBinaries, error) {
 		taskRoot := filepath.Join("/var/lib/reladock-updater/tasks", claim.ID)
 		if err := os.MkdirAll(taskRoot, 0700); err != nil {
@@ -105,9 +120,17 @@ func execute(ctx context.Context) error {
 		}
 		archive := filepath.Join(attempt, "release.tar.gz")
 		if err = updater.DownloadRelease(stageCtx, downloadClient, claim.TargetVersion, arch, archive); err != nil {
-			return updater.StagedBinaries{}, err
+			return updater.StagedBinaries{}, updater.NewStageError("download-unavailable", err)
 		}
-		return updater.VerifyArchive(archive, claim.SHA256, filepath.Join(attempt, "files"))
+		staged, verifyErr := updater.VerifyArchive(archive, claim.SHA256, filepath.Join(attempt, "files"))
+		if verifyErr != nil {
+			code := "archive-invalid"
+			if errors.Is(verifyErr, updater.ErrChecksumMismatch) {
+				code = "checksum-mismatch"
+			}
+			return updater.StagedBinaries{}, updater.NewStageError(code, verifyErr)
+		}
+		return staged, nil
 	}
-	return updater.Run(ctx, updater.Options{Store: store, Control: control, Host: &updater.LocalHost{}, CurrentVersion: buildinfo.Current(), Arch: arch, HealthTimeout: updater.DefaultHealthTimeout, Stage: stage})
+	return updater.Run(ctx, updater.Options{Store: store, Control: control, Host: &updater.LocalHost{ControlDir: filepath.Join(stateDir, "control")}, CurrentVersion: buildinfo.Current(), Arch: arch, HealthTimeout: updater.DefaultHealthTimeout, Stage: stage})
 }

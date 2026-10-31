@@ -1,6 +1,7 @@
 package web_test
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,26 @@ import (
 	"reladock/internal/web"
 	assets "reladock/public"
 )
+
+func TestAdminUpgradePresentationContract(t *testing.T) {
+	adminJS, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(adminJS) + string(page)
+	for _, required := range []string{
+		"升级到当前固定版本", "upgrade-cancel", "当前版本", "目标版本", "升级中，操作已锁定",
+		"rollback-failed", "回滚失败，需要人工处理", "控制连接与配置轮询恢复", "不代表实际转发健康",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("admin upgrade presentation missing %q", required)
+		}
+	}
+}
 
 func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")

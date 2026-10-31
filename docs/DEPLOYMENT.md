@@ -101,9 +101,9 @@ CA 必须仍有至少 31 天有效期。签发节点证书固定 ClientAuth、�
 
 ## Agent 受控升级与回滚
 
-新节点的一条命令安装会安装 root 运行的最小权限 updater，并启用带随机抖动的定时器；手动执行 `install-linux.sh agent` 只复制 updater 与服务模板，仍须审核后显式执行 `systemctl enable --now reladock-updater.timer`。updater 不跟随 latest：只有平台管理员针对兼容版本创建固定目标任务后才会下载对应 GitHub Release，并再次验证外层摘要、归档普通文件白名单与包内 SHA256SUMS。
+新节点的一条命令安装会安装 root 运行的最小权限 updater，并启用带随机抖动的定时器；手动执行 `install-linux.sh agent` 只复制 updater 与服务模板，仍须审核后显式执行 `systemctl enable --now reladock-updater.timer`。updater 不跟随 latest：只有平台管理员针对兼容版本创建固定目标任务后才会下载对应 GitHub Release，并再次验证外层摘要、归档普通文件白名单与包内 SHA256SUMS。若 apply 使用非默认 `RELADOCK_STATE_DIR`，该目录必须位于 updater systemd 沙箱可只读访问的位置；缺少读取权限时升级会在停止 Agent 前安全拒绝，不得通过放宽写权限解决。
 
-升级只替换 Agent/updater 二进制和固定服务模板，不开启 apply、不修改网络前置条件或业务规则。发布后必须同时观察新 Agent heartbeat 版本和同一任务的配置健康标记；两项未在期限内满足会恢复备份二进制并重启旧 Agent。回滚失败时任务保持人工介入状态，不得删除 updater 状态、Agent WAL、交付 journal 或 PKI 来强行重试。升级成功只证明 Agent 控制链路恢复，不代表 TCP/UDP 业务端到端健康或转发容量已验收。
+自动升级只替换 Agent 与 dataplane 二进制，不改 updater 自身或 systemd 模板；updater/模板更新必须通过新的受审发布包再次运行安装脚本。自动升级不开启 apply、不修改网络前置条件或业务规则。发布后必须同时观察新 Agent heartbeat 版本和同一任务的配置健康标记；两项未在期限内满足会恢复备份二进制并重启旧 Agent。回滚失败时任务保持人工介入状态，不得删除 updater 状态、Agent WAL、交付 journal 或 PKI 来强行重试。升级成功只证明 Agent 控制链路恢复，不代表 TCP/UDP 业务端到端健康或转发容量已验收。
 
 ## 失败与恢复
 

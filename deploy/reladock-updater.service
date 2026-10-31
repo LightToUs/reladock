@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+TimeoutStartSec=10min
 User=root
 Group=reladock
 EnvironmentFile=/etc/reladock/agent.env
@@ -21,5 +22,6 @@ StateDirectoryMode=0700
 RuntimeDirectory=reladock-updater
 RuntimeDirectoryMode=0750
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-CapabilityBoundingSet=
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
 LockPersonality=true

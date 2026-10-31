@@ -41,6 +41,9 @@ type ManagedNode struct {
 	ProbeStatus            string               `json:"probeStatus"`
 	ProbeObservedAt        *time.Time           `json:"probeObservedAt"`
 	Upgrade                *AgentUpgradeSummary `json:"upgrade"`
+	UpgradeTargetVersion   string               `json:"upgradeTargetVersion"`
+	UpgradeEligible        bool                 `json:"upgradeEligible"`
+	UpgradeBlockedReason   string               `json:"upgradeBlockedReason"`
 }
 
 func normalizeNode(input NodeInput) (NodeInput, error) {

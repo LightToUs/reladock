@@ -69,6 +69,10 @@ func TestAdminUpgradeAPIUsesOnlyPinnedServerTarget(t *testing.T) {
 	_, revision := prepareUpgradeNode(t, store, strings.Repeat("c", 64))
 	config := upgradeBootstrapConfig()
 	h, cookie := adminUpgradeHandler(t, store, &config)
+	listed := request(h, "GET", "/api/admin/nodes", "", cookie)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"upgradeTargetVersion":"v0.9.0"`) || !strings.Contains(listed.Body.String(), `"upgradeEligible":true`) {
+		t.Fatalf("upgrade eligibility missing: %d %s", listed.Code, listed.Body.String())
+	}
 
 	if rec := request(h, "POST", "/api/admin/nodes/hk-01/upgrade", `{"revision":2,"targetVersion":"v9.9.9"}`, cookie); rec.Code != http.StatusBadRequest {
 		t.Fatalf("client-selected target accepted: %d %s", rec.Code, rec.Body.String())

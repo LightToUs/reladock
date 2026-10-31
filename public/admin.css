@@ -2,3 +2,4 @@ a{color:#5eead4;text-decoration:none}a:hover{text-decoration:underline}.admin-na
 #bootstrap-panel textarea { width: 100%; box-sizing: border-box; font-family: monospace; }
 #bootstrap-panel pre { max-height: 26rem; overflow: auto; overflow-wrap: anywhere; }
 .agent-status{font-weight:700}.agent-status::before{content:'●';display:inline-block;margin-right:7px;font-size:11px}.agent-status-online{color:#5eead4}.agent-status-offline{color:#fca5a5}.agent-status-pending,.agent-status-unknown{color:#cbd5e1}
+.upgrade-status{min-width:220px;font-weight:650}.upgrade-status .detail{font-weight:400}

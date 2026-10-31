@@ -12,15 +12,21 @@ import (
 )
 
 type fakeUpgradeControl struct {
-	claim   *platform.UpgradeClaim
-	reports []platform.UpgradeReport
+	claim         *platform.UpgradeClaim
+	reports       []platform.UpgradeReport
+	reportErrors  map[string]error
+	claimCurrents []string
 }
 
-func (f *fakeUpgradeControl) Claim(context.Context, string, string) (*platform.UpgradeClaim, error) {
+func (f *fakeUpgradeControl) Claim(_ context.Context, _ string, current string) (*platform.UpgradeClaim, error) {
+	f.claimCurrents = append(f.claimCurrents, current)
 	return f.claim, nil
 }
 func (f *fakeUpgradeControl) Report(_ context.Context, report platform.UpgradeReport) error {
 	f.reports = append(f.reports, report)
+	if f.reportErrors != nil {
+		return f.reportErrors[report.State]
+	}
 	return nil
 }
 
@@ -39,6 +45,7 @@ type fakeUpgradeHost struct {
 	published  bool
 	restored   bool
 	projected  HealthRequest
+	stateDir   string
 }
 
 func (f *fakeUpgradeHost) ActiveUnits(context.Context) ([]string, error) { return f.units, nil }
@@ -50,10 +57,16 @@ func (f *fakeUpgradeHost) Start(context.Context, string) error {
 	}
 	return nil
 }
-func (f *fakeUpgradeHost) EnsureControlIdle(context.Context) error { return f.idleErr }
-func (f *fakeUpgradeHost) Backup(context.Context, string) (Backup, error) {
+func (f *fakeUpgradeHost) LockControlIdle(context.Context) (func(), error) {
+	if f.idleErr != nil {
+		return nil, f.idleErr
+	}
+	return func() {}, nil
+}
+func (f *fakeUpgradeHost) Backup(_ context.Context, taskID string) (Backup, error) {
 	f.backedUp = true
-	return Backup{Agent: "old-agent", Dataplane: "old-dataplane", AgentSHA256: strings.Repeat("1", 64), DataplaneSHA256: strings.Repeat("2", 64)}, nil
+	root := filepath.Join(f.stateDir, "tasks", taskID, "backup")
+	return Backup{Agent: filepath.Join(root, "reladock-agent"), Dataplane: filepath.Join(root, "reladock-dataplane"), AgentSHA256: strings.Repeat("1", 64), DataplaneSHA256: strings.Repeat("2", 64)}, nil
 }
 func (f *fakeUpgradeHost) Publish(context.Context, StagedBinaries) error {
 	f.published = true
@@ -82,8 +95,10 @@ func runOptions(t *testing.T, control *fakeUpgradeControl, host *fakeUpgradeHost
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Options{Store: store, Control: control, Host: host, CurrentVersion: "v0.8.0", Arch: "amd64", HealthTimeout: 20 * time.Millisecond, Stage: func(context.Context, platform.UpgradeClaim) (StagedBinaries, error) {
-		return StagedBinaries{Agent: "new-agent", Dataplane: "new-dataplane"}, nil
+	host.stateDir = store.dir
+	return Options{Store: store, Control: control, Host: host, CurrentVersion: "v0.8.0", Arch: "amd64", HealthTimeout: 20 * time.Millisecond, Stage: func(_ context.Context, claim platform.UpgradeClaim) (StagedBinaries, error) {
+		root := filepath.Join(store.dir, "tasks", claim.ID, "stage-fixture")
+		return StagedBinaries{Agent: filepath.Join(root, "reladock-agent"), Dataplane: filepath.Join(root, "reladock-dataplane")}, nil
 	}}
 }
 
@@ -129,10 +144,10 @@ func TestRunPublishesOnlyWhenControlIsIdleAndCompletesHealth(t *testing.T) {
 func TestRunRefusesPersistentApplicationAndRollsBackHealthFailure(t *testing.T) {
 	control := &fakeUpgradeControl{claim: testUpgradeClaim()}
 	host := &fakeUpgradeHost{units: []string{"reladock-agent-apply.service"}, idleErr: errors.New("delivery journal present")}
-	if err := Run(context.Background(), runOptions(t, control, host)); err == nil || host.published || host.started != 1 {
+	if err := Run(context.Background(), runOptions(t, control, host)); err == nil || host.published || host.started != 0 {
 		t.Fatalf("busy control changed binaries: %+v %v", host, err)
 	}
-	if len(control.reports) != 2 || control.reports[1].State != "failed" || control.reports[1].ErrorCode != "state-invalid" {
+	if len(control.reports) != 1 || control.reports[0].State != "failed" || control.reports[0].ErrorCode != "state-invalid" {
 		t.Fatalf("busy report: %+v", control.reports)
 	}
 
@@ -152,7 +167,8 @@ func TestRunRecoversPublishingCrashByRestoringBothBinaries(t *testing.T) {
 	control := &fakeUpgradeControl{claim: testUpgradeClaim()}
 	host := &fakeUpgradeHost{units: []string{"reladock-agent.service"}, restoreErr: errors.New("restore failed")}
 	options := runOptions(t, control, host)
-	state := &State{TaskID: control.claim.ID, LeaseToken: control.claim.LeaseToken, TargetVersion: "v0.9.0", PreviousVersion: "v0.8.0", Arch: "amd64", Unit: "reladock-agent.service", Phase: "publishing", Backup: Backup{Agent: "old-agent", Dataplane: "old-dataplane"}}
+	taskRoot := filepath.Join(options.Store.dir, "tasks", control.claim.ID)
+	state := &State{TaskID: control.claim.ID, LeaseToken: control.claim.LeaseToken, SHA256: strings.Repeat("a", 64), TargetVersion: "v0.9.0", PreviousVersion: "v0.8.0", Arch: "amd64", Unit: "reladock-agent.service", Phase: "publishing", Staged: StagedBinaries{Agent: filepath.Join(taskRoot, "stage", "reladock-agent"), Dataplane: filepath.Join(taskRoot, "stage", "reladock-dataplane")}, Backup: Backup{Agent: filepath.Join(taskRoot, "backup", "reladock-agent"), Dataplane: filepath.Join(taskRoot, "backup", "reladock-dataplane"), AgentSHA256: strings.Repeat("1", 64), DataplaneSHA256: strings.Repeat("2", 64)}}
 	if err := options.Store.Save(context.Background(), state); err != nil {
 		t.Fatal(err)
 	}
@@ -195,5 +211,112 @@ func TestRunMarksRollbackFailedWhenOldServiceCannotRestart(t *testing.T) {
 	state, err := options.Store.Load(context.Background())
 	if err != nil || state == nil || state.Phase != "rollback-failed" {
 		t.Fatalf("rollback failure state missing: %+v %v", state, err)
+	}
+}
+
+func TestRunResumesStoppingAndStartingCrashBoundaries(t *testing.T) {
+	for _, phase := range []string{"stopping", "starting"} {
+		t.Run(phase, func(t *testing.T) {
+			control := &fakeUpgradeControl{claim: testUpgradeClaim()}
+			host := &fakeUpgradeHost{units: []string{"reladock-agent.service"}, active: true}
+			options := runOptions(t, control, host)
+			taskRoot := filepath.Join(options.Store.dir, "tasks", control.claim.ID)
+			state := &State{TaskID: control.claim.ID, LeaseToken: control.claim.LeaseToken, TargetVersion: "v0.9.0", PreviousVersion: "v0.8.0", SHA256: strings.Repeat("a", 64), Arch: "amd64", Unit: "reladock-agent.service", Phase: phase, Staged: StagedBinaries{Agent: filepath.Join(taskRoot, "stage", "reladock-agent"), Dataplane: filepath.Join(taskRoot, "stage", "reladock-dataplane")}}
+			if phase == "starting" {
+				state.Backup = Backup{Agent: filepath.Join(taskRoot, "backup", "reladock-agent"), Dataplane: filepath.Join(taskRoot, "backup", "reladock-dataplane"), AgentSHA256: strings.Repeat("1", 64), DataplaneSHA256: strings.Repeat("2", 64)}
+				state.Health = HealthRequest{TaskID: state.TaskID, TargetVersion: state.TargetVersion, Challenge: strings.Repeat("c", 64)}
+			}
+			if err := options.Store.Save(context.Background(), state); err != nil {
+				t.Fatal(err)
+			}
+			if err := Run(context.Background(), options); err != nil {
+				t.Fatal(err)
+			}
+			if !host.active || host.started == 0 {
+				t.Fatalf("%s did not restore active service: %+v", phase, host)
+			}
+		})
+	}
+}
+
+func TestRunClearsCancelledClaimButRetainsUnacknowledgedFailure(t *testing.T) {
+	control := &fakeUpgradeControl{claim: testUpgradeClaim(), reportErrors: map[string]error{"installing": ErrReportRejected}}
+	host := &fakeUpgradeHost{units: []string{"reladock-agent.service"}}
+	options := runOptions(t, control, host)
+	if err := Run(context.Background(), options); err != nil || host.stopped {
+		t.Fatalf("cancelled claim changed host: %+v %v", host, err)
+	}
+	if state, _ := options.Store.Load(context.Background()); state != nil {
+		t.Fatalf("cancelled claim retained: %+v", state)
+	}
+
+	control = &fakeUpgradeControl{claim: testUpgradeClaim(), reportErrors: map[string]error{"failed": ErrReportRejected}}
+	host = &fakeUpgradeHost{units: []string{"reladock-agent.service"}, idleErr: errors.New("busy")}
+	options = runOptions(t, control, host)
+	if err := Run(context.Background(), options); err == nil {
+		t.Fatal("lock failure should remain observable")
+	}
+	if state, _ := options.Store.Load(context.Background()); state != nil {
+		t.Fatalf("rejected pre-mutation failure retained: %+v", state)
+	}
+
+	control = &fakeUpgradeControl{claim: testUpgradeClaim(), reportErrors: map[string]error{"failed": errors.New("control unavailable")}}
+	host = &fakeUpgradeHost{units: []string{"reladock-agent.service"}, idleErr: errors.New("busy")}
+	options = runOptions(t, control, host)
+	if err := Run(context.Background(), options); err == nil {
+		t.Fatal("unacknowledged failure accepted")
+	}
+	if state, _ := options.Store.Load(context.Background()); state == nil || state.Phase != "stopping" {
+		t.Fatalf("recovery state discarded: %+v", state)
+	}
+}
+
+func TestRunUsesPersistedAgentVersionForConsecutiveUpgrades(t *testing.T) {
+	control := &fakeUpgradeControl{claim: testUpgradeClaim()}
+	host := &fakeUpgradeHost{units: []string{"reladock-agent.service"}, active: true}
+	options := runOptions(t, control, host)
+	if err := Run(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	control.claim = &platform.UpgradeClaim{ID: "22222222-2222-4222-8222-222222222222", PreviousVersion: "v0.9.0", TargetVersion: "v0.10.0", SHA256: strings.Repeat("d", 64), LeaseToken: strings.Repeat("e", 64)}
+	host.stopped, host.backedUp, host.published, host.restored, host.started = false, false, false, false, 0
+	if err := Run(context.Background(), options); err != nil {
+		t.Fatal(err)
+	}
+	if len(control.claimCurrents) != 2 || control.claimCurrents[0] != "v0.8.0" || control.claimCurrents[1] != "v0.9.0" {
+		t.Fatalf("claim versions = %+v", control.claimCurrents)
+	}
+}
+
+func TestRunReportsBoundedStageIntegrityFailure(t *testing.T) {
+	control := &fakeUpgradeControl{claim: testUpgradeClaim()}
+	host := &fakeUpgradeHost{units: []string{"reladock-agent.service"}}
+	options := runOptions(t, control, host)
+	options.Stage = func(context.Context, platform.UpgradeClaim) (StagedBinaries, error) {
+		return StagedBinaries{}, NewStageError("checksum-mismatch", ErrChecksumMismatch)
+	}
+	if err := Run(context.Background(), options); err == nil {
+		t.Fatal("integrity failure accepted")
+	}
+	if len(control.reports) != 1 || control.reports[0].State != "failed" || control.reports[0].ErrorCode != "checksum-mismatch" {
+		t.Fatalf("stage report = %+v", control.reports)
+	}
+}
+
+func TestRunPreservesHealthRollbackReasonAcrossCrash(t *testing.T) {
+	control := &fakeUpgradeControl{claim: testUpgradeClaim()}
+	host := &fakeUpgradeHost{units: []string{"reladock-agent.service"}, active: true}
+	options := runOptions(t, control, host)
+	taskRoot := filepath.Join(options.Store.dir, "tasks", control.claim.ID)
+	state := &State{TaskID: control.claim.ID, LeaseToken: control.claim.LeaseToken, SHA256: strings.Repeat("a", 64), TargetVersion: "v0.9.0", PreviousVersion: "v0.8.0", Arch: "amd64", Unit: "reladock-agent.service", Phase: "restoring", RollbackCode: "health-timeout", RollbackWasVerifying: true, Staged: StagedBinaries{Agent: filepath.Join(taskRoot, "stage", "reladock-agent"), Dataplane: filepath.Join(taskRoot, "stage", "reladock-dataplane")}, Backup: Backup{Agent: filepath.Join(taskRoot, "backup", "reladock-agent"), Dataplane: filepath.Join(taskRoot, "backup", "reladock-dataplane"), AgentSHA256: strings.Repeat("1", 64), DataplaneSHA256: strings.Repeat("2", 64)}}
+	if err := options.Store.Save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run(context.Background(), options); err == nil {
+		t.Fatal("recovered rollback should retain original failure")
+	}
+	last := control.reports[len(control.reports)-1]
+	if last.State != "rolled-back" || last.ErrorCode != "health-timeout" {
+		t.Fatalf("rollback report = %+v", last)
 	}
 }

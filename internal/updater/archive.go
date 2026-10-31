@@ -19,6 +19,8 @@ const (
 	maxReleaseTotalBytes   = 256 << 20
 )
 
+var ErrChecksumMismatch = errors.New("release checksum mismatch")
+
 var releaseAllowlist = map[string]bool{
 	"DEPLOYMENT.md": true, "RELEASE.json": true, "SHA256SUMS": true,
 	"agent.env.example": true, "bootstrap-agent.sh": true, "control.env.example": true, "install-linux.sh": true,
@@ -64,7 +66,7 @@ func verifyOuterArchive(path, expected string) error {
 		return err
 	}
 	if hex.EncodeToString(hash.Sum(nil)) != expected {
-		return errors.New("release archive checksum mismatch")
+		return ErrChecksumMismatch
 	}
 	return nil
 }
@@ -82,11 +84,13 @@ func VerifyArchive(path, expectedSHA256, destination string) (StagedBinaries, er
 		return result, err
 	}
 	defer f.Close()
-	gz, err := gzip.NewReader(f)
+	compressed := bufio.NewReader(f)
+	gz, err := gzip.NewReader(compressed)
 	if err != nil {
 		return result, errors.New("invalid release compression")
 	}
 	defer gz.Close()
+	gz.Multistream(false)
 	reader := tar.NewReader(gz)
 	seen := make(map[string]bool, len(releaseAllowlist))
 	calculated := make(map[string]string, len(releaseAllowlist))
@@ -126,6 +130,21 @@ func VerifyArchive(path, expectedSHA256, destination string) (StagedBinaries, er
 		}
 		calculated[name] = hex.EncodeToString(hash.Sum(nil))
 	}
+	padding, readErr := io.ReadAll(io.LimitReader(gz, 1<<20))
+	if readErr != nil || len(padding) >= 1<<20 {
+		return result, errors.New("trailing release archive data")
+	}
+	for _, value := range padding {
+		if value != 0 {
+			return result, errors.New("trailing release archive data")
+		}
+	}
+	if err = gz.Close(); err != nil {
+		return result, errors.New("invalid release compression")
+	}
+	if _, err = compressed.Peek(1); !errors.Is(err, io.EOF) {
+		return result, errors.New("trailing release compression data")
+	}
 	if len(seen) != len(releaseAllowlist) {
 		return result, errors.New("incomplete release archive")
 	}
@@ -152,8 +171,11 @@ func verifyInnerChecksums(path string, calculated map[string]string) error {
 			return errors.New("invalid package checksums")
 		}
 		digest, name := line[:64], line[66:]
-		if name == "SHA256SUMS" || !releaseAllowlist[name] || seen[name] || !hexSHA256.MatchString(digest) || calculated[name] != digest {
-			return errors.New("package checksum mismatch")
+		if name == "SHA256SUMS" || !releaseAllowlist[name] || seen[name] || !hexSHA256.MatchString(digest) {
+			return errors.New("invalid package checksums")
+		}
+		if calculated[name] != digest {
+			return ErrChecksumMismatch
 		}
 		seen[name] = true
 	}

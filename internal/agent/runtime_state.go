@@ -35,6 +35,10 @@ type ApplyState struct {
 }
 
 func NewApplyState(root string) (*ApplyState, error) {
+	return NewApplyStateWithLock(root, "")
+}
+
+func NewApplyStateWithLock(root, lockPath string) (*ApplyState, error) {
 	if _, err := dataplane.NewFileStore(root); err != nil {
 		return nil, err
 	}
@@ -43,7 +47,14 @@ func NewApplyState(root string) (*ApplyState, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ApplyState{dir: dir, locker: store.Locker()}, nil
+	locker := store.Locker()
+	if lockPath != "" {
+		locker, err = dataplane.ExistingFileLocker(lockPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &ApplyState{dir: dir, locker: locker}, nil
 }
 func (s *ApplyState) Lock(ctx context.Context) (func(), error) { return s.locker.Lock(ctx) }
 func (s *ApplyState) load(ctx context.Context) (*applyRecord, error) {

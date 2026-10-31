@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -174,5 +175,60 @@ func TestVerifyArchiveRejectsUnsafeDestinationEntry(t *testing.T) {
 	}
 	if _, err := VerifyArchive(path, digest, destination); err == nil {
 		t.Fatal("pre-existing destination symlink accepted")
+	}
+}
+
+func TestVerifyArchiveRejectsTrailingGzipMember(t *testing.T) {
+	first, _ := writeArchive(t, validArchiveEntries())
+	second, _ := writeArchive(t, validArchiveEntries())
+	raw, _ := os.ReadFile(first)
+	extra, _ := os.ReadFile(second)
+	path := filepath.Join(t.TempDir(), "concatenated.tar.gz")
+	raw = append(raw, extra...)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	if _, err := VerifyArchive(path, hex.EncodeToString(sum[:]), filepath.Join(t.TempDir(), "staged")); err == nil {
+		t.Fatal("trailing gzip member accepted")
+	}
+}
+
+func TestVerifyArchiveAcceptsZeroTarRecordPadding(t *testing.T) {
+	original, _ := writeArchive(t, validArchiveEntries())
+	in, err := os.Open(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := gzip.NewReader(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarBytes, err := io.ReadAll(reader)
+	reader.Close()
+	in.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarBytes = append(tarBytes, make([]byte, 10*1024)...)
+	path := filepath.Join(t.TempDir(), "padded.tar.gz")
+	out, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := gzip.NewWriter(out)
+	if _, err = writer.Write(tarBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	sum := sha256.Sum256(raw)
+	if _, err = VerifyArchive(path, hex.EncodeToString(sum[:]), filepath.Join(t.TempDir(), "staged")); err != nil {
+		t.Fatalf("valid tar padding rejected: %v", err)
 	}
 }

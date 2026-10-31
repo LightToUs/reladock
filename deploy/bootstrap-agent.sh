@@ -50,7 +50,7 @@ fi
 printf '%s  %s\n' "$digest" "$temp/release.tar.gz" | sha256sum --check --status || fail 'Release checksum mismatch; nothing installed'
 # Archives contain only this allowlist of regular, flat, nonduplicate files.
 tar -tzf "$temp/release.tar.gz" > "$temp/names"
-awk 'BEGIN {ok=1} !/^(reladock|reladock-admin|reladock-agent|reladock-dataplane|reladock-updater|reladock\.service|reladock-agent\.service|reladock-agent-apply\.service|reladock-updater\.service|reladock-updater\.timer|control\.env\.example|agent\.env\.example|install-linux\.sh|bootstrap-agent\.sh|SHA256SUMS|RELEASE\.json|DEPLOYMENT\.md)$/ {ok=0} END {exit !ok}' "$temp/names" || fail 'Unsafe archive paths'
+awk 'BEGIN {ok=1} !/^(reladock|reladock-admin|reladock-agent|reladock-dataplane|reladock-updater|reladock\.service|reladock-agent\.service|reladock-agent-apply\.service|reladock-updater\.service|reladock-updater\.timer|control\.env\.example|agent\.env\.example|install-linux\.sh|bootstrap-agent\.sh|SHA256SUMS|RELEASE\.json|DEPLOYMENT\.md)$/ {ok=0} {count++} END {exit !ok || count!=17}' "$temp/names" || fail 'Incomplete or unsafe archive paths'
 [ -z "$(sort "$temp/names" | uniq -d)" ] || fail 'Duplicate archive entries'
 tar -tvzf "$temp/release.tar.gz" | awk 'substr($0,1,1)!="-" {bad=1} END {exit bad}' || fail 'Archive contains non-regular entries'
 mkdir "$temp/release"
@@ -60,6 +60,9 @@ tar -xzf "$temp/release.tar.gz" -C "$temp/release"
 install -d -o root -g root -m 0755 /opt/reladock
 if ! id reladock >/dev/null 2>&1; then useradd --system --user-group --home-dir /var/lib/reladock --shell /usr/sbin/nologin reladock; fi
 install -d -o root -g reladock -m 0750 /etc/reladock
+install -d -o reladock -g reladock -m 0700 /var/lib/reladock-agent/control
+install -d -o root -g reladock -m 0750 /var/lib/reladock-locks
+install -o root -g reladock -m 0640 /dev/null /var/lib/reladock-locks/control.lock
 install -o root -g root -m 0755 "$temp/release/reladock-agent" /opt/reladock/reladock-agent
 install -o root -g root -m 0755 "$temp/release/reladock-dataplane" /opt/reladock/reladock-dataplane
 install -o root -g root -m 0755 "$temp/release/reladock-updater" /opt/reladock/reladock-updater

@@ -26,12 +26,13 @@ type HealthMarker struct {
 }
 
 type LocalHost struct {
-	InstallDir string
-	StateDir   string
-	ControlDir string
-	RequestDir string
-	HealthDir  string
-	Command    func(context.Context, string, ...string) ([]byte, error)
+	InstallDir  string
+	StateDir    string
+	ControlDir  string
+	ControlLock string
+	RequestDir  string
+	HealthDir   string
+	Command     func(context.Context, string, ...string) ([]byte, error)
 }
 
 func (h *LocalHost) defaults() {
@@ -43,6 +44,9 @@ func (h *LocalHost) defaults() {
 	}
 	if h.ControlDir == "" {
 		h.ControlDir = "/var/lib/reladock-agent/control"
+	}
+	if h.ControlLock == "" {
+		h.ControlLock = "/var/lib/reladock-locks/control.lock"
 	}
 	if h.RequestDir == "" {
 		h.RequestDir = "/run/reladock-updater"
@@ -97,23 +101,28 @@ func (h *LocalHost) ServiceActive(ctx context.Context, unit string) bool {
 	return err == nil
 }
 
-func (h *LocalHost) EnsureControlIdle(ctx context.Context) error {
+func (h *LocalHost) LockControlIdle(ctx context.Context) (func(), error) {
 	h.defaults()
-	store, err := dataplane.NewFileStore(h.ControlDir)
-	if err != nil {
-		return err
+	info, err := os.Lstat(h.ControlDir)
+	if err != nil || !info.IsDir() || !filepath.IsAbs(h.ControlDir) {
+		return nil, errors.New("unsafe Agent control directory")
 	}
-	unlock, err := store.Locker().Lock(ctx)
+	locker, err := dataplane.ExistingFileLocker(h.ControlLock)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer unlock()
+	unlock, err := locker.Lock(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if _, err = os.Lstat(filepath.Join(h.ControlDir, "delivery.json")); err == nil {
-		return errors.New("persistent delivery journal present")
+		unlock()
+		return nil, errors.New("persistent delivery journal present")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		unlock()
+		return nil, err
 	}
-	return nil
+	return unlock, nil
 }
 
 func fileSHA256(path string) (string, error) {
