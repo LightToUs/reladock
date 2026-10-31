@@ -25,12 +25,19 @@ type NodeInput struct {
 }
 type ManagedNode struct {
 	Node
-	ListenAddress          string `json:"listenAddress"`
-	PublicAddress          string `json:"publicAddress"`
-	CapacityMbps           int    `json:"capacityMbps"`
-	Revision               int64  `json:"revision"`
-	CertificateFingerprint string `json:"certificateFingerprint"`
-	ContactStatus          string `json:"contactStatus"`
+	ListenAddress          string     `json:"listenAddress"`
+	PublicAddress          string     `json:"publicAddress"`
+	CapacityMbps           int        `json:"capacityMbps"`
+	Revision               int64      `json:"revision"`
+	CertificateFingerprint string     `json:"certificateFingerprint"`
+	ContactStatus          string     `json:"contactStatus"`
+	AgentMode              string     `json:"agentMode"`
+	AgentStartedAt         *time.Time `json:"agentStartedAt"`
+	HeartbeatAt            *time.Time `json:"heartbeatAt"`
+	CertificateNotAfter    *time.Time `json:"certificateNotAfter"`
+	RotationState          string     `json:"rotationState"`
+	RotationErrorCode      string     `json:"rotationErrorCode"`
+	RotationErrorSince     *time.Time `json:"rotationErrorSince"`
 }
 
 func normalizeNode(input NodeInput) (NodeInput, error) {
@@ -55,7 +62,7 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `SELECT n.id,n.name,n.region,n.status,n.desired_generation,n.validated_generation,n.last_seen_at,n.agent_version,COALESCE(o.state,'queued'),COALESCE(o.attempts,0),host(n.listen_address),COALESCE(host(n.public_address),''),n.capacity_mbps,n.revision,COALESCE(n.certificate_fingerprint,''),n.applied_generation,CASE WHEN n.last_seen_at IS NULL THEN 'never-seen' WHEN n.last_seen_at<clock_timestamp()-$1*interval '1 second' THEN 'offline' ELSE 'online' END FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation ORDER BY n.id`, DefaultContactStaleAfter.Seconds())
+	rows, err := tx.Query(ctx, `SELECT n.id,n.name,n.region,n.status,n.desired_generation,n.validated_generation,n.last_seen_at,n.agent_version,COALESCE(o.state,'queued'),COALESCE(o.attempts,0),host(n.listen_address),COALESCE(host(n.public_address),''),n.capacity_mbps,n.revision,COALESCE(n.certificate_fingerprint,''),n.applied_generation,CASE WHEN n.agent_heartbeat_at IS NULL THEN 'never-seen' WHEN n.agent_heartbeat_at<clock_timestamp()-$1*interval '1 second' THEN 'offline' ELSE 'online' END,n.agent_mode,n.agent_started_at,n.agent_heartbeat_at,n.agent_certificate_not_after,n.agent_rotation_state,n.agent_rotation_error_code,n.agent_rotation_error_since FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation ORDER BY n.id`, AgentHeartbeatStaleAfter.Seconds())
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +70,7 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 	items := []ManagedNode{}
 	for rows.Next() {
 		var n ManagedNode
-		if err = rows.Scan(&n.ID, &n.Name, &n.Region, &n.Status, &n.DesiredGeneration, &n.ValidatedGeneration, &n.LastSeenAt, &n.AgentVersion, &n.DeliveryState, &n.DeliveryAttempts, &n.ListenAddress, &n.PublicAddress, &n.CapacityMbps, &n.Revision, &n.CertificateFingerprint, &n.AppliedGeneration, &n.ContactStatus); err != nil {
+		if err = rows.Scan(&n.ID, &n.Name, &n.Region, &n.Status, &n.DesiredGeneration, &n.ValidatedGeneration, &n.LastSeenAt, &n.AgentVersion, &n.DeliveryState, &n.DeliveryAttempts, &n.ListenAddress, &n.PublicAddress, &n.CapacityMbps, &n.Revision, &n.CertificateFingerprint, &n.AppliedGeneration, &n.ContactStatus, &n.AgentMode, &n.AgentStartedAt, &n.HeartbeatAt, &n.CertificateNotAfter, &n.RotationState, &n.RotationErrorCode, &n.RotationErrorSince); err != nil {
 			return nil, err
 		}
 		items = append(items, n)

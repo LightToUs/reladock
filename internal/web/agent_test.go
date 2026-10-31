@@ -2,11 +2,14 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"reladock/internal/agent"
 	"reladock/internal/nodeauth"
@@ -67,6 +70,10 @@ func TestMTLSAgentEnrollmentValidationAndRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := agent.Client{HTTP: client, BaseURL: srv.URL, NodeID: "hk-01"}
+	heartbeat := platform.AgentHeartbeat{Version: "validation-only/0.8.0", Mode: "validation", StartedAt: time.Now().Add(-time.Minute), CertificateNotAfter: cert.NotAfter, RotationState: "idle"}
+	if err = runner.ReportHeartbeat(ctx, heartbeat); err != nil {
+		t.Fatalf("agent heartbeat: %v", err)
+	}
 	done, err := runner.Once(ctx)
 	if err != nil || !done {
 		t.Fatalf("agent validation: %v", err)
@@ -85,5 +92,47 @@ func TestMTLSAgentEnrollmentValidationAndRotation(t *testing.T) {
 	}
 	if _, err = runner.Once(ctx); err == nil {
 		t.Fatal("revoked certificate still authorized")
+	}
+}
+
+func TestAgentHeartbeatRequiresPostAndStrictJSON(t *testing.T) {
+	store := testWebStore(t)
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "pki")
+	if err := nodeauth.CreateLocalBundle(dir, "hk-01"); err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := nodeauth.ReadCertificate(filepath.Join(dir, "agent.crt"))
+	if err := store.EnrollNode(ctx, "hk-01", nodeauth.Fingerprint(cert)); err != nil {
+		t.Fatal(err)
+	}
+	serverTLS, _ := nodeauth.ServerTLS(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key"))
+	srv := httptest.NewUnstartedServer(NewAgent(store))
+	srv.TLS = serverTLS
+	srv.StartTLS()
+	defer srv.Close()
+	clientTLS, _ := nodeauth.ClientTLS(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "agent.crt"), filepath.Join(dir, "agent.key"))
+	transport := &http.Transport{TLSClientConfig: clientTLS}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+	request, _ := http.NewRequest(http.MethodGet, srv.URL+"/agent/heartbeat", nil)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET heartbeat status=%d", response.StatusCode)
+	}
+	body, _ := json.Marshal(map[string]any{"version": "validation-only/0.8.0", "mode": "validation", "startedAt": time.Now().Add(-time.Minute), "certificateNotAfter": cert.NotAfter, "rotationState": "idle", "rotationErrorCode": "", "unknown": true})
+	request, _ = http.NewRequest(http.MethodPost, srv.URL+"/agent/heartbeat", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	response, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown heartbeat field status=%d", response.StatusCode)
 	}
 }

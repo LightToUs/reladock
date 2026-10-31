@@ -241,9 +241,9 @@ func TestAdminNodesExposeAgentContactStatus(t *testing.T) {
 		update string
 		want   string
 	}{
-		{"never connected", "UPDATE nodes SET last_seen_at=NULL WHERE id='hk-01'", "never-seen"},
-		{"online", "UPDATE nodes SET last_seen_at=clock_timestamp()-interval '4 minutes 59 seconds' WHERE id='hk-01'", "online"},
-		{"offline", "UPDATE nodes SET last_seen_at=clock_timestamp()-interval '5 minutes 1 second' WHERE id='hk-01'", "offline"},
+		{"never connected", "UPDATE nodes SET agent_heartbeat_at=NULL WHERE id='hk-01'", "never-seen"},
+		{"online", "UPDATE nodes SET agent_heartbeat_at=clock_timestamp()-interval '89 seconds' WHERE id='hk-01'", "online"},
+		{"offline", "UPDATE nodes SET agent_heartbeat_at=clock_timestamp()-interval '91 seconds' WHERE id='hk-01'", "offline"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := s.pool.Exec(ctx, tc.update); err != nil {

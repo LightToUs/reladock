@@ -56,6 +56,24 @@ func NewAgent(store *platform.Store) http.Handler {
 			respond(w, 405, map[string]string{"error": "POST required"})
 			return
 		}
+		if r.URL.Path == "/agent/heartbeat" {
+			var heartbeat platform.AgentHeartbeat
+			if !decode(w, r, &heartbeat) {
+				return
+			}
+			// Certificate expiry is observed from the verified TLS peer rather than
+			// accepted as an Agent claim.
+			if !heartbeat.CertificateNotAfter.Equal(cert.NotAfter) {
+				failure(w, platform.ErrInvalid)
+				return
+			}
+			if err = store.ReportAgentHeartbeat(ctx, id, fingerprint, heartbeat); err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, 200, map[string]bool{"ok": true})
+			return
+		}
 		if r.URL.Path == "/agent/config/claim" {
 			job, err := store.ClaimConfig(ctx, id, r.Header.Get("X-RelaDock-Agent-Version"), fingerprint)
 			if err != nil {
