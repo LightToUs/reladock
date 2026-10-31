@@ -36,3 +36,33 @@ func TestBootstrapConfigRejectsPartialAndUnsafeOrigins(t *testing.T) {
 		t.Fatal("unsafe release accepted")
 	}
 }
+
+func TestNodeSignerAndReleaseConfigurationAreIndependent(t *testing.T) {
+	base := map[string]string{
+		"NODE_BOOTSTRAP_CA_CERT":  "/issuer.crt",
+		"NODE_BOOTSTRAP_CA_KEY":   "/issuer.key",
+		"NODE_BOOTSTRAP_CA_CHAIN": "/chain.crt",
+	}
+	c, err := Load(func(k string) string { return base[k] })
+	if err != nil || !c.Bootstrap.SignerEnabled() || c.Bootstrap.Enabled() {
+		t.Fatalf("signer-only config: %+v %v", c.Bootstrap, err)
+	}
+	base["AGENT_PUBLIC_ORIGIN"] = "https://agent.example.com:9443"
+	base["NODE_RELEASE_VERSION"] = "v0.8.0"
+	base["NODE_RELEASE_AMD64_SHA256"] = strings.Repeat("a", 64)
+	base["NODE_RELEASE_ARM64_SHA256"] = strings.Repeat("b", 64)
+	base["AGENT_TLS_DIR"] = "/agent-tls"
+	base["PUBLIC_ORIGIN"] = "https://console.example.com"
+	base["TLS_CERT_FILE"] = "/tls.crt"
+	base["TLS_KEY_FILE"] = "/tls.key"
+	c, err = Load(func(k string) string { return base[k] })
+	if err != nil || !c.Bootstrap.SignerEnabled() || !c.Bootstrap.Enabled() {
+		t.Fatalf("full bootstrap config: %+v %v", c.Bootstrap, err)
+	}
+	delete(base, "NODE_BOOTSTRAP_CA_CERT")
+	delete(base, "NODE_BOOTSTRAP_CA_KEY")
+	delete(base, "NODE_BOOTSTRAP_CA_CHAIN")
+	if _, err = Load(func(k string) string { return base[k] }); err == nil {
+		t.Fatal("release bootstrap accepted without signer")
+	}
+}

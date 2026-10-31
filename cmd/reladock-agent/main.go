@@ -7,12 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"reladock/internal/agent"
-	"reladock/internal/nodeauth"
+	"reladock/internal/platform"
 )
 
 func main() {
@@ -62,11 +61,16 @@ func main() {
 	if engine != nil {
 		defer engine.Close()
 	}
-	config, err := nodeauth.ClientTLS(filepath.Join(*dir, "ca.crt"), filepath.Join(*dir, "agent.crt"), filepath.Join(*dir, "agent.key"))
+	credentials, err := agent.OpenCredentialManager(*dir, *nodeID)
+	if err != nil {
+		log.Fatal("private node credentials unavailable")
+	}
+	config, err := credentials.TLSConfig()
 	if err != nil {
 		log.Fatal("client TLS configuration unavailable")
 	}
 	transport := &http.Transport{TLSClientConfig: config}
+	credentials.RegisterTransport(transport)
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	runner := agent.Client{HTTP: client, BaseURL: *endpoint, NodeID: *nodeID, State: state, Applier: applier}
@@ -97,12 +101,19 @@ func main() {
 		}
 		return
 	}
-	activities := []agent.Activity{{Name: "preflight", Interval: time.Minute, Run: func(parent context.Context) error {
+	startedAt := time.Now().UTC()
+	mode := "validation"
+	version := "validation-only/0.8.0"
+	if *apply {
+		mode = "apply"
+		version = "apply-opt-in/0.8.0"
+	}
+	hooks := agent.RuntimeHooks{Preflight: func(parent context.Context) error {
 		// Contact and inspection are distinct from configuration/application health.
 		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
 		defer cancel()
 		return runner.ReportPreflight(activityCtx)
-	}}, {Name: "configuration", Interval: 5 * time.Second, Run: func(parent context.Context) error {
+	}, Configuration: func(parent context.Context) error {
 		done, err := runner.Once(parent)
 		if err == nil && done {
 			if *apply {
@@ -112,13 +123,27 @@ func main() {
 			}
 		}
 		return err
-	}}}
+	}, Heartbeat: func(parent context.Context) error {
+		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
+		defer cancel()
+		current := credentials.Current()
+		rotationState, rotationError := credentials.RotationStatus()
+		return runner.ReportHeartbeat(activityCtx, platform.AgentHeartbeat{Version: version, Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError})
+	}, Renewal: func(parent context.Context) error {
+		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
+		defer cancel()
+		return credentials.ReconcileRotation(activityCtx, &runner, time.Now().UTC())
+	}}
 	if engine != nil {
-		activities = append(activities, agent.Activity{Name: "metering", Interval: 5 * time.Second, Run: func(parent context.Context) error {
+		hooks.Metering = func(parent context.Context) error {
 			activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
 			defer cancel()
 			return engine.Tick(activityCtx, &runner)
-		}})
+		}
+	}
+	activities, err := agent.RuntimeActivities(hooks)
+	if err != nil {
+		log.Fatal(err)
 	}
 	if err := agent.RunSupervisor(ctx, activities, func(name string, err error) {
 		if name == "preflight" {

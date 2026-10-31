@@ -16,6 +16,30 @@ type Activity struct {
 	backoff  *Backoff
 }
 
+type RuntimeHooks struct {
+	Configuration func(context.Context) error
+	Heartbeat     func(context.Context) error
+	Preflight     func(context.Context) error
+	Metering      func(context.Context) error
+	Renewal       func(context.Context) error
+}
+
+func RuntimeActivities(hooks RuntimeHooks) ([]Activity, error) {
+	if hooks.Configuration == nil || hooks.Heartbeat == nil || hooks.Preflight == nil || hooks.Renewal == nil {
+		return nil, errors.New("missing required Agent runtime activity")
+	}
+	activities := []Activity{
+		{Name: "configuration", Interval: 5 * time.Second, Run: hooks.Configuration},
+		{Name: "heartbeat", Interval: 30 * time.Second, Run: hooks.Heartbeat},
+		{Name: "preflight", Interval: time.Minute, Run: hooks.Preflight},
+		{Name: "renewal", Interval: time.Hour, Run: hooks.Renewal},
+	}
+	if hooks.Metering != nil {
+		activities = append(activities, Activity{Name: "metering", Interval: 5 * time.Second, Run: hooks.Metering})
+	}
+	return activities, nil
+}
+
 func fullJitter(limit time.Duration) time.Duration {
 	if limit <= 0 {
 		return 0

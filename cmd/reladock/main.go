@@ -50,13 +50,17 @@ func main() {
 	if os.Getenv("DATABASE_URL") == "" {
 		log.Fatal("DATABASE_URL is required")
 	}
-	var bootstrap *web.BootstrapOptions
-	if cfg.Bootstrap.Enabled() {
+	var nodeSigner *nodeauth.BootstrapCA
+	if cfg.Bootstrap.SignerEnabled() {
 		signer, e := nodeauth.LoadBootstrapSigner(cfg.Bootstrap.CACert, cfg.Bootstrap.CAKey, cfg.Bootstrap.CAChain)
 		if e != nil {
 			log.Fatal("invalid node bootstrap signing CA")
 		}
-		bootstrap = &web.BootstrapOptions{Config: cfg.Bootstrap, Signer: signer}
+		nodeSigner = signer
+	}
+	var bootstrap *web.BootstrapOptions
+	if cfg.Bootstrap.Enabled() {
+		bootstrap = &web.BootstrapOptions{Config: cfg.Bootstrap, Signer: nodeSigner}
 	}
 	if *checkOnly {
 		log.Print("Runtime configuration and TLS files validated; no database connection or listener opened")
@@ -129,7 +133,11 @@ func main() {
 		if e != nil {
 			log.Fatal("Agent server TLS configuration invalid")
 		}
-		servers = append(servers, &http.Server{Addr: cfg.AgentAddress, Handler: web.NewAgent(store, nil), TLSConfig: tlsConfig, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024})
+		var renewalSigner platform.BootstrapSigner
+		if nodeSigner != nil {
+			renewalSigner = nodeSigner.Sign
+		}
+		servers = append(servers, &http.Server{Addr: cfg.AgentAddress, Handler: web.NewAgent(store, renewalSigner), TLSConfig: tlsConfig, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024})
 	}
 	failures := make(chan error, len(servers))
 	for i, srv := range servers {

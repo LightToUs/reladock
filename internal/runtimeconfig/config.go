@@ -95,6 +95,9 @@ func Load(get func(string) string) (Config, error) {
 		return c, err
 	}
 	c.Bootstrap = bootstrap
+	if c.Production && c.AgentTLSDir != "" && !c.Bootstrap.SignerEnabled() {
+		return c, errors.New("production Agent listener requires node renewal signer")
+	}
 	return c, nil
 }
 

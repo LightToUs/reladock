@@ -67,3 +67,32 @@ func TestPublicBindingAlwaysNeedsTLS(t *testing.T) {
 		}
 	}
 }
+
+func TestProductionAgentListenerRequiresNodeSigner(t *testing.T) {
+	base := map[string]string{
+		"APP_ENV":              "production",
+		"PUBLIC_ORIGIN":        "https://console.example.com",
+		"TLS_CERT_FILE":        "/tls.crt",
+		"TLS_KEY_FILE":         "/tls.key",
+		"LISTEN_ADDRESS":       "0.0.0.0:8443",
+		"AGENT_TLS_DIR":        "/agent-tls",
+		"AGENT_LISTEN_ADDRESS": "0.0.0.0:9443",
+	}
+	if _, err := Load(func(k string) string { return base[k] }); err == nil {
+		t.Fatal("production Agent listener accepted without renewal signer")
+	}
+	base["NODE_BOOTSTRAP_CA_CERT"] = "/issuer.crt"
+	base["NODE_BOOTSTRAP_CA_KEY"] = "/issuer.key"
+	base["NODE_BOOTSTRAP_CA_CHAIN"] = "/chain.crt"
+	if _, err := Load(func(k string) string { return base[k] }); err != nil {
+		t.Fatalf("production signer-only renewal rejected: %v", err)
+	}
+}
+
+func TestDevelopmentAgentListenerMayRunWithoutRenewalSigner(t *testing.T) {
+	values := map[string]string{"AGENT_TLS_DIR": "/agent-tls"}
+	c, err := Load(func(k string) string { return values[k] })
+	if err != nil || c.Bootstrap.SignerEnabled() {
+		t.Fatalf("development mTLS-only config: %+v %v", c, err)
+	}
+}

@@ -117,3 +117,67 @@ func TestRunSupervisorRejectsInvalidActivity(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeActivitiesRegisterIndependentControlWork(t *testing.T) {
+	seen := map[string]int{}
+	var mu sync.Mutex
+	hook := func(name string) func(context.Context) error {
+		return func(context.Context) error {
+			mu.Lock()
+			seen[name]++
+			mu.Unlock()
+			if name == "heartbeat" || name == "renewal" {
+				return errors.New("temporary control failure")
+			}
+			return nil
+		}
+	}
+	activities, err := RuntimeActivities(RuntimeHooks{
+		Configuration: hook("configuration"),
+		Heartbeat:     hook("heartbeat"),
+		Preflight:     hook("preflight"),
+		Metering:      hook("metering"),
+		Renewal:       hook("renewal"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activities) != 5 {
+		t.Fatalf("activities=%d want=5", len(activities))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- RunSupervisor(ctx, activities, nil) }()
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		complete := len(seen) == 5
+		mu.Unlock()
+		if complete {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, name := range []string{"configuration", "heartbeat", "preflight", "metering", "renewal"} {
+		if seen[name] == 0 {
+			t.Fatalf("activity %q never ran after other activity failures: %+v", name, seen)
+		}
+	}
+}
+
+func TestRuntimeActivitiesRequireCoreHooksAndAllowValidationMode(t *testing.T) {
+	run := func(context.Context) error { return nil }
+	if _, err := RuntimeActivities(RuntimeHooks{}); err == nil {
+		t.Fatal("missing core hooks accepted")
+	}
+	activities, err := RuntimeActivities(RuntimeHooks{Configuration: run, Heartbeat: run, Preflight: run, Renewal: run})
+	if err != nil || len(activities) != 4 {
+		t.Fatalf("validation activities=%d err=%v", len(activities), err)
+	}
+}
