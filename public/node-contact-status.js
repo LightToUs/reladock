@@ -37,3 +37,21 @@ export function probePresentation(node) {
     default: return { label: '未有当前探测', tone: 'unknown', detail: '没有与当前应用版本匹配的探测事实' };
   }
 }
+
+export function resourcePresentation(node) {
+  const values = [];
+  for (const [label, value] of [['CPU', node.cpuPercent], ['内存', node.memoryPercent], ['磁盘', node.diskPercent], ['连接跟踪', node.conntrackPercent]]) {
+    if (Number.isInteger(value)) values.push(`${label} ${value}%`);
+  }
+  if (Number.isInteger(node.clockSkewSeconds)) values.push(`时钟偏差 ${node.clockSkewSeconds} 秒`);
+  const observed = node.resourceObservedAt ? `；接收于 ${new Date(node.resourceObservedAt).toLocaleString()}` : '';
+  const facts = values.length ? values.join(' / ') : '可用资源计数不足';
+  const suffix = `；${facts}${observed}；不代表端到端健康`;
+  switch (node.resourceStatus) {
+    case 'normal': return { label: '资源正常', tone: 'online', detail: `最新固定阈值内${suffix}` };
+    case 'pressure': return { label: '资源压力', tone: 'pending', detail: `至少一项达到告警阈值${suffix}` };
+    case 'drifted': return { label: '转发配置漂移', tone: 'offline', detail: `本地只读校验与持久配置不一致${suffix}` };
+    case 'stale': return { label: '资源遥测过期', tone: 'unknown', detail: `最近 90 秒没有新资源样本${suffix}` };
+    default: return { label: '资源状态未知', tone: 'unknown', detail: `尚无足够的当前资源事实${suffix}` };
+  }
+}

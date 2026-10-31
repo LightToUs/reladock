@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { agentContactPresentation, certificatePresentation, configurationPresentation, probePresentation } from '../public/node-contact-status.js';
+import { agentContactPresentation, certificatePresentation, configurationPresentation, probePresentation, resourcePresentation } from '../public/node-contact-status.js';
 
 test('agent contact status has distinct operator-facing states', () => {
   assert.deepEqual(agentContactPresentation('online'), { label: '在线', tone: 'online', detail: '最近 90 秒收到心跳；不代表转发健康' });
@@ -34,4 +34,16 @@ test('probe status is reachability metadata, never end-to-end health', () => {
   assert.equal(probePresentation({ probeStatus: 'targetUnreachable' }).label, '目标 TCP 不可达');
   assert.equal(probePresentation({ probeStatus: 'udpUnknown' }).label, 'UDP 健康未知');
   assert.equal(probePresentation({ probeStatus: 'unknown' }).label, '未有当前探测');
+});
+
+test('resource status distinguishes pressure, drift and stale evidence without claiming path health', () => {
+  const normal = resourcePresentation({ resourceStatus: 'normal', cpuPercent: 20, memoryPercent: 30, diskPercent: 40, conntrackPercent: 10, clockSkewSeconds: 2, dataplaneState: 'in-sync', resourceObservedAt: '2026-10-31T00:00:00Z' });
+  assert.equal(normal.label, '资源正常');
+  assert.equal(normal.tone, 'online');
+  assert.match(normal.detail, /CPU 20%/);
+  assert.match(normal.detail, /不代表端到端健康/);
+  assert.equal(resourcePresentation({ resourceStatus: 'pressure', cpuPercent: 95 }).label, '资源压力');
+  assert.equal(resourcePresentation({ resourceStatus: 'drifted', dataplaneState: 'drifted' }).label, '转发配置漂移');
+  assert.equal(resourcePresentation({ resourceStatus: 'stale' }).label, '资源遥测过期');
+  assert.equal(resourcePresentation({ resourceStatus: 'unexpected' }).label, '资源状态未知');
 });

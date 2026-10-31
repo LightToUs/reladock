@@ -31,6 +31,7 @@ func (m metricCounts) add(label string, count int64) error {
 type OperationalMetrics struct {
 	Nodes               map[string]int64
 	AgentContacts       map[string]int64
+	NodeResources       map[string]int64
 	Rules               map[string]int64
 	CurrentDeliveries   map[string]int64
 	OpenIncidents       map[string]int64
@@ -66,9 +67,10 @@ func (s *Store) OperationalMetrics(ctx context.Context, staleAfter time.Duration
 	}
 	nodes := newMetricCounts([]string{"unprovisioned", "ready", "maintenance", "draining", "retired"})
 	contacts := newMetricCounts([]string{"unenrolled", "never-seen", "recent", "stale"})
+	resources := newMetricCounts([]string{"normal", "pressure", "drifted", "unknown", "stale"})
 	rules := newMetricCounts([]string{"pending-agent", "paused", "deleted"})
 	deliveries := newMetricCounts([]string{"queued", "leased", "applying", "applied", "validated", "failed", "superseded"})
-	incidents := newMetricCounts([]string{"contact-stale", "config-failed", "certificate-expiring", "certificate-expired", "certificate-rotation-failed"})
+	incidents := newMetricCounts([]string{"contact-stale", "config-failed", "certificate-expiring", "certificate-expired", "certificate-rotation-failed", "resource-cpu-high", "resource-memory-high", "resource-disk-high", "resource-conntrack-high", "resource-clock-skew", "dataplane-drift"})
 	notifications := newMetricCounts([]string{"pending", "claimed", "delivered", "exhausted"})
 	upgrades := newMetricCounts([]string{"queued", "claimed", "installing", "verifying", "succeeded", "failed", "rolled-back", "cancelled"})
 	retirements := newMetricCounts([]string{"waiting-removal", "queued", "claimed", "purging", "released", "failed"})
@@ -84,6 +86,7 @@ func (s *Store) OperationalMetrics(ctx context.Context, staleAfter time.Duration
 	}{
 		{`SELECT status,count(*) FROM nodes GROUP BY status`, nil, nodes},
 		{`SELECT CASE WHEN certificate_fingerprint IS NULL THEN 'unenrolled' WHEN last_seen_at IS NULL THEN 'never-seen' WHEN last_seen_at<now()-$1*interval '1 second' THEN 'stale' ELSE 'recent' END,count(*) FROM nodes GROUP BY 1`, []any{staleAfter.Seconds()}, contacts},
+		{`SELECT CASE WHEN rs.node_id IS NULL THEN 'unknown' WHEN rs.received_at<now()-interval '90 seconds' THEN 'stale' WHEN rs.dataplane_state='drifted' THEN 'drifted' WHEN COALESCE(rs.cpu_percent>=90,false) OR COALESCE(rs.memory_percent>=90,false) OR COALESCE(rs.disk_percent>=85,false) OR COALESCE(rs.conntrack_percent>=80,false) OR rs.clock_skew_seconds>120 THEN 'pressure' WHEN rs.cpu_percent IS NULL AND rs.memory_percent IS NULL AND rs.disk_percent IS NULL AND rs.conntrack_percent IS NULL THEN 'unknown' ELSE 'normal' END,count(*) FROM nodes n LEFT JOIN node_resource_latest rs ON rs.node_id=n.id GROUP BY 1`, nil, resources},
 		{`SELECT status,count(*) FROM relay_rules GROUP BY status`, nil, rules},
 		{`SELECT o.state,count(*) FROM nodes n JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation GROUP BY o.state`, nil, deliveries},
 		{`SELECT kind,count(*) FROM operations_incidents WHERE state='open' GROUP BY kind`, nil, incidents},
@@ -104,6 +107,7 @@ func (s *Store) OperationalMetrics(ctx context.Context, staleAfter time.Duration
 	}
 	result.Nodes = map[string]int64(nodes)
 	result.AgentContacts = map[string]int64(contacts)
+	result.NodeResources = map[string]int64(resources)
 	result.Rules = map[string]int64(rules)
 	result.CurrentDeliveries = map[string]int64(deliveries)
 	result.OpenIncidents = map[string]int64(incidents)

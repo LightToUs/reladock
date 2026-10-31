@@ -103,6 +103,7 @@ func (r *Registry) encode(ctx context.Context) string {
 	fmt.Fprintln(&b, "reladock_database_up 1")
 	family(&b, "reladock_nodes", "Nodes by lifecycle state.", "status", snapshot.Nodes)
 	family(&b, "reladock_agent_contacts", "Nodes by authenticated control contact recency.", "state", snapshot.AgentContacts)
+	family(&b, "reladock_node_resources", "Nodes by latest bounded resource and local drift state; not end-to-end health.", "state", snapshot.NodeResources)
 	family(&b, "reladock_rules", "Relay rules by persisted state.", "status", snapshot.Rules)
 	family(&b, "reladock_current_config_deliveries", "Current desired-generation deliveries by state.", "state", snapshot.CurrentDeliveries)
 	family(&b, "reladock_open_incidents", "Open control incidents by kind.", "kind", snapshot.OpenIncidents)

@@ -14,7 +14,7 @@ import (
 )
 
 func fixture() platform.OperationalMetrics {
-	return platform.OperationalMetrics{Nodes: map[string]int64{"ready": 2, "maintenance": 1}, AgentContacts: map[string]int64{"recent": 2, "stale": 1}, Rules: map[string]int64{"pending-agent": 3}, CurrentDeliveries: map[string]int64{"applied": 2, "failed": 1}, OpenIncidents: map[string]int64{"contact-stale": 1}, NotificationOutbox: map[string]int64{"pending": 1}, AgentUpgrades: map[string]int64{"succeeded": 2}, EndpointRetirements: map[string]int64{"released": 4}, FrozenWallets: 1}
+	return platform.OperationalMetrics{Nodes: map[string]int64{"ready": 2, "maintenance": 1}, AgentContacts: map[string]int64{"recent": 2, "stale": 1}, NodeResources: map[string]int64{"normal": 2, "drifted": 1}, Rules: map[string]int64{"pending-agent": 3}, CurrentDeliveries: map[string]int64{"applied": 2, "failed": 1}, OpenIncidents: map[string]int64{"contact-stale": 1}, NotificationOutbox: map[string]int64{"pending": 1}, AgentUpgrades: map[string]int64{"succeeded": 2}, EndpointRetirements: map[string]int64{"released": 4}, FrozenWallets: 1}
 }
 
 func TestMetricsHandlerEmitsDeterministicLowCardinalityFacts(t *testing.T) {
@@ -29,7 +29,7 @@ func TestMetricsHandlerEmitsDeterministicLowCardinalityFacts(t *testing.T) {
 		t.Fatalf("status/header: %d %s", rec.Code, rec.Header().Get("Content-Type"))
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`reladock_database_up 1`, `reladock_nodes{status="ready"} 2`, `reladock_agent_contacts{state="stale"} 1`, `reladock_worker_runs_total{worker="incident-reconcile",result="success"} 1`} {
+	for _, want := range []string{`reladock_database_up 1`, `reladock_nodes{status="ready"} 2`, `reladock_agent_contacts{state="stale"} 1`, `reladock_node_resources{state="drifted"} 1`, `reladock_worker_runs_total{worker="incident-reconcile",result="success"} 1`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in %s", want, body)
 		}

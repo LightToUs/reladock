@@ -1,6 +1,6 @@
 import { bindOperations } from './operations-tools.js';
 import { bindNodeBootstrap } from './node-bootstrap.js';
-import { agentContactPresentation, certificatePresentation, configurationPresentation, probePresentation } from './node-contact-status.js';
+import { agentContactPresentation, certificatePresentation, configurationPresentation, probePresentation, resourcePresentation } from './node-contact-status.js';
 const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], editingNode: null, certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '' };
 const titles = { overview: '平台总览', nodes: '入口节点', tenants: '企业客户', rules: '全局规则', deliveries: '配置交付', plans:'规则套餐',operations:'告警工单',costs:'成本与经营差额',audit: '操作审计' };
@@ -87,6 +87,7 @@ function renderNodes(nodes) {
     const row = root.insertRow(); cell(row, node.name, node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`);
     const resource = nodeResourcePresentation(node); cell(row, resource.label, resource.detail);
     const contact = agentContactPresentation(node.contactStatus); const agentDetail = `${contact.detail}${node.agentMode ? `；${node.agentMode}` : ''}`; const contactCell = cell(row, contact.label, agentDetail); contactCell.classList.add('agent-status', `agent-status-${contact.tone}`);
+    const resourceStatus = resourcePresentation(node); const resourceCell = cell(row, resourceStatus.label, resourceStatus.detail); resourceCell.classList.add('agent-status', `agent-status-${resourceStatus.tone}`);
     const upgrade = upgradePresentation(node); const upgradeCell = cell(row, upgrade.label, upgrade.detail); upgradeCell.classList.add('upgrade-status'); const configuration = configurationPresentation(node); cell(row, configuration.label, configuration.detail); cell(row, node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试耗尽 · 待处理' : deliveries[node.deliveryState] || '未知');
     const probe = probePresentation(node); const probeCell = cell(row, probe.label, probe.detail); probeCell.classList.add('agent-status', `agent-status-${probe.tone}`); const certificate = certificatePresentation(node); const certificateCell = cell(row, certificate.label, certificate.detail); certificateCell.classList.add('agent-status', `agent-status-${certificate.tone}`);
     const controls = row.insertCell(); controls.className = 'table-actions';
@@ -102,7 +103,7 @@ function renderNodes(nodes) {
     if (node.status === 'maintenance') controls.append(button('进入安全排空', async () => { if (!confirm(`让“${node.name}”进入安全排空？此操作不可恢复分配；请继续删除全部规则并等待 Agent 证明。`)) return; await mutate(`/api/admin/nodes/${node.id}/start-draining`, { revision: node.revision }, '节点已进入排空；等待规则、端口、配置与 Agent 证明全部收敛。'); }, true));
     controls.append(button('安装 Agent',()=>bootstrapUI.open(node)));
   }
-  empty(root, 11, '暂无节点，请先登记入口资源。');
+  empty(root, 12, '暂无节点，请先登记入口资源。');
 }
 function editNode(node) { state.editingNode = node; const form = $('#node-form'); for (const name of ['id', 'name', 'region', 'listenAddress', 'publicAddress', 'capacityMbps']) form.elements.namedItem(name).value = node[name]; form.elements.namedItem('id').readOnly = true; $('#node-form-title').textContent = `编辑节点 · ${node.name}`; $('#node-save').textContent = '保存节点修改'; $('#node-form-title').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 $('#node-new').addEventListener('click', () => { state.editingNode = null; $('#node-form').reset(); $('#node-form [name=id]').readOnly = false; $('#node-form-title').textContent = '新增入口节点'; $('#node-save').textContent = '登记节点'; });
