@@ -213,7 +213,11 @@ func ExtractBundle(r io.Reader, staging string, expected Kind) (m Manifest, err 
 		}
 		destination := filepath.Join(staging, filepath.FromSlash(h.Name))
 		if h.Typeflag == tar.TypeDir {
-			if err = os.Mkdir(destination, os.FileMode(h.Mode)&0777); err != nil {
+			mode := os.FileMode(h.Mode) & 0777
+			if err = os.Mkdir(destination, mode); err != nil {
+				return m, err
+			}
+			if err = os.Chmod(destination, mode); err != nil {
 				return m, err
 			}
 			seen[h.Name] = FileRecord{Path: h.Name, Type: "directory", Mode: uint32(h.Mode) & 0777, Size: 0, SHA256: emptySHA256}
@@ -228,10 +232,14 @@ func ExtractBundle(r io.Reader, staging string, expected Kind) (m Manifest, err 
 		}
 		hash := sha256.New()
 		_, copyErr := io.CopyN(io.MultiWriter(f, hash), tr, h.Size)
+		chmodErr := f.Chmod(os.FileMode(h.Mode) & 0777)
 		syncErr := f.Sync()
 		closeErr := f.Close()
 		if copyErr != nil {
 			return m, copyErr
+		}
+		if chmodErr != nil {
+			return m, chmodErr
 		}
 		if syncErr != nil {
 			return m, syncErr

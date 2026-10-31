@@ -66,6 +66,13 @@ func TestNodeStagingNeverTargetsLiveRoots(t *testing.T) {
 	if err := safeNodeStaging(stage); err == nil {
 		t.Fatal("accepted existing stage")
 	}
+	alias := filepath.Join(parent, "etc-alias")
+	if err := os.Symlink("/etc", alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := safeNodeStaging(filepath.Join(alias, "stage")); err == nil {
+		t.Fatal("accepted staging path resolving into /etc")
+	}
 }
 
 func TestNodePreflightAndControlLock(t *testing.T) {

@@ -56,11 +56,13 @@
 
 ## 备份与恢复
 
-本地 Docker 开发数据库可运行 `npm run backup` 生成权限 0600 的 `.local/backups/*.dump`；再用 `npm run backup:verify -- /absolute/path/to/backup.dump` 恢复到独立随机数据库，校验版本与钱包/账本一致性后清理该临时数据库。原业务库和备份文件保留。这验证本地恢复流程，不代表生产离机备份、加密保存和 RPO/RTO 已验收。
+本地 Docker 开发数据库可运行 `npm run backup` 生成权限 0600 的 `.local/backups/*.dump`；再用 `npm run backup:verify -- /absolute/path/to/backup.dump` 恢复到独立随机数据库，校验版本与钱包/账本一致性后清理该临时数据库。原业务库和备份文件保留。
 
 数据库备份不包含各节点私有交付 journal、dataplane/shaping 状态和计量 WAL。生产须在节点进程停止并完成状态一致性核对后加密备份这些目录；PKI 恢复材料分开保存。不能只恢复控制数据库、丢弃 WAL 后将原周期当作全新计数，不能把旧快照随意应用到新 namespace。
 
-使用 `pg_dump --format=custom` 对独立业务数据库做加密离机备份，数据库凭据通过受保护的 pgpass 提供，不写进命令历史。备份至少包含 schema、账本、订单及节点配置；TLS/CA 恢复材料分别管理。恢复先在独立临时数据库用 `pg_restore --exit-on-error` 验证，再核对企业/规则/账本行数、约束、钱包与不可变账本余额一致性，演练后记录实际 RPO/RTO。不要在业务数据库上直接尝试恢复或执行测试套件。
+生产发行包安装 `/opt/reladock/reladock-recovery`。控制创建使用同一导出快照生成 custom-format dump 和账本不变量，再流式写入 age 加密包；节点创建要求所有 Agent/updater 单元停止并取得控制锁，只读取固定状态根。控制校验只使用随机临时数据库，节点校验拒绝 `/etc`、`/var` 和已存在的暂存路径。数据库凭据只从 `DATABASE_URL` 环境读取，不接受命令参数。详细命令、密钥边界和替换主机步骤见 [加密离机恢复验收](acceptance/OFFSITE_RECOVERY.md)。
+
+工具不上传备份、不托管 age 私钥、不自动把暂存状态复制到替换主机。必须另行完成跨故障域复制、保留策略、密钥恢复和实际替换主机演练，再记录 RPO/RTO；本地加密包校验不能替代生产灾难恢复验收。不要在业务数据库上直接尝试恢复或执行测试套件。
 
 ## 上线门禁
 

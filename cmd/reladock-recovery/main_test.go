@@ -42,4 +42,7 @@ func TestParseNodeCreateFixedOperationalDefaults(t *testing.T) {
 	if c.systemctlBinary != "/usr/bin/systemctl" || c.controlLock != "/var/lib/reladock-locks/control.lock" {
 		t.Fatalf("defaults: %+v", c)
 	}
+	if _, err = parseArgs([]string{"node-create", "--destination", "/backup", "--recipient", "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqp5e5z", "--control-lock", "/tmp/fake"}, func(string) string { return "" }); err == nil {
+		t.Fatal("accepted control lock override")
+	}
 }

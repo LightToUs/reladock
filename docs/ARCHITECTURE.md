@@ -43,7 +43,7 @@ flowchart TD
 | 监控 | Prometheus/Grafana、Loki、外部探针 |
 | 组网扩展 | 企业 WireGuard、网络隔离、路由与 ACL |
 
-当前为 Go HTTP + PostgreSQL + 静态页面。Node.js 只负责本地脚本。事务 Outbox、mTLS、成员权限、规则套餐、账务和默认关闭的支付连接器已实现。Linux 显式应用 Agent 已组合 nftables/tc、WAL、内核逐规则额度/到期保护和 applied ACK；默认模式仍仅校验。React/Next.js、Redis 和企业组网尚未接入，不影响当前 PostgreSQL 事实来源。真实生产平台仍须环境与商业验收。
+当前为 Go HTTP + PostgreSQL + 静态页面。Node.js 只负责本地脚本。发行包中的 Go `reladock-recovery` 使用外部 age/PostgreSQL 客户端生成禁止覆盖的控制/节点加密包；控制校验只恢复到随机临时数据库，节点校验只写全新非系统暂存目录，不负责上传或状态晋升。事务 Outbox、mTLS、成员权限、规则套餐、账务和默认关闭的支付连接器已实现。Linux 显式应用 Agent 已组合 nftables/tc、WAL、内核逐规则额度/到期保护和 applied ACK；默认模式仍仅校验。React/Next.js、Redis 和企业组网尚未接入，不影响当前 PostgreSQL 事实来源。真实生产平台仍须环境与商业验收。
 
 ### 当前控制平台实现
 

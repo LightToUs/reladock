@@ -80,7 +80,7 @@ func CreateControl(ctx context.Context, c ControlCreateConfig) (string, error) {
 	})
 }
 
-func VerifyControl(ctx context.Context, c ControlVerifyConfig) error {
+func VerifyControl(ctx context.Context, c ControlVerifyConfig) (resultErr error) {
 	env, dbconfig, err := postgresConnection(c.DatabaseURL)
 	if err != nil {
 		return err
@@ -121,9 +121,16 @@ func VerifyControl(ctx context.Context, c ControlVerifyConfig) error {
 		return errors.New("create temporary verification database failed")
 	}
 	defer func() {
-		cleanup := context.Background()
-		_, _ = admin.Exec(cleanup, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()", name)
-		_, _ = admin.Exec(cleanup, "DROP DATABASE IF EXISTS "+identifier)
+		cleanup, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, terminateErr := admin.Exec(cleanup, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()", name)
+		_, dropErr := admin.Exec(cleanup, "DROP DATABASE IF EXISTS "+identifier)
+		if terminateErr != nil {
+			resultErr = errors.Join(resultErr, errors.New("terminate temporary verification database connections failed"))
+		}
+		if dropErr != nil {
+			resultErr = errors.Join(resultErr, errors.New("drop temporary verification database failed"))
+		}
 	}()
 	if err = runPostgresTool(ctx, c.PGRestoreBinary, postgresToolArgs("restore", name, filepath.Join(stage, "control.dump")), withDatabase(env, name)); err != nil {
 		return err

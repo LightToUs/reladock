@@ -2,7 +2,7 @@
 
 ## 已实现
 
-- v18–v23 节点生命周期：后台一次性安装命令、固定 Release 摘要、本地私钥、mTLS 环境报告；独立活动调度与退避、90 秒心跳、30 天证书提前 7 天两阶段自动轮换；固定目标的持久 Agent 升级任务、多层归档校验、两信号确认和自动二进制回滚；精确 conntrack retirement、持久 proof/ACK 恢复，以及绑定当前证书/boot/process/version/generation/journal/quarantine 集合的 draining 最终证明。安装包尚未发布；真实 VPS/systemd、GitHub 可达性、完整安全退役、升级中断/离机恢复、PKI 签发器高可用仍需验收，不视为生产就绪。
+- v18–v23 节点生命周期：后台一次性安装命令、固定 Release 摘要、本地私钥、mTLS 环境报告；独立活动调度与退避、90 秒心跳、30 天证书提前 7 天两阶段自动轮换；固定目标的持久 Agent 升级任务、多层归档校验、两信号确认和自动二进制回滚；精确 conntrack retirement、持久 proof/ACK 恢复，以及绑定当前证书/boot/process/version/generation/journal/quarantine 集合的 draining 最终证明。发行包还包含 age 加密的控制/节点恢复包创建、临时数据库校验和节点仅暂存校验工具。安装包尚未发布；真实 VPS/systemd、GitHub 可达性、完整安全退役、升级中断、真实离机复制/替换主机恢复和 PKI 签发器高可用仍需验收，不视为生产就绪。
 
 - Go HTTP 服务与真实 PostgreSQL 持久化，版本化事务迁移，独立本地数据库与数据卷。
 - 企业开通、密码登录、24 小时会话、退出撤销及企业数据隔离。
@@ -24,7 +24,7 @@
 
 ## 尚未实现
 
-真实 VPS/容量验收、合作端到端协议探针、商户激活与人工对账流程、生产离机恢复、Redis 与后续企业组网。平台 retirement 状态机、schema-2 allocation-ID quarantine/回滚底座、固定 conntrack 执行器、复用 Pending/Recovery 的 Adapter 本地 purge journal/ACK 分类/原子 predecessor 接管、apply-only mTLS Agent 领取/begin/proof/report 恢复闭环，以及不可逆 draining 和最终节点身份撤销门禁已实现。管理界面已逐项显示退役门禁，Agent 安装和 apply 单元检查固定 conntrack-tools，发布清单仍保持 `productionReady=false`；生产式退役演练按 `docs/acceptance/SAFE_RETIREMENT.md` 尚未执行。Agent updater 已实现但尚未完成真实 VPS 上安装中断、健康超时、回滚失败及离机状态恢复演练；节点应用日志/WAL 丢失后的人工重建流程仍需专门运维验收，不能自动清屏障或重置计量。生产服务器/域名/支付渠道由用户之后确定。
+真实 VPS/容量验收、合作端到端协议探针、商户激活与人工对账流程、跨故障域备份保留及替换主机恢复演练、Redis 与后续企业组网。加密包创建、控制临时数据库校验和节点仅暂存校验已实现，但不等于离机耐久性或 RPO/RTO 已验收。平台 retirement 状态机、schema-2 allocation-ID quarantine/回滚底座、固定 conntrack 执行器、复用 Pending/Recovery 的 Adapter 本地 purge journal/ACK 分类/原子 predecessor 接管、apply-only mTLS Agent 领取/begin/proof/report 恢复闭环，以及不可逆 draining 和最终节点身份撤销门禁已实现。管理界面已逐项显示退役门禁，Agent 安装和 apply 单元检查固定 conntrack-tools，发布清单仍保持 `productionReady=false`；生产式退役演练按 `docs/acceptance/SAFE_RETIREMENT.md` 尚未执行。Agent updater 已实现但尚未完成真实 VPS 上安装中断、健康超时、回滚失败及离机状态恢复演练；节点应用日志/WAL 丢失后的人工重建流程仍需专门运维验收，不能自动清屏障或重置计量。生产服务器/域名/支付渠道由用户之后确定。
 
 ## 实施顺序
 

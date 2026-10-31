@@ -40,8 +40,8 @@ func parseArgs(args []string, getenv func(string) string) (command, error) {
 	case "node-create":
 		set.StringVar(&c.destination, "destination", "", "")
 		set.StringVar(&c.recipient, "recipient", "", "")
-		set.StringVar(&c.systemctlBinary, "systemctl-binary", "/usr/bin/systemctl", "")
-		set.StringVar(&c.controlLock, "control-lock", "/var/lib/reladock-locks/control.lock", "")
+		c.systemctlBinary = "/usr/bin/systemctl"
+		c.controlLock = "/var/lib/reladock-locks/control.lock"
 	case "node-verify":
 		set.StringVar(&c.bundle, "bundle", "", "")
 		set.StringVar(&c.identity, "identity", "", "")

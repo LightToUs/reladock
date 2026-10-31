@@ -136,13 +136,27 @@ func nodeSourceID(root string) (string, error) {
 	return hex.EncodeToString(sum[:16]), nil
 }
 
+func insidePath(candidate, root string) bool {
+	return candidate == root || strings.HasPrefix(candidate, root+string(filepath.Separator))
+}
 func safeNodeStaging(staging string) error {
 	if !filepath.IsAbs(staging) || filepath.Clean(staging) != staging {
 		return errors.New("node staging path must be a clean absolute path")
 	}
 	for _, live := range []string{"/etc", "/var"} {
-		if staging == live || strings.HasPrefix(staging, live+string(filepath.Separator)) {
+		if insidePath(staging, live) {
 			return errors.New("node staging path cannot be inside a live system root")
+		}
+	}
+	resolvedParent, err := filepath.EvalSymlinks(filepath.Dir(staging))
+	if err != nil {
+		return errors.New("node staging parent must already exist")
+	}
+	resolved := filepath.Join(resolvedParent, filepath.Base(staging))
+	for _, live := range []string{"/etc", "/var"} {
+		resolvedLive, resolveErr := filepath.EvalSymlinks(live)
+		if resolveErr == nil && insidePath(resolved, resolvedLive) {
+			return errors.New("node staging path resolves inside a live system root")
 		}
 	}
 	if _, err := os.Lstat(staging); !os.IsNotExist(err) {

@@ -78,6 +78,13 @@ func TestBundleRoundTripRejectsHashMismatch(t *testing.T) {
 	if err != nil || string(data) != "safe" {
 		t.Fatalf("data=%q err=%v", data, err)
 	}
+	info, err := os.Stat(filepath.Join(stage, "state", "agent.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("mode=%v", info.Mode().Perm())
+	}
 
 	corrupt := bytes.Replace(b.Bytes(), []byte("safe"), []byte("evil"), 1)
 	if _, err := ExtractBundle(bytes.NewReader(corrupt), filepath.Join(t.TempDir(), "bad"), KindNode); err == nil {
