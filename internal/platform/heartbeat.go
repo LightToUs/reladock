@@ -11,14 +11,24 @@ const AgentHeartbeatStaleAfter = 90 * time.Second
 var agentVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,79}$`)
 
 type AgentHeartbeat struct {
-	Version             string    `json:"version"`
-	Mode                string    `json:"mode"`
-	StartedAt           time.Time `json:"startedAt"`
-	CertificateNotAfter time.Time `json:"certificateNotAfter"`
-	RotationState       string    `json:"rotationState"`
-	RotationErrorCode   string    `json:"rotationErrorCode"`
-	KernelBootID        string    `json:"kernelBootId,omitempty"`
-	JournalSequence     int64     `json:"journalSequence,omitempty"`
+	Version             string              `json:"version"`
+	Mode                string              `json:"mode"`
+	StartedAt           time.Time           `json:"startedAt"`
+	CertificateNotAfter time.Time           `json:"certificateNotAfter"`
+	RotationState       string              `json:"rotationState"`
+	RotationErrorCode   string              `json:"rotationErrorCode"`
+	KernelBootID        string              `json:"kernelBootId,omitempty"`
+	JournalSequence     int64               `json:"journalSequence,omitempty"`
+	Resources           ResourceObservation `json:"resources"`
+}
+
+type ResourceObservation struct {
+	SampledAt        time.Time `json:"sampledAt"`
+	CPUPercent       *int      `json:"cpuPercent"`
+	MemoryPercent    *int      `json:"memoryPercent"`
+	DiskPercent      *int      `json:"diskPercent"`
+	ConntrackPercent *int      `json:"conntrackPercent"`
+	DataplaneState   string    `json:"dataplaneState"`
 }
 
 func validRotationError(code string) bool {

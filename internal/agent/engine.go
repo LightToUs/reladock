@@ -34,6 +34,15 @@ func (e *NodeEngine) Apply(ctx context.Context, cfg platform.NodeConfig) error {
 	}
 	return (VerifiedApplier{Adapter: e.Adapter}).Apply(ctx, cfg)
 }
+
+// Stable is a read-only local ownership/configuration check. Success proves
+// only that the owned nftables/tc state matches durable local state.
+func (e *NodeEngine) Stable(ctx context.Context) error {
+	if e == nil || e.Adapter == nil {
+		return errors.New("composed adapter required")
+	}
+	return e.Adapter.Stable(ctx)
+}
 func (e *NodeEngine) Tick(ctx context.Context, c *Client) error {
 	// The one-shot compatibility path samples before network work. Long-running
 	// mode schedules these methods independently in the Supervisor.
