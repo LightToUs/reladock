@@ -61,6 +61,10 @@ type State struct {
 	TombstoneGuards     []AllocationGuard
 	PurgedPendingACK    []AllocationGuard
 	ReusableQuarantines []AllocationGuard
+	// Retirement is a durable local transition intent. It contains no lease
+	// token or other controller secret and survives rollback until resumed.
+	Retirement        *RetirementTransition
+	RetirementResults []RetirementRecord
 }
 type Adapter struct {
 	options Options
@@ -69,6 +73,7 @@ type Adapter struct {
 	lock    Locker
 	verify  Verifier
 	hooks   TransitionHooks
+	purger  RetirementPurger
 }
 
 // TransitionHooks runs under the same cross-process network/state lock. The
@@ -119,6 +124,9 @@ func (a *Adapter) bindMeter(s *State) error {
 // SetTransitionHooks must be called before the adapter is used concurrently.
 func (a *Adapter) SetTransitionHooks(h TransitionHooks) { a.hooks = h }
 
+// SetRetirementPurger must be called before the adapter is used concurrently.
+func (a *Adapter) SetRetirementPurger(p RetirementPurger) { a.purger = p }
+
 func NewAdapter(o Options, r Runner, s StateStore, l Locker, v Verifier) (*Adapter, error) {
 	if !identifier.MatchString(o.NodeID) || r == nil || s == nil || l == nil || v == nil {
 		return nil, errors.New("node identity and all adapter dependencies are required")
@@ -134,7 +142,7 @@ func (a *Adapter) load(ctx context.Context) (State, error) {
 	if e != nil {
 		return s, fmt.Errorf("load state: %w", e)
 	}
-	if s.NodeID == "" && s.HighWater == 0 && !s.Pending && s.Good == nil && s.Candidate == nil && s.Recovery == nil && s.PreviousRecovery == nil && len(s.Tombstones) == 0 && len(s.TombstoneGuards) == 0 && len(s.PurgedPendingACK) == 0 && len(s.ReusableQuarantines) == 0 {
+	if s.NodeID == "" && s.HighWater == 0 && !s.Pending && s.Good == nil && s.Candidate == nil && s.Recovery == nil && s.PreviousRecovery == nil && len(s.Tombstones) == 0 && len(s.TombstoneGuards) == 0 && len(s.PurgedPendingACK) == 0 && len(s.ReusableQuarantines) == 0 && s.Retirement == nil && len(s.RetirementResults) == 0 {
 		e = a.bindMeter(&s)
 		return s, e
 	}
@@ -182,6 +190,9 @@ func (a *Adapter) load(ctx context.Context) (State, error) {
 		return s, errors.New("last-good reuses a fenced allocation")
 	}
 	if err := validateLocalGuardState(s); err != nil {
+		return s, err
+	}
+	if err := validateRetirementState(s); err != nil {
 		return s, err
 	}
 	e = a.bindMeter(&s)
@@ -270,7 +281,8 @@ func validateLocalGuardState(s State) error {
 			goodForward[guard.ID] = guard
 		}
 		for _, guard := range append(append([]AllocationGuard(nil), s.PurgedPendingACK...), s.ReusableQuarantines...) {
-			if goodQuarantines[guard.ID] != guard {
+			goodGuard, ok := goodQuarantines[guard.ID]
+			if !ok || !sameKernelGuard(goodGuard, guard) {
 				return errors.New("persisted quarantine classification differs from last-good kernel plan")
 			}
 		}
@@ -479,6 +491,9 @@ func (a *Adapter) apply(ctx context.Context, cfg platform.NodeConfig, retry bool
 	if s.Pending {
 		return Plan{}, ErrRecoveryRequired
 	}
+	if s.Retirement != nil {
+		return Plan{}, errors.Join(ErrRecoveryRequired, errors.New("unfinished retirement transition"))
+	}
 	if cfg.Generation <= s.HighWater {
 		exactDesired := s.GoodDesired != nil && reflect.DeepEqual(cfg, *s.GoodDesired)
 		if s.GoodDesired == nil && s.Good != nil {
@@ -589,6 +604,7 @@ func (a *Adapter) apply(ctx context.Context, cfg platform.NodeConfig, retry bool
 	committed.GoodDesired = &desired
 	committed.Candidate = nil
 	committed.ReusableQuarantines = consumeReusableQuarantines(p.Config, committed.ReusableQuarantines)
+	committed.RetirementResults = retainRetirementResults(committed)
 	if e = a.store.Save(ctx, committed); e != nil {
 		return Plan{}, a.failed(ctx, s, fmt.Errorf("persist last-good: %w", e), true)
 	}
@@ -774,6 +790,9 @@ func (a *Adapter) Observe(ctx context.Context, fn func(context.Context, Plan) er
 	if s.Pending {
 		return errors.Join(ErrRecoveryRequired, a.freezeOwned(ctx))
 	}
+	if s.Retirement != nil {
+		return errors.Join(ErrRecoveryRequired, a.freezeOwned(ctx))
+	}
 	if s.Good == nil {
 		return nil
 	}
@@ -927,6 +946,9 @@ func (a *Adapter) Stable(ctx context.Context) error {
 		return e
 	}
 	if s.Pending {
+		return ErrRecoveryRequired
+	}
+	if s.Retirement != nil {
 		return ErrRecoveryRequired
 	}
 	if s.Good == nil {

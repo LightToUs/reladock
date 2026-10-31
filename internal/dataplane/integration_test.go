@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"reladock/internal/metering"
 	"reladock/internal/platform"
+	retirementexec "reladock/internal/retirement"
 	"reladock/internal/shaping"
 	"strings"
 	"testing"
@@ -526,6 +527,48 @@ func TestDockerIntegration(t *testing.T) {
 			t.Fatalf("%s packet created conntrack state behind quarantine: output=%q err=%v", protocol, out, queryErr)
 		}
 	}
+	// Exercise the crash-safe adapter transition with the container's real
+	// conntrack binary: purge only TCP, retain UDP quarantine, ACK locally, then
+	// consume the TCP quarantine through one exact predecessor apply.
+	composedAdapter.SetRetirementPurger(retirementexec.Executor{Runner: retirementRunnerFunc(func(callCtx context.Context, invocation retirementexec.Invocation) (retirementexec.CommandResult, error) {
+		args := append([]string{"exec", names[4], "conntrack"}, invocation.Args...)
+		command := exec.CommandContext(callCtx, dockerPath, args...)
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		runErr := command.Run()
+		result := retirementexec.CommandResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
+		var exitError *exec.ExitError
+		if errors.As(runErr, &exitError) {
+			result.ExitCode = exitError.ExitCode()
+			return result, nil
+		}
+		return result, runErr
+	})})
+	tcpRetirement := composedCfg.Retirements[0]
+	tcpClaim := platform.RetirementClaim{ID: tcpRetirement.ID, AllocationID: tcpRetirement.AllocationID, NodeID: composedCfg.NodeID, RuleID: tcpRetirement.RuleID, Address: tcpRetirement.Address, Protocol: tcpRetirement.Protocol, Port: tcpRetirement.Port, QuarantineGeneration: tcpRetirement.QuarantineGeneration}
+	if _, e = composedAdapter.PurgeAllocation(ctx, tcpClaim); e != nil {
+		t.Fatal("real conntrack retirement:", e)
+	}
+	purgedState, loadErr := composedStore.Load(ctx)
+	if loadErr != nil || len(purgedState.PurgedPendingACK) != 1 || len(purgedState.Good.Quarantines) != 2 || len(purgedState.Good.ForwardGuards) != 2 {
+		t.Fatalf("real retirement guard transition: %+v %v", purgedState, loadErr)
+	}
+	if e = composedAdapter.ConfirmRetirementACK(ctx, tcpClaim.ID, tcpClaim.AllocationID); e != nil {
+		t.Fatal("real retirement local ACK:", e)
+	}
+	composedCfg.Generation = 5
+	composedCfg.Retirements = composedCfg.Retirements[1:]
+	replacement := platform.ConfigRule{ID: "retirement-replacement", TenantID: composedCfg.Rules[0].TenantID, RuleInput: platform.RuleInput{Name: "Retirement replacement", NodeID: composedCfg.NodeID, Protocol: "tcp", TargetHost: target, TargetPort: 9000, BandwidthMbps: 2}, ListenPort: 20007, Version: 1, Status: "pending-agent", DevelopmentBypass: true}
+	composedCfg.Rules = append(composedCfg.Rules, replacement)
+	composedCfg.Allocations = append(composedCfg.Allocations, platform.ConfigAllocation{ID: "77777777-7777-4777-8777-777777777777", RuleID: replacement.ID, Protocol: "tcp", Address: composedIP, Port: 20007, PredecessorRetirementID: tcpClaim.ID})
+	reusedPlan, reuseErr := composedAdapter.Apply(ctx, composedCfg)
+	if reuseErr != nil || len(reusedPlan.Quarantines) != 1 || reusedPlan.Quarantines[0].Protocol != "udp" {
+		t.Fatalf("atomic retirement reuse: %+v %v", reusedPlan, reuseErr)
+	}
+	must("", "exec", names[2], "python3", "-c", echoClient, composedIP, "20007", "tcp", "retirement-reuse")
+	if got := strings.TrimSpace(string(must("", "exec", names[2], "python3", "-c", newUDPMustBlock, composedIP, "20007"))); got != "BLOCKED" {
+		t.Fatal("independent UDP quarantine was consumed:", got)
+	}
 	if e = initialFlow.expect("BLOCKED"); e != nil {
 		t.Fatal("restart lost initial candidate fence:", e)
 	}
@@ -536,6 +579,12 @@ func TestDockerIntegration(t *testing.T) {
 type containerShapeRunner struct {
 	docker func(context.Context, string, ...string) ([]byte, error)
 	name   string
+}
+
+type retirementRunnerFunc func(context.Context, retirementexec.Invocation) (retirementexec.CommandResult, error)
+
+func (f retirementRunnerFunc) Run(ctx context.Context, invocation retirementexec.Invocation) (retirementexec.CommandResult, error) {
+	return f(ctx, invocation)
 }
 
 func (r containerShapeRunner) Run(ctx context.Context, tool shaping.Tool, args []string) ([]byte, error) {
