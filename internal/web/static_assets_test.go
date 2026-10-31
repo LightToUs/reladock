@@ -56,7 +56,7 @@ func TestAdminRetirementPresentationContract(t *testing.T) {
 
 func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
-	for _, path := range []string{"/admin.js", "/node-bootstrap.js", "/node-contact-status.js", "/operations-tools.js"} {
+	for _, path := range []string{"/admin.js", "/admin-navigation.js", "/node-bootstrap.js", "/node-contact-status.js", "/operations-tools.js"} {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001"+path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -68,6 +68,30 @@ func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 		}
 		if rec.Body.Len() == 0 {
 			t.Fatalf("GET %s returned an empty module", path)
+		}
+	}
+}
+
+func TestAdminMobileNavigationHasExplicitToggle(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJS, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigationJS, err := fs.ReadFile(assets.Files, "admin-navigation.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(adminJS) + string(navigationJS)
+	for _, required := range []string{
+		`id="admin-nav-toggle"`, `aria-controls="admin-navigation"`, `aria-expanded="false"`,
+		"nav-open", "aria-expanded", "admin-navigation",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("admin mobile navigation missing %q", required)
 		}
 	}
 }

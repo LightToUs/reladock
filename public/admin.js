@@ -1,5 +1,6 @@
 import { bindOperations } from './operations-tools.js';
 import { bindNodeBootstrap } from './node-bootstrap.js';
+import { bindAdminNavigation } from './admin-navigation.js';
 import { agentContactPresentation, certificatePresentation, configurationPresentation, probePresentation, resourcePresentation } from './node-contact-status.js';
 const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], editingNode: null, certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '' };
@@ -45,7 +46,7 @@ function appendUpgradeControls(controls, node) {
   if (['installing', 'verifying'].includes(node.upgrade?.state)) { const locked = button('升级中，操作已锁定', async () => {}); locked.disabled = true; controls.append(locked); }
 }
 function showView(view) { state.view = view; for (const pane of document.querySelectorAll('[data-pane]')) pane.hidden = pane.dataset.pane !== view; for (const nav of document.querySelectorAll('[data-view]')) nav.classList.toggle('selected', nav.dataset.view === view); $('#view-title').textContent = titles[view]; if (view === 'deliveries') loadDeliveries().catch(error => message(error.message)); if(view==='plans')loadPlans().catch(e=>message(e.message));if(view==='operations')operations.refresh().catch(e=>message(e.message)); }
-for (const nav of document.querySelectorAll('[data-view]')) nav.addEventListener('click', () => showView(nav.dataset.view));
+bindAdminNavigation({ root: document.querySelector('.admin-nav'), toggle: $('#admin-nav-toggle'), title: $('#view-title'), items: document.querySelectorAll('[data-view]'), documentTarget: document, onSelect: showView });
 costNav.addEventListener('click', () => loadCosts().catch(error => message(error.message)));
 notificationNav.addEventListener('click', () => loadNotifications().catch(error => message(error.message)));
 for (const nav of document.querySelectorAll('[data-jump]')) nav.addEventListener('click', () => showView(nav.dataset.jump));
