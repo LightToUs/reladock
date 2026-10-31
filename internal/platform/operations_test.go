@@ -163,6 +163,62 @@ func TestCertificateIncidentsWarnExpireFailResolveAndRecur(t *testing.T) {
 	}
 }
 
+func TestResourceAndDriftIncidentsRequireSustainedFreshEvidence(t *testing.T) {
+	s := operationsStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET status='maintenance',certificate_fingerprint=$1,last_seen_at=clock_timestamp() WHERE id='hk-01'`, strings.Repeat("7", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO node_resource_latest(
+node_id,sampled_at,received_at,cpu_percent,memory_percent,disk_percent,conntrack_percent,clock_skew_seconds,dataplane_state,
+cpu_high_since,memory_high_since,disk_high_since,conntrack_high_since,clock_skew_since,dataplane_drift_since)
+VALUES('hk-01',clock_timestamp(),clock_timestamp(),95,95,90,85,130,'drifted',clock_timestamp(),clock_timestamp(),clock_timestamp(),clock_timestamp(),clock_timestamp(),clock_timestamp())`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE kind LIKE 'resource-%' OR kind='dataplane-drift'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("single pressure sample opened incidents: %d %v", count, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE node_resource_latest SET
+cpu_high_since=clock_timestamp()-interval '6 minutes',memory_high_since=clock_timestamp()-interval '6 minutes',
+disk_high_since=clock_timestamp()-interval '6 minutes',conntrack_high_since=clock_timestamp()-interval '6 minutes',
+clock_skew_since=clock_timestamp()-interval '3 minutes',dataplane_drift_since=clock_timestamp()-interval '3 minutes'
+WHERE node_id='hk-01'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	var audits int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*),(SELECT count(*) FROM platform_audit_logs WHERE action='incident.open' AND details->>'kind' IN ('resource-cpu-high','resource-memory-high','resource-disk-high','resource-conntrack-high','resource-clock-skew','dataplane-drift')) FROM operations_incidents WHERE state='open' AND kind IN ('resource-cpu-high','resource-memory-high','resource-disk-high','resource-conntrack-high','resource-clock-skew','dataplane-drift')`).Scan(&count, &audits); err != nil || count != 6 || audits != 6 {
+		t.Fatalf("sustained resource incidents not idempotent: incidents=%d audits=%d err=%v", count, audits, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE node_resource_latest SET received_at=clock_timestamp()-interval '2 minutes' WHERE node_id='hk-01'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE state='open' AND (kind LIKE 'resource-%' OR kind='dataplane-drift')`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("stale resource evidence remained actionable: %d %v", count, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE node_resource_latest SET received_at=clock_timestamp(),cpu_percent=NULL,memory_percent=NULL,disk_percent=NULL,conntrack_percent=NULL,clock_skew_seconds=0,dataplane_state='unknown',cpu_high_since=NULL,memory_high_since=NULL,disk_high_since=NULL,conntrack_high_since=NULL,clock_skew_since=NULL,dataplane_drift_since=NULL WHERE node_id='hk-01'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE state='resolved' AND (kind LIKE 'resource-%' OR kind='dataplane-drift')`).Scan(&count); err != nil || count != 6 {
+		t.Fatalf("unknown resource values did not keep incidents resolved: %d %v", count, err)
+	}
+}
+
 func TestOperationsTenantVisibilityAndSupportIsolation(t *testing.T) {
 	s := operationsStore(t)
 	ctx := context.Background()

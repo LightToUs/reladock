@@ -149,6 +149,7 @@ func (s *Store) reconcileNodeIncidents(ctx context.Context, nodeID string, stale
 		return nil
 	}
 	var enrolled, controlMonitored, stale, failed, certificateExpiring, certificateExpired, rotationFailed bool
+	var cpuHigh, memoryHigh, diskHigh, conntrackHigh, clockSkew, dataplaneDrift bool
 	err = tx.QueryRow(ctx, `SELECT
 	 n.certificate_fingerprint IS NOT NULL,
 	 n.status<>'maintenance',
@@ -156,8 +157,14 @@ func (s *Store) reconcileNodeIncidents(ctx context.Context, nodeID string, stale
  COALESCE(o.state='failed',false),
  COALESCE(n.agent_certificate_not_after>clock_timestamp() AND n.agent_certificate_not_after<=clock_timestamp()+interval '7 days',false),
  COALESCE(n.agent_certificate_not_after<=clock_timestamp(),false),
- COALESCE(n.agent_rotation_state='error' AND n.agent_rotation_error_since<=clock_timestamp()-interval '1 hour',false)
-	 FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation WHERE n.id=$1`, nodeID, staleAfter.Seconds()).Scan(&enrolled, &controlMonitored, &stale, &failed, &certificateExpiring, &certificateExpired, &rotationFailed)
+ COALESCE(n.agent_rotation_state='error' AND n.agent_rotation_error_since<=clock_timestamp()-interval '1 hour',false),
+ COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.cpu_high_since<=clock_timestamp()-interval '5 minutes',false),
+ COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.memory_high_since<=clock_timestamp()-interval '5 minutes',false),
+ COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.disk_high_since<=clock_timestamp()-interval '5 minutes',false),
+ COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.conntrack_high_since<=clock_timestamp()-interval '5 minutes',false),
+ COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.clock_skew_since<=clock_timestamp()-interval '2 minutes',false),
+ COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.dataplane_drift_since<=clock_timestamp()-interval '2 minutes',false)
+	 FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation LEFT JOIN node_resource_latest rs ON rs.node_id=n.id WHERE n.id=$1`, nodeID, staleAfter.Seconds()).Scan(&enrolled, &controlMonitored, &stale, &failed, &certificateExpiring, &certificateExpired, &rotationFailed, &cpuHigh, &memoryHigh, &diskHigh, &conntrackHigh, &clockSkew, &dataplaneDrift)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // Inventory may change between its read and this transaction.
 	}
@@ -173,6 +180,12 @@ func (s *Store) reconcileNodeIncidents(ctx context.Context, nodeID string, stale
 		{"certificate-expiring", enrolled && certificateExpiring},
 		{"certificate-expired", enrolled && certificateExpired},
 		{"certificate-rotation-failed", enrolled && rotationFailed},
+		{"resource-cpu-high", enrolled && cpuHigh},
+		{"resource-memory-high", enrolled && memoryHigh},
+		{"resource-disk-high", enrolled && diskHigh},
+		{"resource-conntrack-high", enrolled && conntrackHigh},
+		{"resource-clock-skew", enrolled && clockSkew},
+		{"dataplane-drift", enrolled && dataplaneDrift},
 	} {
 		var id, state string
 		err = tx.QueryRow(ctx, `SELECT id,state FROM operations_incidents WHERE node_id=$1 AND kind=$2 FOR UPDATE`, nodeID, condition.kind).Scan(&id, &state)

@@ -23,3 +23,19 @@ CREATE TABLE node_resource_latest (
 );
 
 CREATE INDEX node_resource_latest_received ON node_resource_latest(received_at);
+
+ALTER TABLE operations_incidents
+ DROP CONSTRAINT operations_incidents_kind_check,
+ ADD CONSTRAINT operations_incidents_kind_check CHECK (kind IN (
+  'contact-stale',
+  'config-failed',
+  'certificate-expiring',
+  'certificate-expired',
+  'certificate-rotation-failed',
+  'resource-cpu-high',
+  'resource-memory-high',
+  'resource-disk-high',
+  'resource-conntrack-high',
+  'resource-clock-skew',
+  'dataplane-drift'
+ ));
