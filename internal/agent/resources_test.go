@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -138,4 +139,17 @@ func TestBoundedPercentDoesNotOverflowLargeKernelCounters(t *testing.T) {
 	if value == nil || *value != 99 {
 		t.Fatalf("large bounded percentage=%v want 99", value)
 	}
+}
+
+func TestZeroValueResourceCollectorIsSafeForConcurrentCollection(t *testing.T) {
+	collector := &ResourceCollector{inspectTimeout: time.Millisecond}
+	var workers sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			_ = collector.Collect(context.Background(), nil)
+		}()
+	}
+	workers.Wait()
 }

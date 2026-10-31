@@ -39,17 +39,19 @@ type ResourceCollector struct {
 
 func NewResourceCollector() *ResourceCollector {
 	return &ResourceCollector{
-		now:      time.Now,
-		readFile: os.ReadFile,
-		statFS: func(path string) (filesystemUsage, error) {
-			var value syscall.Statfs_t
-			if err := syscall.Statfs(path, &value); err != nil {
-				return filesystemUsage{}, err
-			}
-			return filesystemUsage{Blocks: value.Blocks, Available: value.Bavail}, nil
-		},
+		now:            time.Now,
+		readFile:       os.ReadFile,
+		statFS:         systemFilesystemUsage,
 		inspectTimeout: 2 * time.Second,
 	}
+}
+
+func systemFilesystemUsage(path string) (filesystemUsage, error) {
+	var value syscall.Statfs_t
+	if err := syscall.Statfs(path, &value); err != nil {
+		return filesystemUsage{}, err
+	}
+	return filesystemUsage{Blocks: value.Blocks, Available: value.Bavail}, nil
 }
 
 func boundedPercent(used, total uint64) *int {
@@ -117,8 +119,8 @@ func parseSingleUint(raw []byte) (uint64, bool) {
 	return value, err == nil
 }
 
-func (c *ResourceCollector) cpuPercent() *int {
-	raw, err := c.readFile("/proc/stat")
+func (c *ResourceCollector) cpuPercent(readFile func(string) ([]byte, error)) *int {
+	raw, err := readFile("/proc/stat")
 	if err != nil {
 		return nil
 	}
@@ -165,28 +167,31 @@ func (c *ResourceCollector) Collect(ctx context.Context, inspector DataplaneInsp
 	if c == nil {
 		return platform.ResourceObservation{SampledAt: time.Now().UTC(), DataplaneState: "unknown"}
 	}
-	if c.now == nil {
-		c.now = time.Now
+	now := c.now
+	if now == nil {
+		now = time.Now
 	}
-	if c.readFile == nil {
-		c.readFile = os.ReadFile
+	readFile := c.readFile
+	if readFile == nil {
+		readFile = os.ReadFile
 	}
-	if c.statFS == nil {
-		c.statFS = NewResourceCollector().statFS
+	statFS := c.statFS
+	if statFS == nil {
+		statFS = systemFilesystemUsage
 	}
 	value := platform.ResourceObservation{
-		SampledAt:      c.now().UTC().Truncate(time.Microsecond),
-		CPUPercent:     c.cpuPercent(),
+		SampledAt:      now().UTC().Truncate(time.Microsecond),
+		CPUPercent:     c.cpuPercent(readFile),
 		DataplaneState: c.dataplaneState(ctx, inspector),
 	}
-	if raw, err := c.readFile("/proc/meminfo"); err == nil {
+	if raw, err := readFile("/proc/meminfo"); err == nil {
 		value.MemoryPercent = parseMemory(raw)
 	}
-	if usage, err := c.statFS("/"); err == nil && usage.Available <= usage.Blocks {
+	if usage, err := statFS("/"); err == nil && usage.Available <= usage.Blocks {
 		value.DiskPercent = boundedPercent(usage.Blocks-usage.Available, usage.Blocks)
 	}
-	countRaw, countErr := c.readFile("/proc/sys/net/netfilter/nf_conntrack_count")
-	maxRaw, maxErr := c.readFile("/proc/sys/net/netfilter/nf_conntrack_max")
+	countRaw, countErr := readFile("/proc/sys/net/netfilter/nf_conntrack_count")
+	maxRaw, maxErr := readFile("/proc/sys/net/netfilter/nf_conntrack_max")
 	if countErr == nil && maxErr == nil {
 		count, countOK := parseSingleUint(countRaw)
 		maximum, maxOK := parseSingleUint(maxRaw)
