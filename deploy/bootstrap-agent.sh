@@ -50,7 +50,7 @@ fi
 printf '%s  %s\n' "$digest" "$temp/release.tar.gz" | sha256sum --check --status || fail 'Release checksum mismatch; nothing installed'
 # Archives contain only this allowlist of regular, flat, nonduplicate files.
 tar -tzf "$temp/release.tar.gz" > "$temp/names"
-awk 'BEGIN {ok=1} !/^(reladock|reladock-admin|reladock-agent|reladock-dataplane|reladock\.service|reladock-agent\.service|reladock-agent-apply\.service|control\.env\.example|agent\.env\.example|install-linux\.sh|bootstrap-agent\.sh|SHA256SUMS|RELEASE\.json|DEPLOYMENT\.md)$/ {ok=0} END {exit !ok}' "$temp/names" || fail 'Unsafe archive paths'
+awk 'BEGIN {ok=1} !/^(reladock|reladock-admin|reladock-agent|reladock-dataplane|reladock-updater|reladock\.service|reladock-agent\.service|reladock-agent-apply\.service|reladock-updater\.service|reladock-updater\.timer|control\.env\.example|agent\.env\.example|install-linux\.sh|bootstrap-agent\.sh|SHA256SUMS|RELEASE\.json|DEPLOYMENT\.md)$/ {ok=0} END {exit !ok}' "$temp/names" || fail 'Unsafe archive paths'
 [ -z "$(sort "$temp/names" | uniq -d)" ] || fail 'Duplicate archive entries'
 tar -tvzf "$temp/release.tar.gz" | awk 'substr($0,1,1)!="-" {bad=1} END {exit bad}' || fail 'Archive contains non-regular entries'
 mkdir "$temp/release"
@@ -62,6 +62,7 @@ if ! id reladock >/dev/null 2>&1; then useradd --system --user-group --home-dir 
 install -d -o root -g reladock -m 0750 /etc/reladock
 install -o root -g root -m 0755 "$temp/release/reladock-agent" /opt/reladock/reladock-agent
 install -o root -g root -m 0755 "$temp/release/reladock-dataplane" /opt/reladock/reladock-dataplane
+install -o root -g root -m 0755 "$temp/release/reladock-updater" /opt/reladock/reladock-updater
 # Token travels over stdin, never argv, environment, URL or a persistent file.
 /opt/reladock/reladock-agent enroll --bootstrap-origin "$origin" --pki /etc/reladock/node-pki --env-file /etc/reladock/agent.env || fail 'Enrollment failed. Private enrollment state retained; see recovery instructions.'
 chown reladock:reladock /etc/reladock/node-pki /etc/reladock/node-pki/*
@@ -69,7 +70,11 @@ chmod 0700 /etc/reladock/node-pki
 chmod 0600 /etc/reladock/node-pki/* /etc/reladock/agent.env
 install -o root -g root -m 0644 "$temp/release/reladock-agent.service" /etc/systemd/system/reladock-agent.service
 install -o root -g root -m 0644 "$temp/release/reladock-agent-apply.service" /etc/systemd/system/reladock-agent-apply.service
+install -o root -g root -m 0644 "$temp/release/reladock-updater.service" /etc/systemd/system/reladock-updater.service
+install -o root -g root -m 0644 "$temp/release/reladock-updater.timer" /etc/systemd/system/reladock-updater.timer
 systemctl daemon-reload
 systemctl enable --now reladock-agent
 systemctl is-active --quiet reladock-agent || fail 'Agent failed to start. Enrollment retained; inspect journalctl -u reladock-agent'
+systemctl enable --now reladock-updater.timer
+systemctl is-active --quiet reladock-updater.timer || fail 'Updater timer failed to start. Agent remains installed; inspect journalctl -u reladock-updater.timer'
 echo 'Agent started in validation-only mode. Check contact and configuration results in the console. Forwarding is NOT enabled.'

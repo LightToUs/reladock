@@ -15,3 +15,18 @@ test('release packaging produces a flat pinned asset with independently verifiab
  const listing=spawnSync('tar',['-tzf',asset.path],{encoding:'utf8'});assert.equal(listing.status,0);assert.deepEqual(listing.stdout.trim().split('\n').sort(),['SHA256SUMS','reladock-agent']);
  await assert.rejects(()=>packRelease(dir,'0.7.0','arm64',['../escape']));
 });
+
+test('production release manifest includes the hardened root updater',async()=>{
+ const {releaseFiles}=await import('../scripts/release-package.mjs');
+ assert.deepEqual(releaseFiles.filter(name=>name.includes('updater')),['reladock-updater','reladock-updater.service','reladock-updater.timer']);
+ assert.equal(new Set(releaseFiles).size,releaseFiles.length);
+ const service=await readFile(join(process.cwd(),'deploy','reladock-updater.service'),'utf8');
+ assert.match(service,/^ExecStart=\/opt\/reladock\/reladock-updater$/m);
+ assert.match(service,/^User=root$/m);
+ assert.match(service,/^Group=reladock$/m);
+ assert.match(service,/^ProtectSystem=strict$/m);
+ assert.match(service,/^CapabilityBoundingSet=$/m);
+ assert.doesNotMatch(service,/CAP_NET_ADMIN|bash|sh -c/);
+ const timer=await readFile(join(process.cwd(),'deploy','reladock-updater.timer'),'utf8');
+ assert.match(timer,/^RandomizedDelaySec=/m);
+});

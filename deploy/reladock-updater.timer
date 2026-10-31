@@ -1,0 +1,12 @@
+[Unit]
+Description=Check for an authorized RelaDock Agent upgrade
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=60
+Persistent=true
+Unit=reladock-updater.service
+
+[Install]
+WantedBy=timers.target
