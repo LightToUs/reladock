@@ -45,6 +45,9 @@ var migration20SQL string
 //go:embed migration21.sql
 var migration21SQL string
 
+//go:embed migration22.sql
+var migration22SQL string
+
 //go:embed migration2.sql
 var migration2SQL string
 
@@ -84,7 +87,7 @@ var migration14SQL string
 //go:embed migration16.sql
 var migration16SQL string
 
-const SchemaVersion = 21
+const SchemaVersion = 22
 
 func Open(ctx context.Context, url string) (*Store, error) {
 	return OpenWithOptions(ctx, url, StoreOptions{})
@@ -326,6 +329,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("migration 21: %w", err)
 		}
 		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(21)"); err != nil {
+			return err
+		}
+	}
+	if version < 22 {
+		if _, err = tx.Exec(ctx, migration22SQL); err != nil {
+			return fmt.Errorf("migration 22: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(22)"); err != nil {
 			return err
 		}
 	}

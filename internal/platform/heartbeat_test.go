@@ -188,11 +188,11 @@ func TestAdminNodesExposeAgentHeartbeatWithoutCredentialMaterial(t *testing.T) {
 		}
 	}
 	if err := s.Migrate(ctx); err != nil {
-		t.Fatalf("schema v21 rerun: %v", err)
+		t.Fatalf("schema v22 rerun: %v", err)
 	}
 	var version int
-	var rotationsTable, upgradesTable bool
-	if err := s.pool.QueryRow(ctx, "SELECT max(version),(to_regclass('node_certificate_rotations') IS NOT NULL),(to_regclass('node_agent_upgrades') IS NOT NULL) FROM schema_migrations").Scan(&version, &rotationsTable, &upgradesTable); err != nil || version != SchemaVersion || !rotationsTable || !upgradesTable {
-		t.Fatalf("schema version/tables: version=%d rotations=%v upgrades=%v err=%v", version, rotationsTable, upgradesTable, err)
+	var rotationsTable, upgradesTable, retirementsTable, attestationsTable bool
+	if err := s.pool.QueryRow(ctx, "SELECT max(version),(to_regclass('node_certificate_rotations') IS NOT NULL),(to_regclass('node_agent_upgrades') IS NOT NULL),(to_regclass('endpoint_retirements') IS NOT NULL),(to_regclass('node_drain_attestations') IS NOT NULL) FROM schema_migrations").Scan(&version, &rotationsTable, &upgradesTable, &retirementsTable, &attestationsTable); err != nil || version != SchemaVersion || !rotationsTable || !upgradesTable || !retirementsTable || !attestationsTable {
+		t.Fatalf("schema version/tables: version=%d rotations=%v upgrades=%v retirements=%v attestations=%v err=%v", version, rotationsTable, upgradesTable, retirementsTable, attestationsTable, err)
 	}
 }

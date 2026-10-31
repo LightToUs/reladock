@@ -175,6 +175,14 @@ func TestUpgradeReissuesSnapshotWithKernelEntitlementMetadata(t *testing.T) {
 	// Restore this test's isolated schema to v16, including reversing all newer
 	// additive objects, so the migration runner sees a faithful upgrade source.
 	if _, e = s.pool.Exec(ctx, `DELETE FROM schema_migrations WHERE version>=17;
+DROP TABLE node_drain_attestations;
+ALTER TABLE endpoint_allocations DROP COLUMN predecessor_retirement_id;
+DROP TABLE endpoint_retirements;
+DROP TRIGGER endpoint_allocation_identity_immutable ON endpoint_allocations;
+DROP FUNCTION endpoint_allocation_identity_immutable();
+ALTER TABLE endpoint_allocations DROP COLUMN allocation_id;
+ALTER TABLE nodes DROP CONSTRAINT nodes_status_check,
+ ADD CONSTRAINT nodes_status_check CHECK (status IN ('unprovisioned','ready','maintenance'));
 DROP TABLE node_agent_upgrades,node_certificate_rotations,node_bootstrap,node_preflight;
 ALTER TABLE nodes DROP CONSTRAINT nodes_agent_rotation_consistent,
  DROP COLUMN agent_heartbeat_at,
