@@ -106,6 +106,39 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 			respond(w, 200, map[string]bool{"ok": true})
 			return
 		}
+		if r.URL.Path == "/agent/upgrade/claim" {
+			var input struct {
+				Arch           string `json:"arch"`
+				CurrentVersion string `json:"currentVersion"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			claim, claimErr := store.ClaimAgentUpgrade(ctx, id, fingerprint, input.Arch, input.CurrentVersion)
+			if claimErr != nil {
+				failure(w, claimErr)
+				return
+			}
+			if claim == nil {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			respond(w, http.StatusOK, claim)
+			return
+		}
+		if r.URL.Path == "/agent/upgrade/report" {
+			var report platform.UpgradeReport
+			if !decode(w, r, &report) {
+				return
+			}
+			value, reportErr := store.ReportAgentUpgrade(ctx, id, fingerprint, report)
+			if reportErr != nil {
+				failure(w, reportErr)
+				return
+			}
+			respond(w, http.StatusOK, value)
+			return
+		}
 		if r.URL.Path == "/agent/config/claim" {
 			job, err := store.ClaimConfig(ctx, id, r.Header.Get("X-RelaDock-Agent-Version"), fingerprint)
 			if err != nil {

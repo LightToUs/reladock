@@ -61,6 +61,32 @@ func (s *server) serveAdmin(w http.ResponseWriter, r *http.Request, who platform
 			return
 		}
 		id, action := parts[0], parts[1]
+		if r.Method == "POST" && (action == "upgrade" || action == "upgrade-cancel") {
+			var input struct {
+				Revision int64 `json:"revision"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			var value platform.AgentUpgrade
+			var err error
+			if action == "upgrade" {
+				if s.bootstrap == nil || !s.bootstrap.Config.ReleaseEnabled() {
+					s.bootstrapUnavailable(w)
+					return
+				}
+				config := s.bootstrap.Config
+				value, err = s.store.RequestAgentUpgrade(ctx, who, id, input.Revision, platform.ReleaseTarget{Version: config.Version, AMD64SHA256: config.AMD64SHA256, ARM64SHA256: config.ARM64SHA256})
+			} else {
+				value, err = s.store.CancelAgentUpgrade(ctx, who, id, input.Revision)
+			}
+			if err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusOK, value)
+			return
+		}
 		if s.adminBootstrap(w, r, who, id, action) {
 			return
 		}
