@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"time"
 
+	"reladock/internal/buildinfo"
 	"reladock/internal/platform"
 )
 
@@ -278,11 +279,7 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 		client.Timeout = 20 * time.Second
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	version := "validation-only/0.8.0"
-	if c.Applier != nil {
-		version = "apply-opt-in/0.8.0"
-	}
-	req.Header.Set("X-RelaDock-Agent-Version", version)
+	req.Header.Set("X-RelaDock-Agent-Version", buildinfo.Current())
 	return client.Do(req)
 }
 func (c *Client) post(ctx context.Context, job platform.ConfigJob, suffix string, report platform.ConfigReport) error {

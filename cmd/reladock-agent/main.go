@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"reladock/internal/agent"
+	"reladock/internal/buildinfo"
 	"reladock/internal/platform"
 )
 
@@ -103,10 +104,8 @@ func main() {
 	}
 	startedAt := time.Now().UTC()
 	mode := "validation"
-	version := "validation-only/0.8.0"
 	if *apply {
 		mode = "apply"
-		version = "apply-opt-in/0.8.0"
 	}
 	hooks := agent.RuntimeHooks{Preflight: func(parent context.Context) error {
 		// Contact and inspection are distinct from configuration/application health.
@@ -128,7 +127,7 @@ func main() {
 		defer cancel()
 		current := credentials.Current()
 		rotationState, rotationError := credentials.RotationStatus()
-		return runner.ReportHeartbeat(activityCtx, platform.AgentHeartbeat{Version: version, Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError})
+		return runner.ReportHeartbeat(activityCtx, platform.AgentHeartbeat{Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError})
 	}, Renewal: func(parent context.Context) error {
 		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
 		defer cancel()

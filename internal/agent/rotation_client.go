@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"reladock/internal/buildinfo"
 	"reladock/internal/platform"
 )
 
@@ -73,7 +74,7 @@ func (c *Client) Activate(ctx context.Context, pending *tls.Certificate) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-RelaDock-Agent-Version", "rotation/0.8.0")
+	req.Header.Set("X-RelaDock-Agent-Version", buildinfo.Current())
 	response, err := client.Do(req)
 	if err != nil {
 		return errors.New("certificate activation connection failed")
