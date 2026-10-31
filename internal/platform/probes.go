@@ -17,6 +17,7 @@ import (
 // MaxProbeReportAge bounds first receipt using the database clock. Exact latest
 // replays remain idempotent, but still require current credentials/configuration.
 const MaxProbeReportAge = 5 * time.Minute
+const MaxProbeFutureSkew = 5 * time.Second
 const maxProbeLatencyMillis = 11000.0
 
 var probeRuleID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -101,7 +102,10 @@ func (s *Store) ReportProbe(ctx context.Context, nodeID string, result probe.Res
 	}
 	// Agent observation and database ACK timestamps have independent clocks.
 	// The applied snapshot above is the authority, not cross-clock time ordering.
-	if result.ObservedAt.After(now) {
+	// Producer and database clocks are independently synchronized. Permit only
+	// a small bounded lead so zero-I/O UDP metadata is not rejected for normal
+	// millisecond skew; ordering and age checks below still fence replay.
+	if result.ObservedAt.After(now.Add(MaxProbeFutureSkew)) {
 		return ErrConflict
 	}
 	if len(payload) > 2<<20 {

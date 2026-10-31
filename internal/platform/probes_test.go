@@ -182,6 +182,20 @@ func TestProbeNanosecondOrderingDoesNotRoundIntoReplay(t *testing.T) {
 	}
 }
 
+func TestProbeReportAllowsOnlyBoundedProducerClockSkew(t *testing.T) {
+	s, _, _, result, credential := probeFixture(t)
+	result.ObservedAt = time.Now().UTC().Add(MaxProbeFutureSkew / 2)
+	if err := s.ReportProbe(context.Background(), "hk-01", result, credential); err != nil {
+		t.Fatalf("bounded producer clock skew rejected: %v", err)
+	}
+	tooFar := result
+	tooFar.ObservedAt = time.Now().UTC().Add(2 * MaxProbeFutureSkew)
+	tooFar.Status = probe.TargetUnreachable
+	if err := s.ReportProbe(context.Background(), "hk-01", tooFar, credential); err != ErrConflict {
+		t.Fatalf("excessive producer clock skew accepted: %v", err)
+	}
+}
+
 func TestProbeReportRejectsIdentityTimeAndStatusTampering(t *testing.T) {
 	s, _, _, original, credential := probeFixture(t)
 	ctx := context.Background()
