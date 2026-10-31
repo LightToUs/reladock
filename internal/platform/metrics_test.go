@@ -23,7 +23,7 @@ func TestOperationalMetricsCountsCurrentFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Nodes["ready"] != 1 || m.AgentContacts["stale"] != 1 || m.Rules["pending-agent"] != 1 || m.CurrentDeliveries["failed"] != 1 || m.CurrentDeliveries["superseded"] != 0 {
+	if m.Nodes["unprovisioned"] != 1 || m.AgentContacts["stale"] != 1 || m.Rules["pending-agent"] != 1 || m.CurrentDeliveries["failed"] != 1 || m.CurrentDeliveries["superseded"] != 0 {
 		t.Fatalf("snapshot: %+v", m)
 	}
 	if m.OpenIncidents["contact-stale"] != 1 || m.OpenIncidents["config-failed"] != 1 || m.NotificationOutbox["pending"] < 2 {

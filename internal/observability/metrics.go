@@ -34,10 +34,11 @@ type Registry struct {
 	snapshot     SnapshotFunc
 	worker       [3]workerCounts
 	scrapeErrors atomic.Uint64
+	scrapeGate   chan struct{}
 }
 
 func New(version string, snapshot SnapshotFunc) *Registry {
-	return &Registry{version: version, snapshot: snapshot}
+	return &Registry{version: version, snapshot: snapshot, scrapeGate: make(chan struct{}, 1)}
 }
 func workerIndex(worker Worker) (int, bool) {
 	for i, v := range workers {
@@ -130,6 +131,14 @@ func (r *Registry) Handler() http.Handler {
 		if request.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		select {
+		case r.scrapeGate <- struct{}{}:
+			defer func() { <-r.scrapeGate }()
+		default:
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		ctx, cancel := context.WithTimeout(request.Context(), 3*time.Second)

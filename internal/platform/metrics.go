@@ -83,7 +83,7 @@ func (s *Store) OperationalMetrics(ctx context.Context, staleAfter time.Duration
 		counts metricCounts
 	}{
 		{`SELECT status,count(*) FROM nodes GROUP BY status`, nil, nodes},
-		{`SELECT CASE WHEN certificate_fingerprint IS NULL THEN 'unenrolled' WHEN last_seen_at IS NULL THEN 'never-seen' WHEN last_seen_at<clock_timestamp()-$1*interval '1 second' THEN 'stale' ELSE 'recent' END,count(*) FROM nodes GROUP BY 1`, []any{staleAfter.Seconds()}, contacts},
+		{`SELECT CASE WHEN certificate_fingerprint IS NULL THEN 'unenrolled' WHEN last_seen_at IS NULL THEN 'never-seen' WHEN last_seen_at<now()-$1*interval '1 second' THEN 'stale' ELSE 'recent' END,count(*) FROM nodes GROUP BY 1`, []any{staleAfter.Seconds()}, contacts},
 		{`SELECT status,count(*) FROM relay_rules GROUP BY status`, nil, rules},
 		{`SELECT o.state,count(*) FROM nodes n JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation GROUP BY o.state`, nil, deliveries},
 		{`SELECT kind,count(*) FROM operations_incidents WHERE state='open' GROUP BY kind`, nil, incidents},

@@ -1,6 +1,6 @@
 # 独立目标与合作 endpoint 探测
 
-`internal/probe/` 已实现真实 TCP connect 与显式允许的 HTTP/S endpoint 请求。包只返回观测结果，不修改规则、不记录业务载荷、不启动服务或调度器；尚未接入 platform、web、Agent、数据库、ACK 或告警。不得把这个独立组件视为已完成规则端到端健康验收。
+`internal/probe/` 已实现真实 TCP connect 与显式允许的 HTTP/S endpoint 请求。当前 Agent 已把 TCP/UDP 目标观测接入独立 30 秒活动，每轮最多轮转 4 条当前配置规则，并通过节点 mTLS 上报；平台按节点身份、当前 applied generation、规则/租户/目标绑定、时间与重放顺序保存，企业和后台只读展示。UDP 仍固定为 `unknown`，当前 Agent 不调度合作 HTTP/S endpoint。目标观测不修改规则、不记录业务载荷，也不形成端到端健康或自动告警结论。
 
 ## 接线接口
 
@@ -31,7 +31,7 @@ type Request struct {
 - HTTP/S：`Type` 为 `probe.HTTP`，设置 `Endpoint`；目标主机和端口字段必须为空。endpoint 必须与 `Config.AllowedEndpoints` 中的完整字符串精确相等；同一个 host 的其他路径、端口或 scheme 不自动获准。
 - `Timeout=0` 使用 `DefaultTimeout`（3 秒）；非零值须大于 0 且不超过 `MaxTimeout`（10 秒）。调用方更短的 context deadline 优先。总预算覆盖 DNS、连接、TLS、响应头和响应体读取。
 
-主代理应在实际探测位置执行并限制调度并发及频率。包内不提供自动周期、重试、跨节点任务分发或持久化。
+底层包本身仍不提供自动周期、重试、跨节点任务分发或持久化；这些边界由当前 Agent Supervisor、mTLS 报告端点和 PostgreSQL 接线承担。探测活动独立退避，失败不能停止本地计量或配置轮询。
 
 ## 结果与语义
 

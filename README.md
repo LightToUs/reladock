@@ -4,7 +4,7 @@ v0.9.0 增加 Agent 长期运行可靠性、受控升级和安全退役：配置
 
 网络中转与后续企业组网平台。只透传客户业务和 VPN 协议流量，不提供 VPN 订阅或终端用户管理。
 
-当前后端为 **Go + PostgreSQL**，包含企业账户、邀请与角色、API Key、TCP/UDP 规则、平台管理、mTLS 配置交付、逐规则计量、钱包账本、规则套餐和告警工单。Linux 显式应用模式已组合 nftables 转发、tc 单规则双向合计限速、持久 WAL、内核额度/到期保护与 applied ACK。Node.js 只用于本地脚本。加密恢复包创建和隔离校验工具已实现；真实生产 VPS、支付、离机复制及替换主机演练仍需验收，不能直接宣称生产就绪。
+当前后端为 **Go + PostgreSQL**，包含企业账户、邀请与角色、API Key、TCP/UDP 规则、平台管理、mTLS 配置交付、逐规则计量、钱包账本、规则套餐、告警工单和默认关闭的回环 Prometheus 指标端口。Linux 显式应用模式已组合 nftables 转发、tc 单规则双向合计限速、持久 WAL、内核额度/到期保护与 applied ACK。Node.js 只用于本地脚本。加密恢复包创建和隔离校验工具已实现；真实生产 VPS、支付、离机复制及替换主机演练仍需验收，不能直接宣称生产就绪。
 
 源码仓库：[LightToUs/reladock](https://github.com/LightToUs/reladock)。运行密码、证书、备份和运行状态不进入仓库。
 

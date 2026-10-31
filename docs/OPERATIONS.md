@@ -1,6 +1,14 @@
 # Operations and support (migrations v8, v15 and v20)
 
-This subsystem persists control-channel incidents and support conversations. It does not probe forwarding, send email, or measure revenue, costs, or profit. A recent Agent contact or validated configuration never establishes data-plane health.
+This subsystem persists control-channel incidents and support conversations. It does not turn target probes into forwarding health, send email, or measure revenue, costs, or profit. A recent Agent contact or validated configuration never establishes data-plane health.
+
+## Prometheus operational metrics
+
+Set `METRICS_LISTEN_ADDRESS=127.0.0.1:9090` to enable a separate loopback-only listener. The value must be a literal loopback IP with a non-zero port and must differ from the browser and Agent listeners. Only `GET /metrics` and `HEAD /metrics` exist; connect Prometheus or a local collector directly rather than publishing this listener through the customer-facing reverse proxy.
+
+The endpoint exports aggregate, low-cardinality facts: database availability, node lifecycle, authenticated Agent contact recency, rule state, current desired-generation delivery state, open incident kind, notification state, Agent upgrade state, endpoint retirement state, frozen-wallet count, and fixed worker success/error counters. It never emits tenant, node, rule, target, IP, certificate, email, token, raw error or protocol payload labels. A PostgreSQL failure emits `reladock_database_up 0` in a valid body and increments `reladock_metrics_scrape_errors_total`; it does not return a cached success snapshot.
+
+Conservative alerts include `reladock_database_up == 0`, any increase in worker errors, stale Agent contacts, failed current deliveries, open incidents, exhausted notifications, failed/rolled-back upgrades and failed retirement jobs. Alerting on `applied`, `recent` or target reachability as “service healthy” is incorrect. Production thresholds, Prometheus retention, Grafana dashboards and alert routing still require environment acceptance.
 
 ## Parent integration
 

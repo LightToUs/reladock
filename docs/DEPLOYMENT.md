@@ -64,6 +64,12 @@
 
 工具不上传备份、不托管 age 私钥、不自动把暂存状态复制到替换主机。必须另行完成跨故障域复制、保留策略、密钥恢复和实际替换主机演练，再记录 RPO/RTO；本地加密包校验不能替代生产灾难恢复验收。不要在业务数据库上直接尝试恢复或执行测试套件。
 
+## 运维指标
+
+生产可在 `control.env` 设置 `METRICS_LISTEN_ADDRESS=127.0.0.1:9090`，由同机 Prometheus/collector 抓取 `http://127.0.0.1:9090/metrics`。监听默认关闭，配置为公网、主机名、控制台地址或 Agent 地址都会拒绝启动；不要通过公网反向代理暴露。指标只包含固定标签的聚合控制事实，数据库错误时明确输出 `reladock_database_up 0`，不使用旧快照。
+
+建议至少告警数据库不可用、worker error 增长、Agent stale、当前交付 failed、open incident、通知 exhausted、升级 failed/rolled-back 和 retirement failed。`recent`、`applied`、TCP 目标可达均不能作为客户协议健康或数据面 SLA。Prometheus/Grafana 实际部署、留存、通知路由和阈值仍需生产验收。
+
 ## 上线门禁
 
 - HTTPS、管理员授权撤销、租户隔离、邀请与 API Key 实测。

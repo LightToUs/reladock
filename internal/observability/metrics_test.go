@@ -110,3 +110,32 @@ func TestWorkerCountersAreConcurrentAndRejectUnknown(t *testing.T) {
 		t.Fatalf("counters: %s", body)
 	}
 }
+
+func TestMetricsAllowsOnlyOneDatabaseScrapeAtATime(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int64
+	r := New("dev", func(context.Context) (platform.OperationalMetrics, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return fixture(), nil
+	})
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		r.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	}()
+	<-entered
+	second := httptest.NewRecorder()
+	r.Handler().ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if second.Code != http.StatusServiceUnavailable {
+		t.Fatalf("concurrent scrape status=%d", second.Code)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("concurrent database calls=%d", calls.Load())
+	}
+	close(release)
+	<-firstDone
+}
