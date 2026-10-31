@@ -25,12 +25,32 @@ type ConfigRule struct {
 	UsageDownloadBytes int64      `json:"usageDownloadBytes,omitempty"`
 	DevelopmentBypass  bool       `json:"developmentBypass,omitempty"`
 }
+type ConfigAllocation struct {
+	ID                      string `json:"id"`
+	RuleID                  string `json:"ruleId"`
+	Protocol                string `json:"protocol"`
+	Address                 string `json:"address"`
+	Port                    int    `json:"port"`
+	PredecessorRetirementID string `json:"predecessorRetirementId,omitempty"`
+}
+type ConfigRetirement struct {
+	ID                   string `json:"id"`
+	AllocationID         string `json:"allocationId"`
+	RuleID               string `json:"ruleId"`
+	Protocol             string `json:"protocol"`
+	Address              string `json:"address"`
+	Port                 int    `json:"port"`
+	QuarantineGeneration int64  `json:"quarantineGeneration"`
+	State                string `json:"state"`
+}
 type NodeConfig struct {
-	SchemaVersion int          `json:"schemaVersion"`
-	NodeID        string       `json:"nodeId"`
-	Generation    int64        `json:"generation"`
-	ListenAddress string       `json:"listenAddress"`
-	Rules         []ConfigRule `json:"rules"`
+	SchemaVersion int                `json:"schemaVersion"`
+	NodeID        string             `json:"nodeId"`
+	Generation    int64              `json:"generation"`
+	ListenAddress string             `json:"listenAddress"`
+	Rules         []ConfigRule       `json:"rules"`
+	Allocations   []ConfigAllocation `json:"allocations"`
+	Retirements   []ConfigRetirement `json:"retirements"`
 }
 type ConfigJob struct {
 	ID         string          `json:"id"`
@@ -55,12 +75,21 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 	cfg.SchemaVersion = 1
 	cfg.NodeID = nodeID
 	cfg.Rules = []ConfigRule{}
+	cfg.Allocations = []ConfigAllocation{}
+	cfg.Retirements = []ConfigRetirement{}
 	if err := tx.QueryRow(ctx, "UPDATE nodes SET desired_generation=desired_generation+1 WHERE id=$1 RETURNING desired_generation,host(listen_address)", nodeID).Scan(&cfg.Generation, &cfg.ListenAddress); err != nil {
 		return err
 	}
 	var entitlementSchema bool
 	if err := tx.QueryRow(ctx, "SELECT to_regclass('subscription_usage') IS NOT NULL").Scan(&entitlementSchema); err != nil {
 		return err
+	}
+	var retirementSchema bool
+	if err := tx.QueryRow(ctx, "SELECT to_regclass('endpoint_retirements') IS NOT NULL").Scan(&retirementSchema); err != nil {
+		return err
+	}
+	if retirementSchema {
+		cfg.SchemaVersion = 2
 	}
 	query := `SELECT id,tenant_id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,desired_version,status,''::text,false,NULL::timestamptz,0::bigint,0::bigint,0::bigint FROM relay_rules WHERE node_id=$1 AND status<>'deleted' ORDER BY id`
 	if entitlementSchema {
@@ -96,6 +125,45 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 	rows.Close()
 	if err != nil {
 		return err
+	}
+	if retirementSchema {
+		if _, err = tx.Exec(ctx, "UPDATE endpoint_retirements SET quarantine_generation=$2 WHERE node_id=$1 AND state='waiting-removal'", nodeID, cfg.Generation); err != nil {
+			return err
+		}
+		allocationRows, queryErr := tx.Query(ctx, `SELECT e.allocation_id::text,e.rule_id::text,e.protocol,host(e.listen_address),e.listen_port,COALESCE(e.predecessor_retirement_id::text,'') FROM endpoint_allocations e JOIN relay_rules r ON r.id=e.rule_id AND r.tenant_id=e.tenant_id WHERE e.node_id=$1 AND r.status<>'deleted' ORDER BY e.protocol,e.listen_port,e.allocation_id`, nodeID)
+		if queryErr != nil {
+			return queryErr
+		}
+		for allocationRows.Next() {
+			var allocation ConfigAllocation
+			if err = allocationRows.Scan(&allocation.ID, &allocation.RuleID, &allocation.Protocol, &allocation.Address, &allocation.Port, &allocation.PredecessorRetirementID); err != nil {
+				allocationRows.Close()
+				return err
+			}
+			cfg.Allocations = append(cfg.Allocations, allocation)
+		}
+		err = allocationRows.Err()
+		allocationRows.Close()
+		if err != nil {
+			return err
+		}
+		retirementRows, queryErr := tx.Query(ctx, `SELECT id::text,allocation_id::text,rule_id::text,protocol,host(listen_address),listen_port,quarantine_generation,state FROM endpoint_retirements WHERE node_id=$1 AND state<>'released' ORDER BY protocol,listen_port,id`, nodeID)
+		if queryErr != nil {
+			return queryErr
+		}
+		for retirementRows.Next() {
+			var retirement ConfigRetirement
+			if err = retirementRows.Scan(&retirement.ID, &retirement.AllocationID, &retirement.RuleID, &retirement.Protocol, &retirement.Address, &retirement.Port, &retirement.QuarantineGeneration, &retirement.State); err != nil {
+				retirementRows.Close()
+				return err
+			}
+			cfg.Retirements = append(cfg.Retirements, retirement)
+		}
+		err = retirementRows.Err()
+		retirementRows.Close()
+		if err != nil {
+			return err
+		}
 	}
 	payload, err := json.Marshal(cfg)
 	if err != nil {
@@ -142,6 +210,13 @@ func (s *Store) ClaimConfig(ctx context.Context, nodeID, agentVersion string, cr
 		return nil, err
 	}
 	if applying {
+		return nil, tx.Commit(ctx)
+	}
+	var purging bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM endpoint_retirements WHERE node_id=$1 AND state='purging')", nodeID).Scan(&purging); err != nil {
+		return nil, err
+	}
+	if purging {
 		return nil, tx.Commit(ctx)
 	}
 	if _, err = tx.Exec(ctx, "UPDATE config_outbox SET state='failed',error_code='lease-exhausted',reported_at=now() WHERE node_id=$1 AND state='leased' AND lease_until<=now() AND attempts>=5", nodeID); err != nil {
@@ -249,12 +324,31 @@ func (s *Store) ReportConfig(ctx context.Context, nodeID, jobID string, report C
 				return err
 			}
 		}
+		for _, allocation := range cfg.Allocations {
+			if allocation.PredecessorRetirementID == "" {
+				continue
+			}
+			result, updateErr := tx.Exec(ctx, `UPDATE endpoint_retirements SET quarantine_consumed_at=COALESCE(quarantine_consumed_at,now()),consumed_by_allocation_id=COALESCE(consumed_by_allocation_id,$2::uuid) WHERE id=$1 AND state='released' AND allocation_id<>$2::uuid AND (consumed_by_allocation_id IS NULL OR consumed_by_allocation_id=$2::uuid)`, allocation.PredecessorRetirementID, allocation.ID)
+			if updateErr != nil {
+				return updateErr
+			}
+			if result.RowsAffected() != 1 {
+				return ErrConflict
+			}
+		}
 		// Absence from a full snapshot acknowledges removal, but allocation
 		// reuse remains fenced until explicit conntrack reconciliation.
 		if _, err = tx.Exec(ctx, "UPDATE relay_rules SET applied_version=desired_version,applied_status='deleted' WHERE node_id=$1 AND status='deleted' AND delivery_generation<=$2 AND id<>ALL($3::uuid[])", nodeID, generation, ids); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, "UPDATE nodes SET applied_generation=GREATEST(applied_generation,$2),validated_generation=GREATEST(validated_generation,$2),last_seen_at=now() WHERE id=$1", nodeID, generation); err != nil {
+			return err
+		}
+		retirementIDs := make([]string, 0, len(cfg.Retirements))
+		for _, retirement := range cfg.Retirements {
+			retirementIDs = append(retirementIDs, retirement.ID)
+		}
+		if _, err = tx.Exec(ctx, `UPDATE endpoint_retirements SET state='queued',error_code='',next_attempt_at=now() WHERE node_id=$1 AND state='waiting-removal' AND quarantine_generation<=$2 AND id=ANY($3::uuid[])`, nodeID, generation, retirementIDs); err != nil {
 			return err
 		}
 	}

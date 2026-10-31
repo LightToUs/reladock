@@ -52,6 +52,12 @@ func (s *Store) BeginApplication(ctx context.Context, nodeID, jobID string, repo
 	if busy {
 		return ErrConflict
 	}
+	if e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM endpoint_retirements WHERE node_id=$1 AND state='purging')", nodeID).Scan(&busy); e != nil {
+		return e
+	}
+	if busy {
+		return ErrConflict
+	}
 	var cfg NodeConfig
 	if e = json.Unmarshal(payload, &cfg); e != nil {
 		return e

@@ -145,7 +145,13 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 		return Rule{}, err
 	}
 	for _, protocol := range protocols {
-		if _, err = tx.Exec(ctx, "INSERT INTO endpoint_allocations(node_id,listen_address,protocol,listen_port,rule_id,tenant_id) VALUES($1,$2,$3,$4,$5,$6)", input.NodeID, address, protocol, port, rule.ID, who.TenantID); err != nil {
+		var predecessor *string
+		if err = tx.QueryRow(ctx, `SELECT id::text FROM endpoint_retirements WHERE node_id=$1 AND listen_address=$2::inet AND protocol=$3 AND listen_port=$4 AND state='released' AND quarantine_consumed_at IS NULL FOR UPDATE`, input.NodeID, address, protocol, port).Scan(&predecessor); errors.Is(err, pgx.ErrNoRows) {
+			predecessor = nil
+		} else if err != nil {
+			return Rule{}, err
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO endpoint_allocations(node_id,listen_address,protocol,listen_port,rule_id,tenant_id,predecessor_retirement_id) VALUES($1,$2,$3,$4,$5,$6,$7)", input.NodeID, address, protocol, port, rule.ID, who.TenantID, predecessor); err != nil {
 			return Rule{}, err
 		}
 	}
@@ -226,6 +232,40 @@ func (s *Store) changeRuleState(ctx context.Context, tx pgx.Tx, tenantID, id, st
 		return Rule{}, false, err
 	}
 	if status == "deleted" {
+		var dispatched bool
+		if err = tx.QueryRow(ctx, "SELECT ever_dispatched FROM relay_rules WHERE id=$1", id).Scan(&dispatched); err != nil {
+			return Rule{}, false, err
+		}
+		if dispatched {
+			type heldAllocation struct {
+				allocationID, nodeID, address, protocol, tenantID string
+				port                                              int
+			}
+			var held []heldAllocation
+			rows, queryErr := tx.Query(ctx, `SELECT allocation_id::text,node_id,host(listen_address),protocol,listen_port,tenant_id::text FROM endpoint_allocations WHERE rule_id=$1 AND tenant_id=$2 ORDER BY protocol`, id, tenantID)
+			if queryErr != nil {
+				return Rule{}, false, queryErr
+			}
+			for rows.Next() {
+				var allocationID, allocationNode, listenAddress, protocol, allocationTenant string
+				var listenPort int
+				if err = rows.Scan(&allocationID, &allocationNode, &listenAddress, &protocol, &listenPort, &allocationTenant); err != nil {
+					rows.Close()
+					return Rule{}, false, err
+				}
+				held = append(held, heldAllocation{allocationID, allocationNode, listenAddress, protocol, allocationTenant, listenPort})
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return Rule{}, false, err
+			}
+			for _, allocation := range held {
+				if _, err = tx.Exec(ctx, `INSERT INTO endpoint_retirements(id,allocation_id,node_id,rule_id,tenant_id,listen_address,protocol,listen_port,quarantine_generation,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,0,'waiting-removal') ON CONFLICT(allocation_id) DO NOTHING`, newID(), allocation.allocationID, allocation.nodeID, id, allocation.tenantID, allocation.address, allocation.protocol, allocation.port); err != nil {
+					return Rule{}, false, err
+				}
+			}
+		}
 		if _, err = tx.Exec(ctx, "DELETE FROM endpoint_allocations WHERE rule_id=$1 AND tenant_id=$2 AND NOT EXISTS(SELECT 1 FROM relay_rules WHERE id=$1 AND ever_dispatched)", id, tenantID); err != nil {
 			return Rule{}, false, err
 		}

@@ -54,6 +54,9 @@ CREATE INDEX endpoint_retirements_rule
  ON endpoint_retirements(rule_id,created_at);
 CREATE INDEX endpoint_retirements_unconsumed
  ON endpoint_retirements(node_id,released_at) WHERE state='released' AND quarantine_consumed_at IS NULL;
+CREATE UNIQUE INDEX endpoint_retirements_one_unconsumed_tuple
+ ON endpoint_retirements(node_id,listen_address,protocol,listen_port)
+ WHERE state='released' AND quarantine_consumed_at IS NULL;
 
 ALTER TABLE endpoint_allocations
  ADD COLUMN predecessor_retirement_id uuid REFERENCES endpoint_retirements(id);

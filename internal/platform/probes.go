@@ -112,7 +112,7 @@ func (s *Store) ReportProbe(ctx context.Context, nodeID string, result probe.Res
 		return ErrConflict
 	}
 	var cfg NodeConfig
-	if json.Unmarshal(payload, &cfg) != nil || cfg.NodeID != nodeID || cfg.Generation != result.Generation || cfg.SchemaVersion != 1 {
+	if json.Unmarshal(payload, &cfg) != nil || cfg.NodeID != nodeID || cfg.Generation != result.Generation || (cfg.SchemaVersion != 1 && cfg.SchemaVersion != 2) {
 		return ErrConflict
 	}
 	matches := 0

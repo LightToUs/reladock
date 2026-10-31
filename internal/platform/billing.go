@@ -220,7 +220,7 @@ func (s *Store) ReportUsage(ctx context.Context, nodeID string, input UsageRepor
 			return receipt, ErrForbidden
 		}
 		var config NodeConfig
-		if err = json.Unmarshal(payload, &config); err != nil || config.SchemaVersion != 1 || config.NodeID != nodeID || config.Generation != input.ConfigGeneration {
+		if err = json.Unmarshal(payload, &config); err != nil || (config.SchemaVersion != 1 && config.SchemaVersion != 2) || config.NodeID != nodeID || config.Generation != input.ConfigGeneration {
 			return receipt, ErrForbidden
 		}
 		authorized := false

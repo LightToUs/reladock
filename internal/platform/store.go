@@ -336,6 +336,32 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err = tx.Exec(ctx, migration22SQL); err != nil {
 			return fmt.Errorf("migration 22: %w", err)
 		}
+		rows, queryErr := tx.Query(ctx, "SELECT id FROM nodes ORDER BY id")
+		if queryErr != nil {
+			return queryErr
+		}
+		ids := []string{}
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err = lockNode(ctx, tx, id); err != nil {
+				return err
+			}
+			if err = s.enqueueConfig(ctx, tx, id); err != nil {
+				return err
+			}
+		}
 		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(22)"); err != nil {
 			return err
 		}

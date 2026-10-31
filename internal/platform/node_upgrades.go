@@ -98,6 +98,13 @@ func (s *Store) RequestAgentUpgrade(ctx context.Context, who Identity, nodeID st
 	if err = lockNode(ctx, tx, nodeID); err != nil {
 		return AgentUpgrade{}, err
 	}
+	var retirementActive bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM endpoint_retirements WHERE node_id=$1 AND state<>'released')", nodeID).Scan(&retirementActive); err != nil {
+		return AgentUpgrade{}, err
+	}
+	if retirementActive {
+		return AgentUpgrade{}, ErrConflict
+	}
 
 	existing, err := scanAgentUpgrade(tx.QueryRow(ctx, `SELECT `+agentUpgradeColumns+` FROM node_agent_upgrades WHERE node_id=$1 AND target_version=$2 AND state=ANY($3) FOR UPDATE`, nodeID, target.Version, activeUpgradeStates))
 	if err == nil {
@@ -212,6 +219,13 @@ func (s *Store) ClaimAgentUpgrade(ctx context.Context, nodeID, fingerprint, arch
 	}
 	if err = checkNodeCredential(ctx, tx, nodeID, []string{fingerprint}); err != nil {
 		return nil, err
+	}
+	var retirementActive bool
+	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM endpoint_retirements WHERE node_id=$1 AND state<>'released')", nodeID).Scan(&retirementActive); err != nil {
+		return nil, err
+	}
+	if retirementActive {
+		return nil, tx.Commit(ctx)
 	}
 	var id, targetVersion, previousVersion, state, amd64, arm64 string
 	var leaseExpires *time.Time
