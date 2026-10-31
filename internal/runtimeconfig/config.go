@@ -14,11 +14,12 @@ type Config struct {
 	AllowUnentitledRules               bool
 	Address, Origin, CertFile, KeyFile string
 	AgentAddress, AgentTLSDir          string
+	MetricsAddress                     string
 	Bootstrap                          BootstrapConfig
 }
 
 func Load(get func(string) string) (Config, error) {
-	c := Config{Address: get("LISTEN_ADDRESS"), Origin: get("PUBLIC_ORIGIN"), CertFile: get("TLS_CERT_FILE"), KeyFile: get("TLS_KEY_FILE"), AgentAddress: get("AGENT_LISTEN_ADDRESS"), AgentTLSDir: get("AGENT_TLS_DIR")}
+	c := Config{Address: get("LISTEN_ADDRESS"), Origin: get("PUBLIC_ORIGIN"), CertFile: get("TLS_CERT_FILE"), KeyFile: get("TLS_KEY_FILE"), AgentAddress: get("AGENT_LISTEN_ADDRESS"), AgentTLSDir: get("AGENT_TLS_DIR"), MetricsAddress: get("METRICS_LISTEN_ADDRESS")}
 	allowUnentitled, err := LoadDevelopmentEntitlementBypass(get)
 	if err != nil {
 		return c, err
@@ -54,6 +55,9 @@ func Load(get func(string) string) (Config, error) {
 	}
 	if !validAddress(c.AgentAddress) || c.AgentTLSDir != "" && c.AgentAddress == c.Address {
 		return c, errors.New("invalid or conflicting AGENT_LISTEN_ADDRESS")
+	}
+	if c.MetricsAddress != "" && (!validAddress(c.MetricsAddress) || !loopback(c.MetricsAddress) || c.MetricsAddress == c.Address || c.MetricsAddress == c.AgentAddress) {
+		return c, errors.New("METRICS_LISTEN_ADDRESS must be a distinct literal loopback address")
 	}
 	if (c.CertFile == "") != (c.KeyFile == "") {
 		return c, errors.New("TLS_CERT_FILE and TLS_KEY_FILE are required together")

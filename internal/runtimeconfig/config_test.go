@@ -96,3 +96,30 @@ func TestDevelopmentAgentListenerMayRunWithoutRenewalSigner(t *testing.T) {
 		t.Fatalf("development mTLS-only config: %+v %v", c, err)
 	}
 }
+
+func TestMetricsListenerIsDisabledOrLoopbackAndDistinct(t *testing.T) {
+	c, err := Load(func(string) string { return "" })
+	if err != nil || c.MetricsAddress != "" {
+		t.Fatalf("default metrics: %+v %v", c, err)
+	}
+	for _, address := range []string{"0.0.0.0:9090", "192.0.2.10:9090", "localhost:9090", "127.0.0.1:3001", "127.0.0.1:3002", "bad"} {
+		_, err = Load(func(key string) string {
+			if key == "METRICS_LISTEN_ADDRESS" {
+				return address
+			}
+			return ""
+		})
+		if err == nil {
+			t.Fatalf("accepted metrics address %q", address)
+		}
+	}
+	c, err = Load(func(key string) string {
+		if key == "METRICS_LISTEN_ADDRESS" {
+			return "127.0.0.1:9090"
+		}
+		return ""
+	})
+	if err != nil || c.MetricsAddress != "127.0.0.1:9090" {
+		t.Fatalf("valid metrics: %+v %v", c, err)
+	}
+}

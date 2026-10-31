@@ -13,8 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"reladock/internal/buildinfo"
 	"reladock/internal/nodeauth"
 	"reladock/internal/notify"
+	"reladock/internal/observability"
 	"reladock/internal/payments"
 	"reladock/internal/platform"
 	"reladock/internal/runtimeconfig"
@@ -73,6 +75,9 @@ func main() {
 		log.Fatal("PostgreSQL startup failed; check DATABASE_URL and database availability")
 	}
 	defer store.Close()
+	metrics := observability.New(buildinfo.Current(), func(ctx context.Context) (platform.OperationalMetrics, error) {
+		return store.OperationalMetrics(ctx, platform.DefaultContactStaleAfter)
+	})
 	if cfg.AllowUnentitledRules {
 		log.Print("WARNING: development entitlement bypass enabled; rules may forward without an active plan, quota, or expiry")
 	}
@@ -88,19 +93,23 @@ func main() {
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if notificationSender.Enabled() {
-		go runNotifications(signals, store, notificationSender)
+		go runNotifications(signals, store, notificationSender, metrics)
 	}
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			maintenance, done := context.WithTimeout(signals, 25*time.Second)
-			if _, err := store.EnforceExpiredSubscriptions(maintenance, 100); err != nil && maintenance.Err() == nil {
+			_, subscriptionErr := store.EnforceExpiredSubscriptions(maintenance, 100)
+			if subscriptionErr != nil && maintenance.Err() == nil {
 				log.Print("subscription reconciliation failed")
 			}
-			if err := store.ReconcileIncidents(maintenance, platform.DefaultContactStaleAfter); err != nil && maintenance.Err() == nil {
+			_ = metrics.ObserveWorker(observability.WorkerSubscriptionReconcile, subscriptionErr)
+			incidentErr := store.ReconcileIncidents(maintenance, platform.DefaultContactStaleAfter)
+			if incidentErr != nil && maintenance.Err() == nil {
 				log.Print("incident reconciliation failed")
 			}
+			_ = metrics.ObserveWorker(observability.WorkerIncidentReconcile, incidentErr)
 			done()
 			select {
 			case <-signals.Done():
@@ -127,7 +136,12 @@ func main() {
 			}
 		}()
 	}
-	servers := []*http.Server{server}
+	type listener struct {
+		server           *http.Server
+		tls              bool
+		cert, key, label string
+	}
+	listeners := []listener{{server: server, tls: cfg.CertFile != "", cert: cfg.CertFile, key: cfg.KeyFile, label: "control"}}
 	if dir := cfg.AgentTLSDir; dir != "" {
 		tlsConfig, e := nodeauth.ServerTLS(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key"))
 		if e != nil {
@@ -137,22 +151,25 @@ func main() {
 		if nodeSigner != nil {
 			renewalSigner = nodeSigner.Sign
 		}
-		servers = append(servers, &http.Server{Addr: cfg.AgentAddress, Handler: web.NewAgent(store, renewalSigner), TLSConfig: tlsConfig, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024})
+		listeners = append(listeners, listener{server: &http.Server{Addr: cfg.AgentAddress, Handler: web.NewAgent(store, renewalSigner), TLSConfig: tlsConfig, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}, tls: true, label: "agent"})
 	}
-	failures := make(chan error, len(servers))
-	for i, srv := range servers {
-		go func(i int, srv *http.Server) {
-			if i == 0 {
-				if cfg.CertFile != "" {
-					failures <- srv.ListenAndServeTLS(cfg.CertFile, cfg.KeyFile)
-				} else {
-					failures <- srv.ListenAndServe()
-				}
-			} else {
-				log.Printf("Agent mTLS: https://%s (configuration, application receipts and metering)", srv.Addr)
-				failures <- srv.ListenAndServeTLS("", "")
+	if cfg.MetricsAddress != "" {
+		listeners = append(listeners, listener{server: &http.Server{Addr: cfg.MetricsAddress, Handler: metrics.Handler(), ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 * 1024}, label: "metrics"})
+	}
+	failures := make(chan error, len(listeners))
+	for _, item := range listeners {
+		go func(item listener) {
+			if item.label == "agent" {
+				log.Printf("Agent mTLS: https://%s (configuration, application receipts and metering)", item.server.Addr)
+			} else if item.label == "metrics" {
+				log.Printf("Operational metrics: http://%s/metrics (loopback only)", item.server.Addr)
 			}
-		}(i, srv)
+			if item.tls {
+				failures <- item.server.ListenAndServeTLS(item.cert, item.key)
+			} else {
+				failures <- item.server.ListenAndServe()
+			}
+		}(item)
 	}
 	log.Printf("RelaDock: %s (listening on %s)", cfg.Origin, cfg.Address)
 	var serveErr error
@@ -162,8 +179,8 @@ func main() {
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	for _, srv := range servers {
-		srv.Shutdown(shutdown)
+	for _, item := range listeners {
+		item.server.Shutdown(shutdown)
 	}
 	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		log.Fatal(serveErr)
