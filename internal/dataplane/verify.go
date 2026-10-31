@@ -77,8 +77,18 @@ func exactJump(raw json.RawMessage) bool {
 	return ok && exactFields(value, map[string]any{"target": "relay"}, nil)
 }
 
+func exactCTOriginalDaddr(raw json.RawMessage, address string) bool {
+	return exactMatch(raw, "==", "ct", map[string]any{"key": "daddr", "dir": "original"}, map[string]any{"family": "ip"}, address) ||
+		exactMatch(raw, "==", "ct", map[string]any{"key": "ip daddr", "dir": "original"}, nil, address)
+}
+
 func validGuardExpressions(expr []json.RawMessage, guard AllocationGuard, quarantine bool) bool {
 	if quarantine {
+		if len(expr) == 3 {
+			return exactMatch(expr[0], "==", "payload", map[string]any{"protocol": "ip", "field": "daddr"}, nil, guard.Address) &&
+				exactMatch(expr[1], "==", "payload", map[string]any{"protocol": guard.Protocol, "field": "dport"}, nil, guard.Port) &&
+				exactVerdict(expr[2], "drop")
+		}
 		return len(expr) == 4 &&
 			exactMatch(expr[0], "==", "payload", map[string]any{"protocol": "ip", "field": "daddr"}, nil, guard.Address) &&
 			exactMatch(expr[1], "==", "meta", map[string]any{"key": "l4proto"}, nil, guard.Protocol) &&
@@ -88,7 +98,7 @@ func validGuardExpressions(expr []json.RawMessage, guard AllocationGuard, quaran
 	return len(expr) == 5 &&
 		exactMatch(expr[0], "in", "ct", map[string]any{"key": "status"}, nil, "dnat") &&
 		exactMatch(expr[1], "==", "meta", map[string]any{"key": "l4proto"}, nil, guard.Protocol) &&
-		exactMatch(expr[2], "==", "ct", map[string]any{"key": "daddr", "dir": "original"}, map[string]any{"family": "ip"}, guard.Address) &&
+		exactCTOriginalDaddr(expr[2], guard.Address) &&
 		exactMatch(expr[3], "==", "ct", map[string]any{"key": "proto-dst", "dir": "original"}, nil, guard.Port) &&
 		exactJump(expr[4])
 }

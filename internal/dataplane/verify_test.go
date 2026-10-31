@@ -135,6 +135,98 @@ func TestReadbackV2RequiresRawQuarantineChainAndExactRuleCounts(t *testing.T) {
 	}
 }
 
+func TestReadbackV2AcceptsNFT102NormalizedQuarantineProtocol(t *testing.T) {
+	p, err := Compile(context.Background(), fixtureV2(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := readbackFixture(p)
+	for i := range items {
+		rule, ok := items[i]["rule"].(map[string]any)
+		if !ok || rule["chain"] != "quarantine" {
+			continue
+		}
+		expressions := rule["expr"].([]any)
+		// nftables 1.0.2 omits the redundant meta l4proto expression because
+		// the following protocol-specific payload dport match implies it.
+		rule["expr"] = append(expressions[:1], expressions[2:]...)
+	}
+	b, _ := json.Marshal(map[string]any{"nftables": items})
+	r := runnerFunc(func(context.Context, []string, string) ([]byte, error) { return b, nil })
+	if err = ReadbackVerifier(r)(context.Background(), p); err != nil {
+		t.Fatal("nftables 1.0.2 normalized quarantine was rejected:", err)
+	}
+}
+
+func TestReadbackV2AcceptsNFT102NormalizedCTAddressKey(t *testing.T) {
+	p, err := Compile(context.Background(), fixtureV2(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := readbackFixture(p)
+	for i := range items {
+		rule, ok := items[i]["rule"].(map[string]any)
+		if !ok || rule["chain"] != "forward" {
+			continue
+		}
+		expressions := rule["expr"].([]any)
+		ct := expressions[2].(map[string]any)["match"].(map[string]any)["left"].(map[string]any)["ct"].(map[string]any)
+		ct["key"] = "ip daddr"
+		delete(ct, "family")
+	}
+	b, _ := json.Marshal(map[string]any{"nftables": items})
+	r := runnerFunc(func(context.Context, []string, string) ([]byte, error) { return b, nil })
+	if err = ReadbackVerifier(r)(context.Background(), p); err != nil {
+		t.Fatal("nftables 1.0.2 normalized ct address was rejected:", err)
+	}
+}
+
+func TestReadbackV2RejectsNearMissNFT102Normalizations(t *testing.T) {
+	p, err := Compile(context.Background(), fixtureV2(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"wrong quarantine protocol", "extra quarantine payload field", "wrong ct direction", "extra ct family"} {
+		t.Run(mode, func(t *testing.T) {
+			items := readbackFixture(p)
+			for i := range items {
+				rule, ok := items[i]["rule"].(map[string]any)
+				if !ok {
+					continue
+				}
+				if rule["chain"] == "quarantine" {
+					expressions := rule["expr"].([]any)
+					rule["expr"] = append(expressions[:1], expressions[2:]...)
+					payload := rule["expr"].([]any)[1].(map[string]any)["match"].(map[string]any)["left"].(map[string]any)["payload"].(map[string]any)
+					if mode == "wrong quarantine protocol" {
+						payload["protocol"] = "tcp"
+					}
+					if mode == "extra quarantine payload field" {
+						payload["base"] = "network header"
+					}
+				}
+				if rule["chain"] == "forward" {
+					expressions := rule["expr"].([]any)
+					ct := expressions[2].(map[string]any)["match"].(map[string]any)["left"].(map[string]any)["ct"].(map[string]any)
+					ct["key"] = "ip daddr"
+					delete(ct, "family")
+					if mode == "wrong ct direction" {
+						ct["dir"] = "reply"
+					}
+					if mode == "extra ct family" {
+						ct["family"] = "ip"
+					}
+				}
+			}
+			b, _ := json.Marshal(map[string]any{"nftables": items})
+			r := runnerFunc(func(context.Context, []string, string) ([]byte, error) { return b, nil })
+			if err = ReadbackVerifier(r)(context.Background(), p); err == nil {
+				t.Fatal("unsafe nftables 1.0.2 near-miss was accepted")
+			}
+		})
+	}
+}
+
 func TestReadbackRejectsMissingCountersWrongGenerationAndCommandFailure(t *testing.T) {
 	p, e := Compile(context.Background(), fixture(), options())
 	if e != nil {

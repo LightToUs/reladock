@@ -337,6 +337,16 @@ func configAllocationIdentities(cfg platform.NodeConfig) (map[string]allocationI
 }
 
 func validateAllocationTransition(old, next platform.NodeConfig) error {
+	if old.SchemaVersion == 1 && next.SchemaVersion == 2 {
+		oldRules := activeAllocationRules(old)
+		for _, allocation := range next.Allocations {
+			tuple := Allocation{allocation.Address, allocation.Protocol, allocation.Port}
+			if oldRule, occupied := oldRules[tuple]; occupied && oldRule != allocation.RuleID {
+				return errors.New("active allocation tuple changed rule identity during schema migration")
+			}
+		}
+		return nil
+	}
 	if old.SchemaVersion != 2 || next.SchemaVersion != 2 {
 		return nil
 	}
@@ -365,6 +375,18 @@ func activeAllocations(cfg platform.NodeConfig) map[Allocation]bool {
 		if r.Status == "pending-agent" {
 			for _, proto := range protocols(r.Protocol) {
 				active[Allocation{cfg.ListenAddress, proto, r.ListenPort}] = true
+			}
+		}
+	}
+	return active
+}
+
+func activeAllocationRules(cfg platform.NodeConfig) map[Allocation]string {
+	active := map[Allocation]string{}
+	for _, r := range cfg.Rules {
+		if r.Status == "pending-agent" {
+			for _, proto := range protocols(r.Protocol) {
+				active[Allocation{cfg.ListenAddress, proto, r.ListenPort}] = r.ID
 			}
 		}
 	}
@@ -688,7 +710,7 @@ func (a *Adapter) restore(ctx context.Context, s State) error {
 			blocked[v] = true
 		}
 	}
-	if s.Candidate.Config.SchemaVersion == 2 {
+	if s.Candidate.Config.SchemaVersion == 2 && cfg.SchemaVersion == 2 {
 		goodIDs := map[string]bool{}
 		if s.Good != nil {
 			for _, guard := range s.Good.ForwardGuards {
@@ -696,7 +718,8 @@ func (a *Adapter) restore(ctx context.Context, s State) error {
 			}
 		}
 		for _, allocation := range s.Candidate.Config.Allocations {
-			if goodIDs[allocation.ID] {
+			tuple := Allocation{allocation.Address, allocation.Protocol, allocation.Port}
+			if goodIDs[allocation.ID] || goodActive[tuple] {
 				continue
 			}
 			guard := AllocationGuard{ID: allocation.ID, Address: allocation.Address, Protocol: allocation.Protocol, Port: allocation.Port, State: "failed-candidate", PredecessorRetirementID: allocation.PredecessorRetirementID}

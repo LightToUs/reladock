@@ -309,6 +309,107 @@ func TestRuntimeFailureRestoresPinnedLastGood(t *testing.T) {
 	}
 }
 
+func TestSchemaV1ToV2FailedApplyDoesNotFenceExistingActiveTuples(t *testing.T) {
+	s := &memoryStore{}
+	r := &fakeRunner{}
+	a := newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	legacy := fixture()
+	if _, err := a.Apply(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	candidate := fixture()
+	candidate.SchemaVersion = 2
+	candidate.Generation = 2
+	candidate.Allocations = []platform.ConfigAllocation{
+		{ID: "11111111-1111-4111-8111-111111111111", RuleID: candidate.Rules[0].ID, Protocol: "tcp", Address: candidate.ListenAddress, Port: candidate.Rules[0].ListenPort},
+		{ID: "22222222-2222-4222-8222-222222222222", RuleID: candidate.Rules[0].ID, Protocol: "udp", Address: candidate.ListenAddress, Port: candidate.Rules[0].ListenPort},
+	}
+	a.verify = func(_ context.Context, p Plan) error {
+		if p.Generation == candidate.Generation {
+			return errors.New("injected schema-v2 readback failure")
+		}
+		return nil
+	}
+	if _, err := a.Apply(context.Background(), candidate); err == nil || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("schema migration failure did not complete rollback: %v", err)
+	}
+	if s.state.Pending || len(s.state.Tombstones) != 0 || len(s.state.TombstoneGuards) != 0 || s.state.Good == nil || s.state.Good.Config.SchemaVersion != 1 {
+		t.Fatalf("legacy active tuples were fenced during rollback: %+v", s.state)
+	}
+	a = newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	if _, err := a.load(context.Background()); err != nil {
+		t.Fatal("rolled-back schema-v1 state did not survive restart:", err)
+	}
+}
+
+func TestSchemaV1ToV2RejectsActiveTupleReassignedToDifferentRule(t *testing.T) {
+	s := &memoryStore{}
+	r := &fakeRunner{}
+	a := newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	legacy := fixture()
+	if _, err := a.Apply(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	callsBefore := len(r.calls)
+
+	candidate := fixture()
+	candidate.SchemaVersion = 2
+	candidate.Generation = 2
+	candidate.Rules[0].ID = "rule-replacement"
+	candidate.Allocations = []platform.ConfigAllocation{
+		{ID: "11111111-1111-4111-8111-111111111111", RuleID: candidate.Rules[0].ID, Protocol: "tcp", Address: candidate.ListenAddress, Port: candidate.Rules[0].ListenPort},
+		{ID: "22222222-2222-4222-8222-222222222222", RuleID: candidate.Rules[0].ID, Protocol: "udp", Address: candidate.ListenAddress, Port: candidate.Rules[0].ListenPort},
+	}
+	if _, err := a.Apply(context.Background(), candidate); err == nil {
+		t.Fatal("schema migration reassigned an active tuple to a different rule")
+	}
+	if len(r.calls) != callsBefore || s.state.Pending || s.state.HighWater != legacy.Generation {
+		t.Fatalf("unsafe migration reached kernel or durable intent: calls=%d state=%+v", len(r.calls)-callsBefore, s.state)
+	}
+}
+
+func TestSchemaV1ToV2FailedApplyFencesNewTupleAcrossRestart(t *testing.T) {
+	s := &memoryStore{}
+	r := &fakeRunner{}
+	a := newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	legacy := fixture()
+	if _, err := a.Apply(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	candidate := fixture()
+	candidate.SchemaVersion = 2
+	candidate.Generation = 2
+	candidate.Allocations = []platform.ConfigAllocation{
+		{ID: "11111111-1111-4111-8111-111111111111", RuleID: candidate.Rules[0].ID, Protocol: "tcp", Address: candidate.ListenAddress, Port: candidate.Rules[0].ListenPort},
+		{ID: "22222222-2222-4222-8222-222222222222", RuleID: candidate.Rules[0].ID, Protocol: "udp", Address: candidate.ListenAddress, Port: candidate.Rules[0].ListenPort},
+	}
+	newRule := candidate.Rules[0]
+	newRule.ID = "rule-new"
+	newRule.Protocol = "tcp"
+	newRule.ListenPort = 20001
+	candidate.Rules = append(candidate.Rules, newRule)
+	candidate.Allocations = append(candidate.Allocations, platform.ConfigAllocation{ID: "33333333-3333-4333-8333-333333333333", RuleID: newRule.ID, Protocol: "tcp", Address: candidate.ListenAddress, Port: newRule.ListenPort})
+	a.verify = func(_ context.Context, p Plan) error {
+		if p.Generation == candidate.Generation {
+			return errors.New("injected schema-v2 readback failure")
+		}
+		return nil
+	}
+	if _, err := a.Apply(context.Background(), candidate); err == nil || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("schema migration failure did not complete rollback: %v", err)
+	}
+	want := Allocation{Address: candidate.ListenAddress, Protocol: "tcp", Port: newRule.ListenPort}
+	if s.state.Pending || len(s.state.Tombstones) != 1 || s.state.Tombstones[0] != want || len(s.state.TombstoneGuards) != 0 {
+		t.Fatalf("new migration tuple was not durably fenced: %+v", s.state)
+	}
+	a = newTestAdapter(t, s, r, &mutexLock{}, goodVerify)
+	if _, err := a.load(context.Background()); err != nil {
+		t.Fatal("rollback tombstone did not survive restart:", err)
+	}
+}
+
 func TestRollbackFailureBlocksUntilExplicitRecovery(t *testing.T) {
 	s := &memoryStore{}
 	r := &fakeRunner{failAt: map[int]bool{3: true, 5: true}}
