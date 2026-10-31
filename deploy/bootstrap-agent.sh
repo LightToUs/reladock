@@ -50,7 +50,7 @@ fi
 printf '%s  %s\n' "$digest" "$temp/release.tar.gz" | sha256sum --check --status || fail 'Release checksum mismatch; nothing installed'
 # Archives contain only this allowlist of regular, flat, nonduplicate files.
 tar -tzf "$temp/release.tar.gz" > "$temp/names"
-awk 'BEGIN {ok=1} !/^(reladock|reladock-admin|reladock-agent|reladock-dataplane|reladock-updater|reladock\.service|reladock-agent\.service|reladock-agent-apply\.service|reladock-updater\.service|reladock-updater\.timer|control\.env\.example|agent\.env\.example|install-linux\.sh|bootstrap-agent\.sh|SHA256SUMS|RELEASE\.json|DEPLOYMENT\.md)$/ {ok=0} {count++} END {exit !ok || count!=17}' "$temp/names" || fail 'Incomplete or unsafe archive paths'
+awk 'BEGIN {ok=1} !/^(reladock|reladock-admin|reladock-agent|reladock-dataplane|reladock-updater|reladock-recovery|reladock\.service|reladock-agent\.service|reladock-agent-apply\.service|reladock-updater\.service|reladock-updater\.timer|control\.env\.example|agent\.env\.example|install-linux\.sh|bootstrap-agent\.sh|SHA256SUMS|RELEASE\.json|DEPLOYMENT\.md)$/ {ok=0} {count++} END {exit !ok || count!=18}' "$temp/names" || fail 'Incomplete or unsafe archive paths'
 [ -z "$(sort "$temp/names" | uniq -d)" ] || fail 'Duplicate archive entries'
 tar -tvzf "$temp/release.tar.gz" | awk 'substr($0,1,1)!="-" {bad=1} END {exit bad}' || fail 'Archive contains non-regular entries'
 mkdir "$temp/release"
@@ -66,6 +66,7 @@ install -o root -g reladock -m 0640 /dev/null /var/lib/reladock-locks/control.lo
 install -o root -g root -m 0755 "$temp/release/reladock-agent" /opt/reladock/reladock-agent
 install -o root -g root -m 0755 "$temp/release/reladock-dataplane" /opt/reladock/reladock-dataplane
 install -o root -g root -m 0755 "$temp/release/reladock-updater" /opt/reladock/reladock-updater
+install -o root -g root -m 0755 "$temp/release/reladock-recovery" /opt/reladock/reladock-recovery
 # Token travels over stdin, never argv, environment, URL or a persistent file.
 /opt/reladock/reladock-agent enroll --bootstrap-origin "$origin" --pki /etc/reladock/node-pki --env-file /etc/reladock/agent.env || fail 'Enrollment failed. Private enrollment state retained; see recovery instructions.'
 chown reladock:reladock /etc/reladock/node-pki /etc/reladock/node-pki/*

@@ -11,7 +11,7 @@ const output = new URL(`../.cache/release/linux-${arch}/`, import.meta.url);
 await mkdir(output, { recursive: true });
 const metadata=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'));
 const releaseVersion=`v${metadata.version}`;
-const programs = ['reladock', 'reladock-admin', 'reladock-agent', 'reladock-dataplane', 'reladock-updater'];
+const programs = ['reladock', 'reladock-admin', 'reladock-agent', 'reladock-dataplane', 'reladock-updater', 'reladock-recovery'];
 const hashes = [];
 for (const program of programs) {
   const path = fileURLToPath(new URL(program, output));

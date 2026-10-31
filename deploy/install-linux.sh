@@ -7,7 +7,7 @@ if [ "$(id -u)" != 0 ]; then echo 'Run as root on the intended server' >&2; exit
 if [ "$#" != 2 ]; then echo 'Usage: sh install-linux.sh control|agent /absolute/release-directory' >&2; exit 1; fi
 component=$1
 release=$2
-case "$component" in control) service=reladock; configuration=control; binaries='reladock reladock-admin';; agent) service=reladock-agent; configuration=agent; binaries='reladock-agent reladock-dataplane reladock-updater';; *) exit 1;; esac
+case "$component" in control) service=reladock; configuration=control; binaries='reladock reladock-admin reladock-recovery';; agent) service=reladock-agent; configuration=agent; binaries='reladock-agent reladock-dataplane reladock-updater reladock-recovery';; *) exit 1;; esac
 case "$release" in /*) ;; *) echo 'Release directory must be absolute' >&2; exit 1;; esac
 command -v systemctl >/dev/null
 command -v sha256sum >/dev/null

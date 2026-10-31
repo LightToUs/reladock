@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {join,dirname} from 'node:path';
 
 export const releaseFiles = [
- 'reladock','reladock-admin','reladock-agent','reladock-dataplane','reladock-updater',
+ 'reladock','reladock-admin','reladock-agent','reladock-dataplane','reladock-updater','reladock-recovery',
  'reladock.service','reladock-agent.service','reladock-agent-apply.service',
  'reladock-updater.service','reladock-updater.timer',
  'control.env.example','agent.env.example','install-linux.sh','bootstrap-agent.sh',

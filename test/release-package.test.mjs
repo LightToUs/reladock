@@ -18,6 +18,7 @@ test('release packaging produces a flat pinned asset with independently verifiab
 
 test('production release manifest includes the hardened root updater',async()=>{
  const {releaseFiles}=await import('../scripts/release-package.mjs');
+ assert.ok(releaseFiles.includes('reladock-recovery'));
  assert.deepEqual(releaseFiles.filter(name=>name.includes('updater')),['reladock-updater','reladock-updater.service','reladock-updater.timer']);
  assert.equal(new Set(releaseFiles).size,releaseFiles.length);
  const service=await readFile(join(process.cwd(),'deploy','reladock-updater.service'),'utf8');
