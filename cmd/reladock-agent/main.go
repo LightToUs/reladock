@@ -75,6 +75,17 @@ func main() {
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	runner := agent.Client{HTTP: client, BaseURL: *endpoint, NodeID: *nodeID, State: state, Applier: applier}
+	if engine != nil {
+		retirementState, stateErr := agent.NewRetirementState(*stateDir)
+		if stateErr != nil {
+			log.Fatal(stateErr)
+		}
+		bootID, bootErr := agent.ReadKernelBootID("/proc/sys/kernel/random/boot_id")
+		if bootErr != nil {
+			log.Fatal("kernel boot identity unavailable")
+		}
+		runner.Retirement = &agent.RetirementWorker{State: retirementState, Adapter: engine.Adapter, BootID: bootID}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if *apply {

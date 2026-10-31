@@ -16,6 +16,7 @@ import (
 	"reladock/internal/dataplane"
 	"reladock/internal/metering"
 	"reladock/internal/platform"
+	retirementexec "reladock/internal/retirement"
 	"reladock/internal/shaping"
 )
 
@@ -143,6 +144,7 @@ func PrepareApply(o RuntimeOptions, nodeID string) (*ApplyState, Applier, error)
 	}
 	meter := dataplane.MeterHooks{WAL: wal, Runner: runner}
 	adapter.SetTransitionHooks(dataplane.ShapedMeterHooks{MeterHooks: meter, Shaper: shaper})
+	adapter.SetRetirementPurger(retirementexec.Executor{Runner: retirementexec.DirectRunner{}})
 	preflight, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err = adapter.CheckMeterBinding(preflight); err != nil {

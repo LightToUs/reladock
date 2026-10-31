@@ -55,6 +55,7 @@ type Client struct {
 	// Nil Applier preserves validation-only operation, without begin or state I/O.
 	Applier      Applier
 	State        *ApplyState
+	Retirement   *RetirementWorker
 	ApplyTimeout time.Duration
 	Now          func() time.Time
 }
@@ -91,6 +92,12 @@ func (c *Client) Once(ctx context.Context) (bool, error) {
 			return false, err
 		}
 		defer unlock()
+		if c.Retirement != nil {
+			done, retirementErr := c.Retirement.Once(ctx, c)
+			if retirementErr != nil || done {
+				return done, retirementErr
+			}
+		}
 		record, err := c.State.load(ctx)
 		if err != nil {
 			return false, err

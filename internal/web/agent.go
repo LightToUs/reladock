@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -137,6 +138,65 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 				return
 			}
 			respond(w, http.StatusOK, value)
+			return
+		}
+		if r.URL.Path == "/agent/retirements/claim" {
+			body, bodyErr := io.ReadAll(io.LimitReader(r.Body, 2))
+			if bodyErr != nil || len(body) != 0 {
+				failure(w, platform.ErrInvalid)
+				return
+			}
+			claim, claimErr := store.ClaimRetirement(ctx, id, fingerprint)
+			if claimErr != nil {
+				failure(w, claimErr)
+				return
+			}
+			if claim == nil {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			respond(w, http.StatusOK, claim)
+			return
+		}
+		if r.URL.Path == "/agent/retirements/begin" {
+			var input struct {
+				TaskID     string `json:"taskId"`
+				LeaseToken string `json:"leaseToken"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			if err = store.BeginRetirementPurge(ctx, id, fingerprint, input.TaskID, input.LeaseToken); err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
+		if r.URL.Path == "/agent/retirements/report" {
+			var input struct {
+				TaskID     string                     `json:"taskId"`
+				LeaseToken string                     `json:"leaseToken,omitempty"`
+				ErrorCode  string                     `json:"errorCode,omitempty"`
+				Report     *platform.RetirementReport `json:"report,omitempty"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			if input.Report != nil && (input.LeaseToken != "" || input.ErrorCode != "") || input.Report == nil && (input.LeaseToken == "" || input.ErrorCode == "") {
+				failure(w, platform.ErrInvalid)
+				return
+			}
+			if input.Report != nil {
+				err = store.ReportRetirement(ctx, id, fingerprint, input.TaskID, *input.Report)
+			} else {
+				err = store.ReportRetirementFailure(ctx, id, fingerprint, input.TaskID, input.LeaseToken, input.ErrorCode)
+			}
+			if err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusOK, map[string]bool{"ok": true})
 			return
 		}
 		if r.URL.Path == "/agent/config/claim" {
