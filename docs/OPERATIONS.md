@@ -1,4 +1,4 @@
-# Operations and support (migration v8)
+# Operations and support (migrations v8, v15 and v20)
 
 This subsystem persists control-channel incidents and support conversations. It does not probe forwarding, send email, or measure revenue, costs, or profit. A recent Agent contact or validated configuration never establishes data-plane health.
 
@@ -24,11 +24,11 @@ The control process schedules `Store.ReconcileIncidents(ctx, staleAfter time.Dur
 
 `dataPlaneStatus` is always `unknown`. `deliveryState` is the persisted outbox state for the node's desired generation, or `unknown` if there is no corresponding delivery. Queries use the PostgreSQL clock rather than the browser clock.
 
-`ReconcileIncidents` monitors enrolled nodes outside maintenance. It opens `contact-stale` only when a non-null recorded contact is old; it opens `config-failed` only when the desired generation's latest delivery is failed. Historical failed configurations cannot keep an incident open after a newer configuration is queued or validated. Missing contact alone never opens a stale incident.
+`ReconcileIncidents` monitors enrolled nodes. Maintenance suppresses contact/configuration incidents because those workflows are intentionally paused, but it does not suppress certificate incidents: maintenance neither revokes credentials nor guarantees existing traffic has stopped. The worker opens `contact-stale` only when a non-null recorded contact is old; it opens `config-failed` only when the desired generation's latest delivery is failed. It also opens `certificate-expiring` at seven days or less, switches to `certificate-expired` after expiry, and opens `certificate-rotation-failed` only after the same bounded Agent error state has remained for one hour. Historical failed configurations cannot keep an incident open after a newer configuration is queued or validated. Missing contact or certificate expiry metadata alone does not invent an incident.
 
 An incident has one persistent ID per `(node_id, kind)`. Repeated observations refresh `observedAt` without duplicating the incident or audit event. Recovery, certificate revocation, or maintenance resolves an open incident. Recurrence reopens the same ID and increments `occurrences`; `openedAt` becomes the latest opening time. A resolution means the trigger ceased to be actionable, not that traffic recovered. Open/resolve transitions and `platform_audit_logs` records (`operations-worker`, `incident.open` / `incident.resolve`) commit in the same transaction.
 
-Tenant queries include only nodes with the tenant's non-deleted rules, and only those rule IDs. Paused rules remain configured and are included. Visibility follows current rule association; it is not a historical ownership archive. Platform administrators can query all nodes/incidents. No payloads, certificate fingerprints, lease tokens, customer targets, or other tenants' rule IDs appear in tenant monitoring results.
+Tenant queries include only nodes with the tenant's non-deleted rules, and only those rule IDs. Paused rules remain configured and are included. Visibility follows current rule association; it is not a historical ownership archive. Platform administrators can query all nodes/incidents. Notification payloads contain only incident/node/kind/state/occurrence/time metadata; certificate bodies, CSR, fingerprints, private keys, host credentials and raw Agent errors are excluded.
 
 ## Support workflow and authorization
 
@@ -59,4 +59,4 @@ Store interfaces additionally include `ListIncidents(ctx, who, admin, page)`, `C
 
 PostgreSQL tests create random schemas and never migrate the business schema. Coverage includes concurrent incident deduplication, recovery, unknown contact and maintenance, tenant visibility, cross-tenant conversation access, revision conflicts, role/key boundaries, and audit failure rollback. Run `npm test` and `npm run vet` after parent integration.
 
-No external notifications, SLA claims, endpoint probes, attachments, staff assignment, message delivery receipts, ticket retention policies, or cost/profit summaries are implemented. Migration 8, the periodic worker, tenant routes and admin routes are registered in the control process.
+No SLA claim, universal UDP health, attachments, staff assignment, message delivery receipts or ticket retention policy is implemented. The optional signed notification connector is default-off and at-least-once; receipt means only that the endpoint acknowledged it. Real isolated-VPS certificate expiry/renewal, signer outage and off-host restoration remain required production acceptance tests.

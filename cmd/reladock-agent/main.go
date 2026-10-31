@@ -135,10 +135,20 @@ func main() {
 		return credentials.ReconcileRotation(activityCtx, &runner, time.Now().UTC())
 	}}
 	if engine != nil {
-		hooks.Metering = func(parent context.Context) error {
+		hooks.MeterSample = func(parent context.Context) error {
+			activityCtx, cancel := context.WithTimeout(parent, 10*time.Second)
+			defer cancel()
+			return engine.Sample(activityCtx)
+		}
+		hooks.UsageUpload = func(parent context.Context) error {
 			activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
 			defer cancel()
-			return engine.Tick(activityCtx, &runner)
+			return engine.FlushUsage(activityCtx, &runner)
+		}
+		hooks.Probes = func(parent context.Context) error {
+			activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
+			defer cancel()
+			return engine.ProbeCycle(activityCtx, &runner)
 		}
 	}
 	activities, err := agent.RuntimeActivities(hooks)

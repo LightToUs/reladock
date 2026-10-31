@@ -118,6 +118,28 @@ func TestNotificationsTransitionAndAuditRollbackTogether(t *testing.T) {
 	notificationCount(t, s, 0)
 }
 
+func TestCertificateIncidentNotificationContainsNoCredentialMaterial(t *testing.T) {
+	s := notificationStore(t)
+	ctx := context.Background()
+	fingerprint := strings.Repeat("f", 64)
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$1,last_seen_at=clock_timestamp(),agent_certificate_not_after=clock_timestamp()+interval '6 days' WHERE id='hk-01'`, fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	var payload []byte
+	if err := s.pool.QueryRow(ctx, `SELECT payload FROM notification_outbox WHERE payload->>'kind'='certificate-expiring'`).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, secret := range []string{fingerprint, "BEGIN CERTIFICATE", "certificateFingerprint", "csr", "privateKey", "renew-unavailable"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("credential or local error leaked in notification: %s", text)
+		}
+	}
+}
+
 func TestNotificationsConcurrentClaimRestartAndFencedReports(t *testing.T) {
 	s := notificationStore(t)
 	ctx := context.Background()

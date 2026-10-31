@@ -38,6 +38,8 @@ type ManagedNode struct {
 	RotationState          string     `json:"rotationState"`
 	RotationErrorCode      string     `json:"rotationErrorCode"`
 	RotationErrorSince     *time.Time `json:"rotationErrorSince"`
+	ProbeStatus            string     `json:"probeStatus"`
+	ProbeObservedAt        *time.Time `json:"probeObservedAt"`
 }
 
 func normalizeNode(input NodeInput) (NodeInput, error) {
@@ -62,7 +64,14 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	rows, err := tx.Query(ctx, `SELECT n.id,n.name,n.region,n.status,n.desired_generation,n.validated_generation,n.last_seen_at,n.agent_version,COALESCE(o.state,'queued'),COALESCE(o.attempts,0),host(n.listen_address),COALESCE(host(n.public_address),''),n.capacity_mbps,n.revision,COALESCE(n.certificate_fingerprint,''),n.applied_generation,CASE WHEN n.agent_heartbeat_at IS NULL THEN 'never-seen' WHEN n.agent_heartbeat_at<clock_timestamp()-$1*interval '1 second' THEN 'offline' ELSE 'online' END,n.agent_mode,n.agent_started_at,n.agent_heartbeat_at,n.agent_certificate_not_after,n.agent_rotation_state,n.agent_rotation_error_code,n.agent_rotation_error_since FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation ORDER BY n.id`, AgentHeartbeatStaleAfter.Seconds())
+	rows, err := tx.Query(ctx, `SELECT n.id,n.name,n.region,n.status,n.desired_generation,n.validated_generation,n.last_seen_at,n.agent_version,COALESCE(o.state,'queued'),COALESCE(o.attempts,0),host(n.listen_address),COALESCE(host(n.public_address),''),n.capacity_mbps,n.revision,COALESCE(n.certificate_fingerprint,''),n.applied_generation,CASE WHEN n.agent_heartbeat_at IS NULL THEN 'never-seen' WHEN n.agent_heartbeat_at<clock_timestamp()-$1*interval '1 second' THEN 'offline' ELSE 'online' END,n.agent_mode,n.agent_started_at,n.agent_heartbeat_at,n.agent_certificate_not_after,n.agent_rotation_state,n.agent_rotation_error_code,n.agent_rotation_error_since,
+	CASE
+	 WHEN EXISTS(SELECT 1 FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation AND p.status='targetUnreachable') THEN 'targetUnreachable'
+	 WHEN EXISTS(SELECT 1 FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation AND p.status='targetReachable') THEN 'targetReachable'
+	 WHEN EXISTS(SELECT 1 FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation AND p.status='unknown') THEN 'udpUnknown'
+	 ELSE 'unknown' END,
+	(SELECT max(p.observed_at) FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation)
+	FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation ORDER BY n.id`, AgentHeartbeatStaleAfter.Seconds())
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +79,7 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 	items := []ManagedNode{}
 	for rows.Next() {
 		var n ManagedNode
-		if err = rows.Scan(&n.ID, &n.Name, &n.Region, &n.Status, &n.DesiredGeneration, &n.ValidatedGeneration, &n.LastSeenAt, &n.AgentVersion, &n.DeliveryState, &n.DeliveryAttempts, &n.ListenAddress, &n.PublicAddress, &n.CapacityMbps, &n.Revision, &n.CertificateFingerprint, &n.AppliedGeneration, &n.ContactStatus, &n.AgentMode, &n.AgentStartedAt, &n.HeartbeatAt, &n.CertificateNotAfter, &n.RotationState, &n.RotationErrorCode, &n.RotationErrorSince); err != nil {
+		if err = rows.Scan(&n.ID, &n.Name, &n.Region, &n.Status, &n.DesiredGeneration, &n.ValidatedGeneration, &n.LastSeenAt, &n.AgentVersion, &n.DeliveryState, &n.DeliveryAttempts, &n.ListenAddress, &n.PublicAddress, &n.CapacityMbps, &n.Revision, &n.CertificateFingerprint, &n.AppliedGeneration, &n.ContactStatus, &n.AgentMode, &n.AgentStartedAt, &n.HeartbeatAt, &n.CertificateNotAfter, &n.RotationState, &n.RotationErrorCode, &n.RotationErrorSince, &n.ProbeStatus, &n.ProbeObservedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, n)
@@ -86,7 +95,7 @@ func nodeError(err error) error {
 }
 
 // Actor=nil is reserved for trusted local operator commands, not HTTP input.
-func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revision *int64, action string, input *NodeInput, fingerprint string) error {
+func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revision *int64, action string, input *NodeInput, fingerprint string, certificateNotAfter *time.Time) error {
 	if !nodeIDPattern.MatchString(id) {
 		return ErrInvalid
 	}
@@ -175,7 +184,7 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 		if !fingerprintPattern.MatchString(fingerprint) {
 			return ErrInvalid
 		}
-		if _, err = tx.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$2 WHERE id=$1", id, fingerprint); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$2,last_seen_at=NULL,agent_heartbeat_at=NULL,agent_version='',agent_mode='',agent_started_at=NULL,agent_certificate_not_after=$3,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL WHERE id=$1`, id, fingerprint, certificateNotAfter); err != nil {
 			return nodeError(err)
 		}
 		if _, err = tx.Exec(ctx, "UPDATE config_outbox SET state='superseded' WHERE node_id=$1 AND state='leased'", id); err != nil {
@@ -186,7 +195,7 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 		}
 		details["fingerprint"] = fingerprint
 	case "node.revoke-certificate":
-		if _, err = tx.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=NULL WHERE id=$1", id); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=NULL,last_seen_at=NULL,agent_heartbeat_at=NULL,agent_version='',agent_mode='',agent_started_at=NULL,agent_certificate_not_after=NULL,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL WHERE id=$1`, id); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, "UPDATE config_outbox SET state='superseded' WHERE node_id=$1 AND state='leased'", id); err != nil {
@@ -225,20 +234,20 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 }
 
 func (s *Store) AddNode(ctx context.Context, id, name, region, address string) error {
-	return s.mutateNode(ctx, nil, id, nil, "node.add", &NodeInput{ID: id, Name: name, Region: region, ListenAddress: address, CapacityMbps: 1000}, "")
+	return s.mutateNode(ctx, nil, id, nil, "node.add", &NodeInput{ID: id, Name: name, Region: region, ListenAddress: address, CapacityMbps: 1000}, "", nil)
 }
 func (s *Store) MaintainNode(ctx context.Context, id string, enabled bool) error {
 	action := "node.enable"
 	if enabled {
 		action = "node.maintenance"
 	}
-	return s.mutateNode(ctx, nil, id, nil, action, nil, "")
+	return s.mutateNode(ctx, nil, id, nil, action, nil, "", nil)
 }
 func (s *Store) EnrollNode(ctx context.Context, id, fingerprint string) error {
-	return s.mutateNode(ctx, nil, id, nil, "node.enroll", nil, fingerprint)
+	return s.mutateNode(ctx, nil, id, nil, "node.enroll", nil, fingerprint, nil)
 }
 func (s *Store) RetryNodeConfig(ctx context.Context, id string) error {
-	return s.mutateNode(ctx, nil, id, nil, "config.retry", nil, "")
+	return s.mutateNode(ctx, nil, id, nil, "config.retry", nil, "", nil)
 }
 func (s *Store) AuthenticateNode(ctx context.Context, id, fingerprint string) error {
 	var found string
@@ -249,10 +258,10 @@ func (s *Store) AuthenticateNode(ctx context.Context, id, fingerprint string) er
 	return err
 }
 func (s *Store) AdminAddNode(ctx context.Context, who Identity, input NodeInput) error {
-	return s.mutateNode(ctx, &who, input.ID, nil, "node.add", &input, "")
+	return s.mutateNode(ctx, &who, input.ID, nil, "node.add", &input, "", nil)
 }
 func (s *Store) AdminUpdateNode(ctx context.Context, who Identity, input NodeInput, revision int64) error {
-	return s.mutateNode(ctx, &who, input.ID, &revision, "node.edit", &input, "")
+	return s.mutateNode(ctx, &who, input.ID, &revision, "node.edit", &input, "", nil)
 }
 func (s *Store) AdminNodeAction(ctx context.Context, who Identity, id string, revision int64, action, certificate string) error {
 	mapped := map[string]string{"maintenance": "node.maintenance", "enable": "node.enable", "retry": "config.retry", "enroll": "node.enroll", "revoke-certificate": "node.revoke-certificate"}[action]
@@ -260,6 +269,7 @@ func (s *Store) AdminNodeAction(ctx context.Context, who Identity, id string, re
 		return ErrInvalid
 	}
 	fingerprint := ""
+	var certificateNotAfter *time.Time
 	if action == "enroll" {
 		block, rest := pem.Decode([]byte(certificate))
 		if block == nil || block.Type != "CERTIFICATE" || len(strings.TrimSpace(string(rest))) != 0 {
@@ -283,8 +293,10 @@ func (s *Store) AdminNodeAction(ctx context.Context, who Identity, id string, re
 			return ErrInvalid
 		}
 		fingerprint = nodeauth.Fingerprint(cert)
+		notAfter := cert.NotAfter.UTC()
+		certificateNotAfter = &notAfter
 	}
-	return s.mutateNode(ctx, &who, id, &revision, mapped, nil, fingerprint)
+	return s.mutateNode(ctx, &who, id, &revision, mapped, nil, fingerprint, certificateNotAfter)
 }
 
 type DeliveryRecord struct {

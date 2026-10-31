@@ -172,8 +172,20 @@ func TestUpgradeReissuesSnapshotWithKernelEntitlementMetadata(t *testing.T) {
 	if e = s.ReportConfig(ctx, "hk-01", j.ID, ConfigReport{LeaseToken: j.LeaseToken, Checksum: j.Checksum, Outcome: "validated"}); e != nil {
 		t.Fatal(e)
 	}
-	// Restore this test's isolated schema to v16, including newer additive tables.
-	if _, e = s.pool.Exec(ctx, "DELETE FROM schema_migrations WHERE version>=17; DROP TABLE node_bootstrap,node_preflight"); e != nil {
+	// Restore this test's isolated schema to v16, including reversing all newer
+	// additive objects, so the migration runner sees a faithful upgrade source.
+	if _, e = s.pool.Exec(ctx, `DELETE FROM schema_migrations WHERE version>=17;
+DROP TABLE node_certificate_rotations,node_bootstrap,node_preflight;
+ALTER TABLE nodes DROP CONSTRAINT nodes_agent_rotation_consistent,
+ DROP COLUMN agent_heartbeat_at,
+ DROP COLUMN agent_mode,
+ DROP COLUMN agent_started_at,
+ DROP COLUMN agent_certificate_not_after,
+ DROP COLUMN agent_rotation_state,
+ DROP COLUMN agent_rotation_error_code,
+ DROP COLUMN agent_rotation_error_since;
+ALTER TABLE operations_incidents DROP CONSTRAINT operations_incidents_kind_check,
+ ADD CONSTRAINT operations_incidents_kind_check CHECK (kind IN ('contact-stale','config-failed'))`); e != nil {
 		t.Fatal(e)
 	}
 	if e = s.Migrate(ctx); e != nil {

@@ -148,8 +148,16 @@ func (s *Store) reconcileNodeIncidents(ctx context.Context, nodeID string, stale
 	if !acquired {
 		return nil
 	}
-	var enrolled, stale, failed bool
-	err = tx.QueryRow(ctx, `SELECT n.certificate_fingerprint IS NOT NULL AND n.status<>'maintenance',COALESCE(n.last_seen_at<clock_timestamp()-$2*interval '1 second',false),COALESCE(o.state='failed',false) FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation WHERE n.id=$1`, nodeID, staleAfter.Seconds()).Scan(&enrolled, &stale, &failed)
+	var enrolled, controlMonitored, stale, failed, certificateExpiring, certificateExpired, rotationFailed bool
+	err = tx.QueryRow(ctx, `SELECT
+	 n.certificate_fingerprint IS NOT NULL,
+	 n.status<>'maintenance',
+ COALESCE(n.last_seen_at<clock_timestamp()-$2*interval '1 second',false),
+ COALESCE(o.state='failed',false),
+ COALESCE(n.agent_certificate_not_after>clock_timestamp() AND n.agent_certificate_not_after<=clock_timestamp()+interval '7 days',false),
+ COALESCE(n.agent_certificate_not_after<=clock_timestamp(),false),
+ COALESCE(n.agent_rotation_state='error' AND n.agent_rotation_error_since<=clock_timestamp()-interval '1 hour',false)
+	 FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation WHERE n.id=$1`, nodeID, staleAfter.Seconds()).Scan(&enrolled, &controlMonitored, &stale, &failed, &certificateExpiring, &certificateExpired, &rotationFailed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // Inventory may change between its read and this transaction.
 	}
@@ -159,7 +167,13 @@ func (s *Store) reconcileNodeIncidents(ctx context.Context, nodeID string, stale
 	for _, condition := range []struct {
 		kind       string
 		actionable bool
-	}{{"contact-stale", enrolled && stale}, {"config-failed", enrolled && failed}} {
+	}{
+		{"contact-stale", enrolled && controlMonitored && stale},
+		{"config-failed", enrolled && controlMonitored && failed},
+		{"certificate-expiring", enrolled && certificateExpiring},
+		{"certificate-expired", enrolled && certificateExpired},
+		{"certificate-rotation-failed", enrolled && rotationFailed},
+	} {
 		var id, state string
 		err = tx.QueryRow(ctx, `SELECT id,state FROM operations_incidents WHERE node_id=$1 AND kind=$2 FOR UPDATE`, nodeID, condition.kind).Scan(&id, &state)
 		absent := errors.Is(err, pgx.ErrNoRows)

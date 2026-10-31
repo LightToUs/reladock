@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"github.com/jackc/pgx/v5"
+	"reladock/internal/nodeauth"
 	"time"
 )
 
@@ -156,14 +158,21 @@ func (s *Store) RedeemNodeBootstrap(ctx context.Context, token string, csr []byt
 		return out, ErrInvalid
 	}
 	fingerprint := bootstrapHash(cert)
+	var certificateNotAfter *time.Time
 	if p, _ := pem.Decode(cert); p != nil && p.Type == "CERTIFICATE" {
-		fingerprint = bootstrapHash(p.Bytes)
+		if leaf, parseErr := x509.ParseCertificate(p.Bytes); parseErr == nil {
+			fingerprint = nodeauth.Fingerprint(leaf)
+			notAfter := leaf.NotAfter.UTC()
+			certificateNotAfter = &notAfter
+		} else {
+			fingerprint = bootstrapHash(p.Bytes)
+		}
 	}
 	// Never reset an applying barrier or any metering state during enrollment.
 	if _, err = tx.Exec(ctx, "DELETE FROM node_certificate_rotations WHERE node_id=$1", id); err != nil {
 		return out, err
 	}
-	if _, err = tx.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$2,revision=revision+1 WHERE id=$1", id, fingerprint); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$2,revision=revision+1,last_seen_at=NULL,agent_heartbeat_at=NULL,agent_version='',agent_mode='',agent_started_at=NULL,agent_certificate_not_after=$3,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL WHERE id=$1`, id, fingerprint, certificateNotAfter); err != nil {
 		return out, nodeError(err)
 	}
 	if _, err = tx.Exec(ctx, "UPDATE config_outbox SET state='superseded' WHERE node_id=$1 AND state='leased'", id); err != nil {

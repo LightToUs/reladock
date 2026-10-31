@@ -14,7 +14,6 @@ type NodeEngine struct {
 	WAL         *metering.WAL
 	Meter       dataplane.MeterHooks
 	probeCursor int
-	lastProbe   time.Time
 }
 
 func (e *NodeEngine) Apply(ctx context.Context, cfg platform.NodeConfig) error {
@@ -35,16 +34,20 @@ func (e *NodeEngine) Apply(ctx context.Context, cfg platform.NodeConfig) error {
 	return (VerifiedApplier{Adapter: e.Adapter}).Apply(ctx, cfg)
 }
 func (e *NodeEngine) Tick(ctx context.Context, c *Client) error {
-	// Flushing before sampling relieves bounded WAL backpressure. A network
-	// failure is retained while local sampling still protects quota/counter facts.
-	sendErr := c.FlushUsage(ctx, e.WAL)
-	sampleErr := e.Adapter.Observe(ctx, e.Meter.Sample)
-	var probeErr error
-	if sampleErr == nil && time.Since(e.lastProbe) >= 30*time.Second {
-		e.lastProbe = time.Now()
-		probeErr = e.ProbeCycle(ctx, c)
-	}
-	return errors.Join(sendErr, sampleErr, probeErr)
+	// The one-shot compatibility path samples before network work. Long-running
+	// mode schedules these methods independently in the Supervisor.
+	sampleErr := e.Sample(ctx)
+	sendErr := e.FlushUsage(ctx, c)
+	probeErr := e.ProbeCycle(ctx, c)
+	return errors.Join(sampleErr, sendErr, probeErr)
+}
+
+func (e *NodeEngine) Sample(ctx context.Context) error {
+	return e.Adapter.Observe(ctx, e.Meter.Sample)
+}
+
+func (e *NodeEngine) FlushUsage(ctx context.Context, c *Client) error {
+	return c.FlushUsage(ctx, e.WAL)
 }
 func (e *NodeEngine) Close() error {
 	if e.WAL != nil {

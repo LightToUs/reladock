@@ -20,7 +20,9 @@ type RuntimeHooks struct {
 	Configuration func(context.Context) error
 	Heartbeat     func(context.Context) error
 	Preflight     func(context.Context) error
-	Metering      func(context.Context) error
+	MeterSample   func(context.Context) error
+	UsageUpload   func(context.Context) error
+	Probes        func(context.Context) error
 	Renewal       func(context.Context) error
 }
 
@@ -34,8 +36,15 @@ func RuntimeActivities(hooks RuntimeHooks) ([]Activity, error) {
 		{Name: "preflight", Interval: time.Minute, Run: hooks.Preflight},
 		{Name: "renewal", Interval: time.Hour, Run: hooks.Renewal},
 	}
-	if hooks.Metering != nil {
-		activities = append(activities, Activity{Name: "metering", Interval: 5 * time.Second, Run: hooks.Metering})
+	if hooks.MeterSample != nil || hooks.UsageUpload != nil || hooks.Probes != nil {
+		if hooks.MeterSample == nil || hooks.UsageUpload == nil || hooks.Probes == nil {
+			return nil, errors.New("incomplete data-plane runtime activities")
+		}
+		activities = append(activities,
+			Activity{Name: "meter-sample", Interval: 5 * time.Second, Run: hooks.MeterSample},
+			Activity{Name: "usage-upload", Interval: 5 * time.Second, Run: hooks.UsageUpload},
+			Activity{Name: "probes", Interval: 30 * time.Second, Run: hooks.Probes},
+		)
 	}
 	return activities, nil
 }

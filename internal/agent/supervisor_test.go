@@ -136,14 +136,16 @@ func TestRuntimeActivitiesRegisterIndependentControlWork(t *testing.T) {
 		Configuration: hook("configuration"),
 		Heartbeat:     hook("heartbeat"),
 		Preflight:     hook("preflight"),
-		Metering:      hook("metering"),
+		MeterSample:   hook("meter-sample"),
+		UsageUpload:   hook("usage-upload"),
+		Probes:        hook("probes"),
 		Renewal:       hook("renewal"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(activities) != 5 {
-		t.Fatalf("activities=%d want=5", len(activities))
+	if len(activities) != 7 {
+		t.Fatalf("activities=%d want=7", len(activities))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -151,7 +153,7 @@ func TestRuntimeActivitiesRegisterIndependentControlWork(t *testing.T) {
 	deadline := time.Now().Add(250 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		mu.Lock()
-		complete := len(seen) == 5
+		complete := len(seen) == 7
 		mu.Unlock()
 		if complete {
 			break
@@ -164,7 +166,7 @@ func TestRuntimeActivitiesRegisterIndependentControlWork(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for _, name := range []string{"configuration", "heartbeat", "preflight", "metering", "renewal"} {
+	for _, name := range []string{"configuration", "heartbeat", "preflight", "meter-sample", "usage-upload", "probes", "renewal"} {
 		if seen[name] == 0 {
 			t.Fatalf("activity %q never ran after other activity failures: %+v", name, seen)
 		}

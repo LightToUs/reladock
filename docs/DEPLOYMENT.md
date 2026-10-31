@@ -65,7 +65,7 @@
 - 外部健康探测、UDP 未知状态、失联告警及备份恢复演练。
 
 以上均需实测证据。Linux 构建通过不代表运行环境或链路已验收。
-## 一条命令安装入口 Agent（v0.7.10）
+## 一条命令安装入口 Agent（v0.8.0）
 
 管理后台的“安装 Agent”面板现可生成短期节点专属命令。登记新节点后自动打开该面板；已有节点也可打开。执行地点是对应的专用 Linux VPS，不是 Mac。本流程只安装并启动 **validation-only** 服务，后台显示联系和环境上报，不代表实际业务转发正常。
 
@@ -73,21 +73,21 @@
 
 1. 控制台必须提供可被 VPS 信任的 HTTPS，独立 Agent mTLS 入口也必须可达。当前本地 `127.0.0.1` 开发入口不能供远程 VPS 接入。
 2. 准备专用节点签发中间 CA 和私钥，根 CA 私钥离线保管；不要使用 `.local/pki` 开发 CA。将签发链加入 Agent 服务的客户端信任库。节点收到的 CA 信任链还须能验证 Agent 服务端证书；两端链不一致时必须先修正信任配置，不能关闭 TLS 校验。
-3. 执行 `npm run build:release` 和 `RELEASE_ARCH=arm64 npm run build:release`，分别得到 `.cache/release/reladock-v0.7.10-linux-amd64.tar.gz` 与 `...-arm64.tar.gz` 及 `.sha256`。安装包为纯普通文件的平面归档，不包含私钥/运行配置。开发机器的 macOS 扩展属性不进入归档。
-4. **另行明确授权发布**后，在 `LightToUs/reladock` 的 GitHub Releases 上传两种架构文件及各自摘要，tag 必须匹配 `v0.7.10`。本功能不会创建 Release、推送或自动跟随 latest。
-5. 在控制服务配置以下全部项，再启动控制服务。全部为空时自动安装关闭；部分配置或不安全地址使启动失败。
+3. 执行 `npm run build:release` 和 `RELEASE_ARCH=arm64 npm run build:release`，分别得到 `.cache/release/reladock-v0.8.0-linux-amd64.tar.gz` 与 `...-arm64.tar.gz` 及 `.sha256`。安装包为纯普通文件的平面归档，不包含私钥/运行配置。
+4. **另行明确授权发布**后，在 `LightToUs/reladock` 的 GitHub Releases 上传两种架构文件及各自摘要，tag 必须匹配 `v0.8.0`。本功能不会创建 Release、推送或自动跟随 latest。
+5. 生产 Agent 监听必须配置三项节点签发器；它用于首次签发和自动续期。若需要后台生成安装命令，再额外完整配置四项 Release 元数据。Release 元数据可整体留空，但签发器不能在生产 Agent 监听开启时留空。
 
 ```ini
 NODE_BOOTSTRAP_CA_CERT=/etc/reladock/bootstrap-ca/issuer.crt
 NODE_BOOTSTRAP_CA_KEY=/etc/reladock/bootstrap-ca/issuer.key
 NODE_BOOTSTRAP_CA_CHAIN=/etc/reladock/bootstrap-ca/trust-chain.crt
 AGENT_PUBLIC_ORIGIN=https://agent.example.com:9443
-NODE_RELEASE_VERSION=v0.7.10
+NODE_RELEASE_VERSION=v0.8.0
 NODE_RELEASE_AMD64_SHA256=填写已发布amd64归档的64位小写SHA256
 NODE_RELEASE_ARM64_SHA256=填写已发布arm64归档的64位小写SHA256
 ```
 
-CA 必须仍有至少 31 天有效期。签发节点证书固定 ClientAuth、绑定 `spiffe://reladock/nodes/<id>`，有效期 30 天，不照搬 CSR 的名称或用途。**尚未自动续签**：长期运行前须安排到期前按既有证书轮换流程更新；不能把短期接入功能当成完整生产 PKI 生命周期。
+CA 必须仍有至少 31 天有效期。签发节点证书固定 ClientAuth、绑定 `spiffe://reladock/nodes/<id>`，有效期 30 天，不照搬 CSR 的名称或用途。Agent 在剩余 7 天时自动轮换：生成新私钥/CSR、恢复同一待签结果、用待激活证书确认后原子发布。失败按独立退避重试，连续一小时错误才告警；手工绑定、撤销或重新 bootstrap 会取消待激活结果。`/etc/reladock/node-pki` 必须由 Agent 账号以 0700/0600 权限持久可写；自定义 `RELADOCK_PKI` 时同步增加 systemd `ReadWritePaths` override。
 
 ## 操作者使用
 
@@ -104,6 +104,6 @@ CA 必须仍有至少 31 天有效期。签发节点证书固定 ClientAuth、�
 - GitHub 无法连接：可从可信来源取得同一固定版本归档，下载可信控制台的引导脚本，用 `sudo sh /绝对路径/bootstrap-agent.sh https://控制台域名 --offline /绝对路径/归档.tar.gz` 执行。仍需控制台 HTTPS 在线，凭证通过 stdin 提供；不要把凭证作为额外命令参数。离线包仍必须匹配平台固定 SHA256。
 - 注册响应丢失：保留 PKI 下的 `enrollment.json`、CSR 和私钥，15 分钟内同一 CSR 可重取同一证书，不再签发第二身份。重跑整个安装器默认拒绝已有 PKI；运维使用 `reladock-agent enroll` 子命令恢复同一申请。不得删除私钥重新申请来掩盖未知状态。
 - 部分落盘失败：保留原文件，先核对已写入内容和原申请；不自动覆盖冲突文件。已完成注册但 systemd 启动失败时查看 `journalctl -u reladock-agent`，修正权限/服务后手动启动，不重新注册。
-- 证书到期/轮换、已有节点迁移或升级：走显式运维流程，不重新执行新节点安装器覆盖现有部署；尤其不得删除 journal、WAL 或清除 applying 屏障。
+- 自动轮换失败：保留 `identity.pem`、轮换状态、journal 与 WAL，修复控制端签发器、时间或磁盘权限后让 Agent 重试。不要删除 PKI 目录、重新运行新节点安装器或清除 applying 屏障。手工证书操作会有意取消待激活轮换，操作前先核对节点状态。
 
 本地验证将真实 HTTPS/CSR/mTLS/数据库链路与无网络 Linux 安装器测试分别执行。安装器测试模拟 Agent 注册结果和 systemd 命令，**没有验收真实 VPS 的 systemd、GitHub 下载可达性或实际网络转发**。全平台仍不是生产就绪声明。

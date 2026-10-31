@@ -207,6 +207,10 @@ func TestAdminNodeLifecycleAndRevisionGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	cert, _ := nodeauth.ReadCertificate(filepath.Join(dir, "agent.crt"))
+	var enrolledExpiry time.Time
+	if err = s.pool.QueryRow(ctx, "SELECT agent_certificate_not_after FROM nodes WHERE id=$1", input.ID).Scan(&enrolledExpiry); err != nil || !enrolledExpiry.Equal(cert.NotAfter) {
+		t.Fatalf("enrolled certificate expiry: %v %v", enrolledExpiry, err)
+	}
 	if err = s.AuthenticateNode(ctx, input.ID, nodeauth.Fingerprint(cert)); err != nil {
 		t.Fatal(err)
 	}

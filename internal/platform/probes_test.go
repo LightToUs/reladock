@@ -38,7 +38,11 @@ func probeFixture(t *testing.T) (*Store, Identity, Rule, probe.Result, string) {
 	t.Helper()
 	ctx := context.Background()
 	s := probeStore(t)
-	admin, _ := adminIdentity(t, s)
+	admin, _ := register(t, s, "probe-admin-view@example.com")
+	if err := s.SetPlatformAdmin(ctx, admin.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	admin.PlatformAdmin = true
 	who, _ := register(t, s, "probe-owner@example.com")
 	rule, err := s.CreateRule(ctx, who, "probe-fixture-rule", ruleInput("both"))
 	if err != nil {
@@ -130,6 +134,28 @@ func TestProbeReportExactReplayOrderingAndTenantRead(t *testing.T) {
 	if _, err = s.ProbeResults(ctx, forged, result.RuleID); err != ErrUnauthorized {
 		t.Fatalf("forged identity: %v", err)
 	}
+}
+
+func TestAdminNodesExposeCurrentProbeFactSeparately(t *testing.T) {
+	s, _, _, result, credential := probeFixture(t)
+	ctx := context.Background()
+	if err := s.ReportProbe(ctx, "hk-01", result, credential); err != nil {
+		t.Fatal(err)
+	}
+	admin, _ := adminIdentity(t, s)
+	nodes, err := s.AdminNodes(ctx, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range nodes {
+		if node.ID == "hk-01" {
+			if node.ProbeStatus != string(probe.TargetReachable) || node.ProbeObservedAt == nil {
+				t.Fatalf("probe fact missing from admin node: %+v", node)
+			}
+			return
+		}
+	}
+	t.Fatal("node missing")
 }
 
 func TestProbeNanosecondOrderingDoesNotRoundIntoReplay(t *testing.T) {

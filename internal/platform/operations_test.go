@@ -95,6 +95,74 @@ func TestOperationsIncidentDedupRecoveryAndUnknownContacts(t *testing.T) {
 	}
 }
 
+func TestCertificateIncidentsWarnExpireFailResolveAndRecur(t *testing.T) {
+	s := notificationStore(t)
+	ctx := context.Background()
+	fingerprint := strings.Repeat("e", 64)
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET status='maintenance',certificate_fingerprint=$1,last_seen_at=clock_timestamp(),agent_certificate_not_after=clock_timestamp()+interval '6 days',agent_rotation_state='error',agent_rotation_error_code='renew-unavailable',agent_rotation_error_since=clock_timestamp()-interval '59 minutes' WHERE id='hk-01'`, fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE state='open' AND kind='certificate-expiring'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("expiring warning: %d %v", count, err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE kind='certificate-rotation-failed'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("rotation error alerted before one hour: %d %v", count, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET agent_rotation_error_since=clock_timestamp()-interval '61 minutes' WHERE id='hk-01'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE state='open' AND kind='certificate-rotation-failed'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("continuous rotation failure: %d %v", count, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET agent_certificate_not_after=clock_timestamp()-interval '1 minute' WHERE id='hk-01'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE kind='certificate-expiring' AND state='resolved'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("expiring resolution on expiry: %d %v", count, err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE kind='certificate-expired' AND state='open'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("expired incident: %d %v", count, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET agent_certificate_not_after=clock_timestamp()+interval '30 days',agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL WHERE id='hk-01'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE kind LIKE 'certificate-%' AND state='open'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("certificate recovery: %d %v", count, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET agent_certificate_not_after=clock_timestamp()+interval '6 days' WHERE id='hk-01'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	var occurrences int
+	if err := s.pool.QueryRow(ctx, `SELECT occurrences FROM operations_incidents WHERE kind='certificate-expiring' AND state='open'`).Scan(&occurrences); err != nil || occurrences != 2 {
+		t.Fatalf("certificate recurrence: %d %v", occurrences, err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=NULL WHERE id='hk-01'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM operations_incidents WHERE kind LIKE 'certificate-%' AND state='open'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("unenrolled certificate incident: %d %v", count, err)
+	}
+}
+
 func TestOperationsTenantVisibilityAndSupportIsolation(t *testing.T) {
 	s := operationsStore(t)
 	ctx := context.Background()
