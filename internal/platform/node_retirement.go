@@ -333,6 +333,9 @@ func (s *Store) FinalizeNodeRetirement(ctx context.Context, who Identity, nodeID
 	if _, err = tx.Exec(ctx, `DELETE FROM node_certificate_rotations WHERE node_id=$1`, nodeID); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(ctx, `DELETE FROM node_resource_latest WHERE node_id=$1`, nodeID); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `UPDATE nodes SET status='retired',certificate_fingerprint=NULL,agent_heartbeat_at=NULL,agent_certificate_not_after=NULL,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL,revision=revision+1 WHERE id=$1`, nodeID); err != nil {
 		return err
 	}

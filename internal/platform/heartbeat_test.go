@@ -10,12 +10,21 @@ import (
 )
 
 func validAgentHeartbeat(now time.Time) AgentHeartbeat {
+	cpu, memory, disk, conntrack := 20, 30, 40, 10
 	return AgentHeartbeat{
 		Version:             "v0.8.0",
 		Mode:                "validation",
 		StartedAt:           now.Add(-time.Minute),
 		CertificateNotAfter: now.Add(20 * 24 * time.Hour),
 		RotationState:       "idle",
+		Resources: ResourceObservation{
+			SampledAt:        now,
+			CPUPercent:       &cpu,
+			MemoryPercent:    &memory,
+			DiskPercent:      &disk,
+			ConntrackPercent: &conntrack,
+			DataplaneState:   "not-applicable",
+		},
 	}
 }
 
@@ -85,6 +94,10 @@ func TestManualCredentialReplacementClearsPriorHeartbeatFacts(t *testing.T) {
 	if err := s.EnrollNode(ctx, "hk-01", strings.Repeat("2", 64)); err != nil {
 		t.Fatal(err)
 	}
+	var observations int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM node_resource_latest WHERE node_id='hk-01'`).Scan(&observations); err != nil || observations != 0 {
+		t.Fatalf("old identity resource observation survived replacement: %d %v", observations, err)
+	}
 	var heartbeat, expiry, errorSince *time.Time
 	var version, mode, rotation, code string
 	var persistedBootID *string
@@ -121,6 +134,12 @@ func TestAgentHeartbeatRejectsUnboundedOrInconsistentValues(t *testing.T) {
 		{"idle with error", func(h *AgentHeartbeat) { h.RotationErrorCode = "renew-unavailable" }},
 		{"error without code", func(h *AgentHeartbeat) { h.RotationState = "error" }},
 		{"unknown code", func(h *AgentHeartbeat) { h.RotationState = "error"; h.RotationErrorCode = "raw-database-error" }},
+		{"zero resource time", func(h *AgentHeartbeat) { h.Resources.SampledAt = time.Time{} }},
+		{"future resource time", func(h *AgentHeartbeat) { h.Resources.SampledAt = now.Add(2 * time.Minute) }},
+		{"stale resource time", func(h *AgentHeartbeat) { h.Resources.SampledAt = now.Add(-8 * 24 * time.Hour) }},
+		{"resource percent above range", func(h *AgentHeartbeat) { value := 101; h.Resources.CPUPercent = &value }},
+		{"resource percent below range", func(h *AgentHeartbeat) { value := -1; h.Resources.MemoryPercent = &value }},
+		{"unknown dataplane state", func(h *AgentHeartbeat) { h.Resources.DataplaneState = "healthy" }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -130,6 +149,58 @@ func TestAgentHeartbeatRejectsUnboundedOrInconsistentValues(t *testing.T) {
 				t.Fatalf("invalid heartbeat accepted: %v", err)
 			}
 		})
+	}
+}
+
+func TestAgentHeartbeatPersistsLatestResourceObservationAndConditionDurations(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	fingerprint := strings.Repeat("8", 64)
+	if _, err := s.pool.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$1 WHERE id='hk-01'", fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	h := validAgentHeartbeat(now)
+	h.Mode = "apply"
+	cpu, memory, disk := 95, 50, 86
+	h.Resources.CPUPercent = &cpu
+	h.Resources.MemoryPercent = &memory
+	h.Resources.DiskPercent = &disk
+	h.Resources.ConntrackPercent = nil
+	h.Resources.DataplaneState = "drifted"
+	h.Resources.SampledAt = now.Add(-10 * time.Second)
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, h); err != nil {
+		t.Fatal(err)
+	}
+	var sampled, received time.Time
+	var storedCPU, storedMemory, storedDisk int
+	var storedConntrack *int
+	var skew int
+	var cpuSince, diskSince, driftSince *time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT sampled_at,received_at,cpu_percent,memory_percent,disk_percent,conntrack_percent,clock_skew_seconds,cpu_high_since,disk_high_since,dataplane_drift_since FROM node_resource_latest WHERE node_id='hk-01'`).Scan(&sampled, &received, &storedCPU, &storedMemory, &storedDisk, &storedConntrack, &skew, &cpuSince, &diskSince, &driftSince); err != nil {
+		t.Fatal(err)
+	}
+	if !sampled.Equal(h.Resources.SampledAt) || received.Before(now) || storedCPU != 95 || storedMemory != 50 || storedDisk != 86 || storedConntrack != nil || skew < 9 || skew > 12 || cpuSince == nil || diskSince == nil || driftSince == nil {
+		t.Fatalf("persisted resource observation mismatch: sampled=%v received=%v values=%d/%d/%d/%v skew=%d since=%v/%v/%v", sampled, received, storedCPU, storedMemory, storedDisk, storedConntrack, skew, cpuSince, diskSince, driftSince)
+	}
+	firstCPU, firstDisk, firstDrift := *cpuSince, *diskSince, *driftSince
+	h.Resources.SampledAt = time.Now().UTC()
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, h); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT cpu_high_since,disk_high_since,dataplane_drift_since FROM node_resource_latest WHERE node_id='hk-01'`).Scan(&cpuSince, &diskSince, &driftSince); err != nil || cpuSince == nil || diskSince == nil || driftSince == nil || !cpuSince.Equal(firstCPU) || !diskSince.Equal(firstDisk) || !driftSince.Equal(firstDrift) {
+		t.Fatalf("continuous condition duration reset: %v %v %v %v", cpuSince, diskSince, driftSince, err)
+	}
+	cpu, disk = 10, 20
+	h.Resources.CPUPercent = &cpu
+	h.Resources.DiskPercent = &disk
+	h.Resources.DataplaneState = "in-sync"
+	h.Resources.SampledAt = time.Now().UTC()
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, h); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT cpu_high_since,disk_high_since,dataplane_drift_since FROM node_resource_latest WHERE node_id='hk-01'`).Scan(&cpuSince, &diskSince, &driftSince); err != nil || cpuSince != nil || diskSince != nil || driftSince != nil {
+		t.Fatalf("recovered conditions retained duration: %v %v %v %v", cpuSince, diskSince, driftSince, err)
 	}
 }
 
@@ -201,6 +272,9 @@ func TestAdminNodesExposeAgentHeartbeatWithoutCredentialMaterial(t *testing.T) {
 	if found.ContactStatus != "online" || found.AgentMode != "validation" || found.AgentStartedAt == nil || found.CertificateNotAfter == nil || found.RotationState != "idle" {
 		t.Fatalf("admin heartbeat facts: %+v", found)
 	}
+	if found.ResourceStatus != "normal" || found.ResourceObservedAt == nil || found.CPUPercent == nil || *found.CPUPercent != 20 || found.DataplaneState != "not-applicable" || found.ClockSkewSeconds == nil {
+		t.Fatalf("admin resource facts: %+v", found)
+	}
 	raw, err := json.Marshal(found)
 	if err != nil {
 		t.Fatal(err)
@@ -214,8 +288,8 @@ func TestAdminNodesExposeAgentHeartbeatWithoutCredentialMaterial(t *testing.T) {
 		t.Fatalf("schema v22 rerun: %v", err)
 	}
 	var version int
-	var rotationsTable, upgradesTable, retirementsTable, attestationsTable bool
-	if err := s.pool.QueryRow(ctx, "SELECT max(version),(to_regclass('node_certificate_rotations') IS NOT NULL),(to_regclass('node_agent_upgrades') IS NOT NULL),(to_regclass('endpoint_retirements') IS NOT NULL),(to_regclass('node_drain_attestations') IS NOT NULL) FROM schema_migrations").Scan(&version, &rotationsTable, &upgradesTable, &retirementsTable, &attestationsTable); err != nil || version != SchemaVersion || !rotationsTable || !upgradesTable || !retirementsTable || !attestationsTable {
-		t.Fatalf("schema version/tables: version=%d rotations=%v upgrades=%v retirements=%v attestations=%v err=%v", version, rotationsTable, upgradesTable, retirementsTable, attestationsTable, err)
+	var rotationsTable, upgradesTable, retirementsTable, attestationsTable, resourcesTable bool
+	if err := s.pool.QueryRow(ctx, "SELECT max(version),(to_regclass('node_certificate_rotations') IS NOT NULL),(to_regclass('node_agent_upgrades') IS NOT NULL),(to_regclass('endpoint_retirements') IS NOT NULL),(to_regclass('node_drain_attestations') IS NOT NULL),(to_regclass('node_resource_latest') IS NOT NULL) FROM schema_migrations").Scan(&version, &rotationsTable, &upgradesTable, &retirementsTable, &attestationsTable, &resourcesTable); err != nil || version != SchemaVersion || !rotationsTable || !upgradesTable || !retirementsTable || !attestationsTable || !resourcesTable {
+		t.Fatalf("schema version/tables: version=%d rotations=%v upgrades=%v retirements=%v attestations=%v resources=%v err=%v", version, rotationsTable, upgradesTable, retirementsTable, attestationsTable, resourcesTable, err)
 	}
 }

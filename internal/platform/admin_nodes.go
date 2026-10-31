@@ -46,6 +46,14 @@ type ManagedNode struct {
 	UpgradeBlockedReason   string               `json:"upgradeBlockedReason"`
 	RetirementEligible     bool                 `json:"retirementEligible"`
 	RetirementReasons      []string             `json:"retirementReasons"`
+	ResourceStatus         string               `json:"resourceStatus"`
+	ResourceObservedAt     *time.Time           `json:"resourceObservedAt"`
+	CPUPercent             *int                 `json:"cpuPercent"`
+	MemoryPercent          *int                 `json:"memoryPercent"`
+	DiskPercent            *int                 `json:"diskPercent"`
+	ConntrackPercent       *int                 `json:"conntrackPercent"`
+	ClockSkewSeconds       *int                 `json:"clockSkewSeconds"`
+	DataplaneState         string               `json:"dataplaneState"`
 }
 
 func normalizeNode(input NodeInput) (NodeInput, error) {
@@ -77,8 +85,11 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 	 WHEN EXISTS(SELECT 1 FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation AND p.status='unknown') THEN 'udpUnknown'
 	 ELSE 'unknown' END,
 	(SELECT max(p.observed_at) FROM probe_latest p WHERE p.node_id=n.id AND p.generation=n.desired_generation AND p.generation=n.applied_generation),
-	u.id::text,u.target_version,u.previous_version,u.state,u.error_code,u.requested_at,u.updated_at,u.completed_at
+	u.id::text,u.target_version,u.previous_version,u.state,u.error_code,u.requested_at,u.updated_at,u.completed_at,
+	CASE WHEN rs.node_id IS NULL THEN 'unknown' WHEN rs.received_at<clock_timestamp()-interval '90 seconds' THEN 'stale' WHEN rs.dataplane_state='drifted' THEN 'drifted' WHEN COALESCE(rs.cpu_percent>=90,false) OR COALESCE(rs.memory_percent>=90,false) OR COALESCE(rs.disk_percent>=85,false) OR COALESCE(rs.conntrack_percent>=80,false) OR rs.clock_skew_seconds>120 THEN 'pressure' WHEN rs.cpu_percent IS NULL AND rs.memory_percent IS NULL AND rs.disk_percent IS NULL AND rs.conntrack_percent IS NULL THEN 'unknown' ELSE 'normal' END,
+	rs.received_at,rs.cpu_percent,rs.memory_percent,rs.disk_percent,rs.conntrack_percent,rs.clock_skew_seconds,COALESCE(rs.dataplane_state,'')
 	FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation
+	LEFT JOIN node_resource_latest rs ON rs.node_id=n.id
 	LEFT JOIN LATERAL (SELECT id,target_version,previous_version,state,error_code,requested_at,updated_at,completed_at FROM node_agent_upgrades WHERE node_id=n.id ORDER BY requested_at DESC,id DESC LIMIT 1) u ON true
 	ORDER BY n.id`, AgentHeartbeatStaleAfter.Seconds())
 	if err != nil {
@@ -90,7 +101,7 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 		var n ManagedNode
 		var upgradeID, targetVersion, previousVersion, state, errorCode *string
 		var requestedAt, updatedAt, completedAt *time.Time
-		if err = rows.Scan(&n.ID, &n.Name, &n.Region, &n.Status, &n.DesiredGeneration, &n.ValidatedGeneration, &n.LastSeenAt, &n.AgentVersion, &n.DeliveryState, &n.DeliveryAttempts, &n.ListenAddress, &n.PublicAddress, &n.CapacityMbps, &n.Revision, &n.CertificateFingerprint, &n.AppliedGeneration, &n.ContactStatus, &n.AgentMode, &n.AgentStartedAt, &n.HeartbeatAt, &n.CertificateNotAfter, &n.RotationState, &n.RotationErrorCode, &n.RotationErrorSince, &n.ProbeStatus, &n.ProbeObservedAt, &upgradeID, &targetVersion, &previousVersion, &state, &errorCode, &requestedAt, &updatedAt, &completedAt); err != nil {
+		if err = rows.Scan(&n.ID, &n.Name, &n.Region, &n.Status, &n.DesiredGeneration, &n.ValidatedGeneration, &n.LastSeenAt, &n.AgentVersion, &n.DeliveryState, &n.DeliveryAttempts, &n.ListenAddress, &n.PublicAddress, &n.CapacityMbps, &n.Revision, &n.CertificateFingerprint, &n.AppliedGeneration, &n.ContactStatus, &n.AgentMode, &n.AgentStartedAt, &n.HeartbeatAt, &n.CertificateNotAfter, &n.RotationState, &n.RotationErrorCode, &n.RotationErrorSince, &n.ProbeStatus, &n.ProbeObservedAt, &upgradeID, &targetVersion, &previousVersion, &state, &errorCode, &requestedAt, &updatedAt, &completedAt, &n.ResourceStatus, &n.ResourceObservedAt, &n.CPUPercent, &n.MemoryPercent, &n.DiskPercent, &n.ConntrackPercent, &n.ClockSkewSeconds, &n.DataplaneState); err != nil {
 			return nil, err
 		}
 		if upgradeID != nil {
@@ -239,6 +250,9 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 	}
 	if action != "node.add" {
 		if action == "node.enroll" || action == "node.revoke-certificate" {
+			if _, err = tx.Exec(ctx, "DELETE FROM node_resource_latest WHERE node_id=$1", id); err != nil {
+				return err
+			}
 			if _, err = tx.Exec(ctx, "DELETE FROM node_certificate_rotations WHERE node_id=$1", id); err != nil {
 				return err
 			}

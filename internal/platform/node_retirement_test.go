@@ -82,6 +82,9 @@ func TestNodeDrainingIsIrreversibleAndFinalizationIsFullyGated(t *testing.T) {
 	if err := store.ReportNodeDrainAttestation(ctx, "hk-01", fingerprint, value); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.pool.Exec(ctx, `INSERT INTO node_resource_latest(node_id,sampled_at,cpu_percent,memory_percent,disk_percent,conntrack_percent,clock_skew_seconds,dataplane_state) VALUES('hk-01',clock_timestamp(),20,30,40,10,0,'in-sync')`); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.FinalizeNodeRetirement(ctx, admin, "hk-01", 2); err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +99,10 @@ func TestNodeDrainingIsIrreversibleAndFinalizationIsFullyGated(t *testing.T) {
 	}
 	if err := store.AuthenticateNode(ctx, "hk-01", fingerprint); !errors.Is(err, ErrUnauthorized) {
 		t.Fatal("retired certificate remained valid")
+	}
+	var observations int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM node_resource_latest WHERE node_id='hk-01'`).Scan(&observations); err != nil || observations != 0 {
+		t.Fatalf("retired identity retained resource observation: %d %v", observations, err)
 	}
 }
 
