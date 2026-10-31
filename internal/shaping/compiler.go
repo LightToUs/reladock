@@ -105,7 +105,7 @@ func compile(cfg platform.NodeConfig, o Options, history []Class) (Plan, error) 
 		return Plan{}, errors.New("invalid shaping configuration or historical classifier collision")
 	}
 	addr, e := netip.ParseAddr(cfg.ListenAddress)
-	if e != nil || !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsLoopback() || cfg.SchemaVersion != 1 || cfg.Generation < 1 || cfg.NodeID != o.NodeID || len(cfg.Rules) > 65533 {
+	if e != nil || !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsLoopback() || (cfg.SchemaVersion != 1 && cfg.SchemaVersion != 2) || cfg.Generation < 1 || cfg.NodeID != o.NodeID || len(cfg.Rules) > 65533 {
 		return bad()
 	}
 	cfg.Rules = append([]platform.ConfigRule(nil), cfg.Rules...)

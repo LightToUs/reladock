@@ -44,6 +44,23 @@ func TestCompileOneSharedClassBothProtocolsAndDirections(t *testing.T) {
 		t.Fatal(join(p.Commands))
 	}
 }
+
+func TestCompileAcceptsSchemaTwoNodeConfig(t *testing.T) {
+	v1, err := Compile(config(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config()
+	cfg.SchemaVersion = 2
+	v2, err := Compile(cfg, options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2.Config.SchemaVersion != 2 || !reflect.DeepEqual(v1.Classes, v2.Classes) || !reflect.DeepEqual(v1.Markings, v2.Markings) || !reflect.DeepEqual(v1.Commands, v2.Commands) {
+		t.Fatalf("schema two changed shaping semantics: v1=%+v v2=%+v", v1, v2)
+	}
+}
+
 func join(cmds [][]string) string {
 	var b strings.Builder
 	for _, c := range cmds {
@@ -98,7 +115,7 @@ func TestCompileRejectsInvalidOwnershipTopologyAndInjection(t *testing.T) {
 		"unknown status":   func(c *platform.NodeConfig, _ *Options) { c.Rules[0].Status = "active" },
 		"rule injection":   func(c *platform.NodeConfig, _ *Options) { c.Rules[0].ID = "x\";drop" },
 		"generation":       func(c *platform.NodeConfig, _ *Options) { c.Generation = 0 },
-		"schema":           func(c *platform.NodeConfig, _ *Options) { c.SchemaVersion = 2 },
+		"schema":           func(c *platform.NodeConfig, _ *Options) { c.SchemaVersion = 3 },
 		"bandwidth":        func(c *platform.NodeConfig, _ *Options) { c.Rules[0].BandwidthMbps = 0 },
 		"capacity":         func(c *platform.NodeConfig, o *Options) { o.Lease.LinkMbps = 1; c.Rules[0].BandwidthMbps = 2 },
 		"protocol":         func(c *platform.NodeConfig, _ *Options) { c.Rules[0].Protocol = "ip" },
