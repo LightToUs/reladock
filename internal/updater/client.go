@@ -9,7 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"reladock/internal/buildinfo"
@@ -118,4 +121,70 @@ func ReleaseAssetURL(version, arch string) (string, error) {
 		return "", errors.New("invalid release asset")
 	}
 	return fmt.Sprintf("https://github.com/LightToUs/reladock/releases/download/%s/reladock-%s-linux-%s.tar.gz", version, version, arch), nil
+}
+
+func DownloadRelease(ctx context.Context, client *http.Client, version, arch, destination string) error {
+	asset, err := ReleaseAssetURL(version, arch)
+	if err != nil {
+		return err
+	}
+	return downloadReleaseFromURL(ctx, client, asset, destination)
+}
+
+func downloadReleaseFromURL(ctx context.Context, source *http.Client, asset, destination string) error {
+	if source == nil || !filepath.IsAbs(destination) {
+		return errors.New("invalid release download")
+	}
+	client := *source
+	if client.Timeout <= 0 || client.Timeout > 5*time.Minute {
+		client.Timeout = 5 * time.Minute
+	}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		host := req.URL.Hostname()
+		if len(via) >= 5 || req.URL.Scheme != "https" || (host != "github.com" && !strings.HasSuffix(host, ".githubusercontent.com")) {
+			return errors.New("unsafe release redirect")
+		}
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset, nil)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return errors.New("release download unavailable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.ContentLength > maxReleaseArchiveBytes {
+		return errors.New("release download rejected")
+	}
+	dir := filepath.Dir(destination)
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".download-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if err = f.Chmod(0600); err == nil {
+		var written int64
+		written, err = io.Copy(f, io.LimitReader(response.Body, maxReleaseArchiveBytes+1))
+		if err == nil && written > maxReleaseArchiveBytes {
+			err = errors.New("release download too large")
+		}
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(f.Name(), destination); err != nil {
+		return err
+	}
+	return syncDirectory(dir)
 }

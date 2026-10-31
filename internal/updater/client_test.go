@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -104,5 +106,34 @@ func TestClientRejectsUnsafeInputsAndAssetURLIsFixed(t *testing.T) {
 	}
 	if _, err = ReleaseAssetURL("v0.9.0/evil", "amd64"); err == nil {
 		t.Fatal("unsafe asset version accepted")
+	}
+}
+
+func TestDownloadReleaseFromURLBoundsBodyAndRedirectHosts(t *testing.T) {
+	mode := "ok"
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch mode {
+		case "ok":
+			w.Write([]byte("archive"))
+		case "large":
+			w.Header().Set("Content-Length", "134217729")
+			w.WriteHeader(http.StatusOK)
+		case "redirect":
+			http.Redirect(w, r, "https://evil.example/archive", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+	destination := filepath.Join(t.TempDir(), "release.tar.gz")
+	if err := downloadReleaseFromURL(context.Background(), srv.Client(), srv.URL, destination); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(destination); string(raw) != "archive" {
+		t.Fatalf("download = %q", raw)
+	}
+	for _, invalid := range []string{"large", "redirect"} {
+		mode = invalid
+		if err := downloadReleaseFromURL(context.Background(), srv.Client(), srv.URL, destination+invalid); err == nil {
+			t.Fatalf("%s download accepted", invalid)
+		}
 	}
 }
