@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -120,5 +121,21 @@ func TestResourceCollectorRejectsCounterRegressionAndMalformedFiles(t *testing.T
 	value := collector.Collect(context.Background(), nil)
 	if value.CPUPercent != nil || value.MemoryPercent != nil || value.DiskPercent != nil || value.ConntrackPercent != nil {
 		t.Fatalf("malformed/regressed counters were accepted: %+v", value)
+	}
+}
+
+func TestParseMemoryRequiresBothTotalAndAvailable(t *testing.T) {
+	if value := parseMemory([]byte("MemTotal: 1024 kB\n")); value != nil {
+		t.Fatalf("missing MemAvailable reported as %d%%", *value)
+	}
+	if value := parseMemory([]byte("MemAvailable: 512 kB\n")); value != nil {
+		t.Fatalf("missing MemTotal reported as %d%%", *value)
+	}
+}
+
+func TestBoundedPercentDoesNotOverflowLargeKernelCounters(t *testing.T) {
+	value := boundedPercent(math.MaxUint64-1, math.MaxUint64)
+	if value == nil || *value != 99 {
+		t.Fatalf("large bounded percentage=%v want 99", value)
 	}
 }

@@ -9,6 +9,7 @@ import (
 func revertRetirementSchema(t *testing.T, s *Store) {
 	t.Helper()
 	_, err := s.pool.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version>=22;
+DROP TABLE node_resource_latest;
 DROP TABLE node_drain_attestations;
 ALTER TABLE nodes DROP COLUMN agent_kernel_boot_id,DROP COLUMN agent_journal_sequence;
 ALTER TABLE endpoint_allocations DROP COLUMN predecessor_retirement_id;
@@ -17,7 +18,9 @@ DROP TRIGGER endpoint_allocation_identity_immutable ON endpoint_allocations;
 DROP FUNCTION endpoint_allocation_identity_immutable();
 ALTER TABLE endpoint_allocations DROP COLUMN allocation_id;
 ALTER TABLE nodes DROP CONSTRAINT nodes_status_check,
- ADD CONSTRAINT nodes_status_check CHECK (status IN ('unprovisioned','ready','maintenance'))`)
+ ADD CONSTRAINT nodes_status_check CHECK (status IN ('unprovisioned','ready','maintenance'));
+ALTER TABLE operations_incidents DROP CONSTRAINT operations_incidents_kind_check,
+ ADD CONSTRAINT operations_incidents_kind_check CHECK (kind IN ('contact-stale','config-failed','certificate-expiring','certificate-expired','certificate-rotation-failed'))`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,10 +28,13 @@ ALTER TABLE nodes DROP CONSTRAINT nodes_status_check,
 
 func revertDrainSchemaTo22(t *testing.T, s *Store) {
 	t.Helper()
-	_, err := s.pool.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version=23;
+	_, err := s.pool.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version>=23;
+DROP TABLE node_resource_latest;
 DROP INDEX node_drain_attestations_unconsumed;
 ALTER TABLE node_drain_attestations DROP COLUMN node_revision;
-ALTER TABLE nodes DROP COLUMN agent_kernel_boot_id,DROP COLUMN agent_journal_sequence`)
+ALTER TABLE nodes DROP COLUMN agent_kernel_boot_id,DROP COLUMN agent_journal_sequence;
+ALTER TABLE operations_incidents DROP CONSTRAINT operations_incidents_kind_check,
+ ADD CONSTRAINT operations_incidents_kind_check CHECK (kind IN ('contact-stale','config-failed','certificate-expiring','certificate-expired','certificate-rotation-failed'))`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,11 +209,12 @@ func TestMigration23AddsMonotonicRuntimeAndConsumesOldAttestations(t *testing.T)
 		t.Fatal(err)
 	}
 	var version, consumed, runtimeColumns int
-	if err := s.pool.QueryRow(ctx, `SELECT max(version),(SELECT count(*) FROM node_drain_attestations WHERE consumed_at IS NOT NULL),(SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND ((table_name='nodes' AND column_name IN ('agent_kernel_boot_id','agent_journal_sequence')) OR (table_name='node_drain_attestations' AND column_name='node_revision'))) FROM schema_migrations`).Scan(&version, &consumed, &runtimeColumns); err != nil {
+	var resourcesTable bool
+	if err := s.pool.QueryRow(ctx, `SELECT max(version),(SELECT count(*) FROM node_drain_attestations WHERE consumed_at IS NOT NULL),(SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND ((table_name='nodes' AND column_name IN ('agent_kernel_boot_id','agent_journal_sequence')) OR (table_name='node_drain_attestations' AND column_name='node_revision'))),to_regclass('node_resource_latest') IS NOT NULL FROM schema_migrations`).Scan(&version, &consumed, &runtimeColumns, &resourcesTable); err != nil {
 		t.Fatal(err)
 	}
-	if version != 23 || consumed != 1 || runtimeColumns != 3 {
-		t.Fatalf("migration23 incomplete version=%d consumed=%d columns=%d", version, consumed, runtimeColumns)
+	if version != SchemaVersion || consumed != 1 || runtimeColumns != 3 || !resourcesTable {
+		t.Fatalf("migration23/latest chain incomplete version=%d consumed=%d columns=%d resources=%v", version, consumed, runtimeColumns, resourcesTable)
 	}
 }
 

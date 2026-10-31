@@ -20,10 +20,11 @@
 - 控制通道告警去重与工单、可选且默认关闭的 Stripe 支付连接器，已接入真实数据库与替身支付接口测试；无真实商户收款。
 - 告警转移同事务通知 Outbox、默认关闭的签名 HTTPS webhook、有界租约/重试、后台通知交付及耗尽后人工重试；不假装通知已读。
 - 默认关闭、仅允许独立回环地址的 Prometheus 运维端点；聚合节点/联系/规则/当前交付/事件/通知/升级/retirement 与 worker 结果，不输出客户资源标签，也不把控制事实命名为端到端健康。真实 Prometheus/Grafana、留存和告警路由仍待环境验收。
+- Agent 心跳附带有界 Linux 资源样本与只读 nftables/tc 一致性结果；数据库只保留最新样本和持续异常起点，后台显示 normal/pressure/drifted/stale/unknown，Prometheus 只聚合固定状态。资源压力 5 分钟、时钟/漂移 2 分钟后才生成事件；真实压力和漂移注入仍待隔离 VPS 验收。
 - 不可变节点成本、发票/请求幂等与事务审计、按实际套餐扣费和已录成本的现金口径差额。成本缺失保持未知，不推测企业成本归属或应计毛利。
 - 生产 HTTPS、数据库共享限流、Linux 构建及按组件安装模板；独立应用服务不自动启用。隔离 Docker 实测组合 TCP/UDP、逐规则 tc、全包计数/WAL、额度耗尽、替换不重置额度、Agent 离线内核到期和失败回滚。v0.7.8 增加 iproute2 5.15 HTB class 文本、fw filter 混合文本回读兼容和幂等故障冻结；v0.7.9 修复长周期 nft 到期单位；v0.7.10 增加默认关闭、无虚构账务的开发套餐绕过标记与空周期计量。生产节点仍须通过持久 journal 自动恢复并取得 applied ACK，不能据此宣称端到端协议健康。TCP 目标可达性与 UDP unknown 观测按当前 applied generation 授权存储。
 
-## 尚未实现
+## 尚未实现或尚未完成环境验收
 
 真实 VPS/容量验收、合作端到端协议探针、商户激活与人工对账流程、跨故障域备份保留及替换主机恢复演练、Redis 与后续企业组网。加密包创建、控制临时数据库校验和节点仅暂存校验已实现，但不等于离机耐久性或 RPO/RTO 已验收。平台 retirement 状态机、schema-2 allocation-ID quarantine/回滚底座、固定 conntrack 执行器、复用 Pending/Recovery 的 Adapter 本地 purge journal/ACK 分类/原子 predecessor 接管、apply-only mTLS Agent 领取/begin/proof/report 恢复闭环，以及不可逆 draining 和最终节点身份撤销门禁已实现。管理界面已逐项显示退役门禁，Agent 安装和 apply 单元检查固定 conntrack-tools，发布清单仍保持 `productionReady=false`；生产式退役演练按 `docs/acceptance/SAFE_RETIREMENT.md` 尚未执行。Agent updater 已实现但尚未完成真实 VPS 上安装中断、健康超时、回滚失败及离机状态恢复演练；节点应用日志/WAL 丢失后的人工重建流程仍需专门运维验收，不能自动清屏障或重置计量。生产服务器/域名/支付渠道由用户之后确定。
 

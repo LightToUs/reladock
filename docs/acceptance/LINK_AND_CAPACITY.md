@@ -24,6 +24,7 @@
 - 后台 Agent 联系为近期、证书有效、当前 generation 已 `applied`；这些只允许开始测试，不代表测试通过。
 - `nft`/`tc` readback 与 Agent last-good 一致，无 flowtable；GRO/GSO/TSO/LRO 前置条件满足。
 - Prometheus 中数据库、worker、当前交付、事件和 retirement 无未解释错误。
+- 后台“节点资源”和 `reladock_node_resources` 有新鲜样本；`normal` 只允许开始测试，不代表链路通过。
 - 入口和落地的系统时间同步，磁盘有足够 WAL 空间，测试期间保存日志但不抓取客户业务载荷。
 
 ## TCP 与 UDP 转发
@@ -70,6 +71,8 @@ UUID、密码、Reality public key/short ID、SNI、uTLS fingerprint、flow、TL
 - 回滚：注入候选配置失败，确认旧规则恢复、候选端口 guard 保留、计量基线不重置。
 - 重启：分别重启 Agent、入口 VPS 和控制服务，验证 journal/WAL/updater/PKI 恢复；不能删除状态目录来获得“成功”。
 - 控制中断：入口保留最近有效内核策略，WAL 有界积压；恢复后无重复扣量。WAL 满或状态不确定应失败关闭/冻结，而不是继续无计量转发。
+- 资源告警：在隔离入口上可控制造持续 CPU/内存/磁盘/conntrack 压力，确认单次尖峰不报警、达到固定持续时间后仅打开对应事件、恢复后解除；不得在客户承载节点直接压测。
+- 漂移告警：在无客户流量的隔离节点上修改一个平台拥有的 nftables/tc 对象，确认只读检查报告 `drifted` 且两分钟后告警；随后只通过正常配置重放/受控恢复修正，禁止把监控检查本身改成自动修复。记录任何 fail-closed 冻结行为。
 - 节点退役：按 [安全退役验收](SAFE_RETIREMENT.md) 完成维护、排空、证明和身份撤销，不使用强制 SQL/flush。
 
 ## 通过门禁与证据包

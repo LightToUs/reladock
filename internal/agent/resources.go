@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"math/bits"
 	"os"
 	"strconv"
 	"strings"
@@ -55,7 +56,9 @@ func boundedPercent(used, total uint64) *int {
 	if total == 0 || used > total {
 		return nil
 	}
-	value := int(used * 100 / total)
+	high, low := bits.Mul64(used, 100)
+	quotient, _ := bits.Div64(high, low, total)
+	value := int(quotient)
 	return &value
 }
 
@@ -84,6 +87,7 @@ func parseCPU(raw []byte) (cpuCounters, bool) {
 
 func parseMemory(raw []byte) *int {
 	var total, available uint64
+	var totalSeen, availableSeen bool
 	for _, line := range strings.Split(string(raw), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
@@ -96,11 +100,13 @@ func parseMemory(raw []byte) *int {
 		switch fields[0] {
 		case "MemTotal:":
 			total = value
+			totalSeen = true
 		case "MemAvailable:":
 			available = value
+			availableSeen = true
 		}
 	}
-	if available > total {
+	if !totalSeen || !availableSeen || available > total {
 		return nil
 	}
 	return boundedPercent(total-available, total)
