@@ -1,8 +1,14 @@
 package web
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +33,7 @@ func TestMTLSAgentEnrollmentValidationAndRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewUnstartedServer(NewAgent(store))
+	srv := httptest.NewUnstartedServer(NewAgent(store, nil))
 	srv.TLS = cfg
 	srv.StartTLS()
 	defer srv.Close()
@@ -107,7 +113,7 @@ func TestAgentHeartbeatRequiresPostAndStrictJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	serverTLS, _ := nodeauth.ServerTLS(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key"))
-	srv := httptest.NewUnstartedServer(NewAgent(store))
+	srv := httptest.NewUnstartedServer(NewAgent(store, nil))
 	srv.TLS = serverTLS
 	srv.StartTLS()
 	defer srv.Close()
@@ -134,5 +140,141 @@ func TestAgentHeartbeatRequiresPostAndStrictJSON(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("unknown heartbeat field status=%d", response.StatusCode)
+	}
+}
+
+func TestAgentCertificateRenewAndActivateEndpoints(t *testing.T) {
+	store := testWebStore(t)
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "pki")
+	if err := nodeauth.CreateLocalBundle(dir, "hk-01"); err != nil {
+		t.Fatal(err)
+	}
+	signer, err := nodeauth.LoadBootstrapSigner(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "ca.key"), filepath.Join(dir, "ca.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCert, _ := nodeauth.ReadCertificate(filepath.Join(dir, "agent.crt"))
+	if err = store.EnrollNode(ctx, "hk-01", nodeauth.Fingerprint(oldCert)); err != nil {
+		t.Fatal(err)
+	}
+	serverTLS, _ := nodeauth.ServerTLS(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key"))
+	srv := httptest.NewUnstartedServer(NewAgent(store, signer.Sign))
+	srv.TLS = serverTLS
+	srv.StartTLS()
+	defer srv.Close()
+	oldTLS, _ := nodeauth.ClientTLS(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "agent.crt"), filepath.Join(dir, "agent.key"))
+	oldTransport := &http.Transport{TLSClientConfig: oldTLS}
+	defer oldTransport.CloseIdleConnections()
+	oldClient := &http.Client{Transport: oldTransport}
+	_, nextKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, nextKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+	payload, _ := json.Marshal(map[string]string{"csr": string(csr)})
+	request, _ := http.NewRequest(http.MethodPost, srv.URL+"/agent/certificate/renew", bytes.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	response, err := oldClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var renewal struct {
+		Certificate string    `json:"certificate"`
+		ExpiresAt   time.Time `json:"expiresAt"`
+	}
+	if err = json.NewDecoder(response.Body).Decode(&renewal); err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || renewal.Certificate == "" || renewal.ExpiresAt.IsZero() {
+		t.Fatalf("renew response status=%d value=%+v", response.StatusCode, renewal)
+	}
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(nextKey)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	pair, err := tls.X509KeyPair([]byte(renewal.Certificate), keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTLS := oldTLS.Clone()
+	newTLS.Certificates = []tls.Certificate{pair}
+	newTransport := &http.Transport{TLSClientConfig: newTLS}
+	defer newTransport.CloseIdleConnections()
+	newClient := &http.Client{Transport: newTransport}
+	// Pending identity may only call activation, never ordinary Agent routes.
+	request, _ = http.NewRequest(http.MethodPost, srv.URL+"/agent/config/claim", nil)
+	request.Header.Set("X-RelaDock-Agent-Version", "pending-test")
+	response, err = newClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("pending identity reached config endpoint: %d", response.StatusCode)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		request, _ = http.NewRequest(http.MethodPost, srv.URL+"/agent/certificate/activate", nil)
+		response, err = newClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("activation attempt %d status=%d", attempt+1, response.StatusCode)
+		}
+	}
+	request, _ = http.NewRequest(http.MethodPost, srv.URL+"/agent/config/claim", nil)
+	request.Header.Set("X-RelaDock-Agent-Version", "old-test")
+	response, err = oldClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old identity survived endpoint activation: %d", response.StatusCode)
+	}
+}
+
+func TestAgentCertificateRenewUnavailableAndOversizedRequestsAreBounded(t *testing.T) {
+	store := testWebStore(t)
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "pki")
+	if err := nodeauth.CreateLocalBundle(dir, "hk-01"); err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := nodeauth.ReadCertificate(filepath.Join(dir, "agent.crt"))
+	if err := store.EnrollNode(ctx, "hk-01", nodeauth.Fingerprint(cert)); err != nil {
+		t.Fatal(err)
+	}
+	serverTLS, _ := nodeauth.ServerTLS(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key"))
+	srv := httptest.NewUnstartedServer(NewAgent(store, nil))
+	srv.TLS = serverTLS
+	srv.StartTLS()
+	defer srv.Close()
+	clientTLS, _ := nodeauth.ClientTLS(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "agent.crt"), filepath.Join(dir, "agent.key"))
+	transport := &http.Transport{TLSClientConfig: clientTLS}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+	for _, tc := range []struct {
+		body string
+		want int
+	}{
+		{`{"csr":"value"}`, http.StatusServiceUnavailable},
+		{`{"csr":"` + strings.Repeat("a", 9000) + `"}`, http.StatusRequestEntityTooLarge},
+	} {
+		request, _ := http.NewRequest(http.MethodPost, srv.URL+"/agent/certificate/renew", strings.NewReader(tc.body))
+		request.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != tc.want {
+			t.Fatalf("renew body len=%d status=%d want=%d", len(tc.body), response.StatusCode, tc.want)
+		}
 	}
 }

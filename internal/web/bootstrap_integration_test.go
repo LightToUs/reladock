@@ -38,7 +38,7 @@ func TestBootstrapHTTPSRegistrationAndMTLSValidation(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	nodeServer := httptest.NewUnstartedServer(NewAgent(store))
+	nodeServer := httptest.NewUnstartedServer(NewAgent(store, nil))
 	nodeServer.TLS = mtls
 	nodeServer.StartTLS()
 	defer nodeServer.Close()

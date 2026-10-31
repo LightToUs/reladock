@@ -160,6 +160,9 @@ func (s *Store) RedeemNodeBootstrap(ctx context.Context, token string, csr []byt
 		fingerprint = bootstrapHash(p.Bytes)
 	}
 	// Never reset an applying barrier or any metering state during enrollment.
+	if _, err = tx.Exec(ctx, "DELETE FROM node_certificate_rotations WHERE node_id=$1", id); err != nil {
+		return out, err
+	}
 	if _, err = tx.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$2,revision=revision+1 WHERE id=$1", id, fingerprint); err != nil {
 		return out, nodeError(err)
 	}

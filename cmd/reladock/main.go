@@ -129,7 +129,7 @@ func main() {
 		if e != nil {
 			log.Fatal("Agent server TLS configuration invalid")
 		}
-		servers = append(servers, &http.Server{Addr: cfg.AgentAddress, Handler: web.NewAgent(store), TLSConfig: tlsConfig, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024})
+		servers = append(servers, &http.Server{Addr: cfg.AgentAddress, Handler: web.NewAgent(store, nil), TLSConfig: tlsConfig, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024})
 	}
 	failures := make(chan error, len(servers))
 	for i, srv := range servers {

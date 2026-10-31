@@ -14,7 +14,7 @@ import (
 )
 
 // Agent requests use a distinct mTLS-only listener, never a tenant cookie.
-func NewAgent(store *platform.Store) http.Handler {
+func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if r.TLS == nil || r.TLS.Version < tls.VersionTLS13 || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
@@ -31,7 +31,12 @@ func NewAgent(store *platform.Store) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
 		r = r.WithContext(ctx)
-		if err = store.AuthenticateNode(ctx, id, fingerprint); err != nil {
+		if r.URL.Path == "/agent/certificate/activate" {
+			err = store.AuthenticateNodeForActivation(ctx, id, fingerprint)
+		} else {
+			err = store.AuthenticateNode(ctx, id, fingerprint)
+		}
+		if err != nil {
 			failure(w, err)
 			return
 		}
@@ -54,6 +59,33 @@ func NewAgent(store *platform.Store) http.Handler {
 		}
 		if r.Method != "POST" {
 			respond(w, 405, map[string]string{"error": "POST required"})
+			return
+		}
+		if r.URL.Path == "/agent/certificate/renew" {
+			var input struct {
+				CSR string `json:"csr"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			if signer == nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "certificate renewal unavailable"})
+				return
+			}
+			rotation, renewErr := store.RenewNodeCertificate(ctx, id, fingerprint, []byte(input.CSR), signer)
+			if renewErr != nil {
+				failure(w, renewErr)
+				return
+			}
+			respond(w, http.StatusOK, map[string]any{"certificate": string(rotation.Certificate), "expiresAt": rotation.ExpiresAt})
+			return
+		}
+		if r.URL.Path == "/agent/certificate/activate" {
+			if err = store.ActivateNodeCertificate(ctx, id, fingerprint); err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusOK, map[string]bool{"ok": true})
 			return
 		}
 		if r.URL.Path == "/agent/heartbeat" {

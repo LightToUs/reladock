@@ -201,6 +201,9 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 	}
 	if action != "node.add" {
 		if action == "node.enroll" || action == "node.revoke-certificate" {
+			if _, err = tx.Exec(ctx, "DELETE FROM node_certificate_rotations WHERE node_id=$1", id); err != nil {
+				return err
+			}
 			if _, err = tx.Exec(ctx, "DELETE FROM node_preflight WHERE node_id=$1", id); err != nil {
 				return err
 			}
