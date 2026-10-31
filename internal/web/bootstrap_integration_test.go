@@ -62,6 +62,12 @@ func TestBootstrapHTTPSRegistrationAndMTLSValidation(t *testing.T) {
 	if b, _ := os.ReadFile(env); !strings.Contains(string(b), nodeServer.URL) {
 		t.Fatal("wrong control endpoint saved")
 	}
+	if info, statErr := os.Lstat(filepath.Join(nodeDir, "identity.pem")); statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		t.Fatalf("bootstrap canonical identity file: mode=%v err=%v", info, statErr)
+	}
+	if _, err = agent.OpenCredentialManager(nodeDir, "hk-01"); err != nil {
+		t.Fatalf("bootstrap did not publish canonical identity bundle: %v", err)
+	}
 	config, err := nodeauth.ClientTLS(filepath.Join(nodeDir, "ca.crt"), filepath.Join(nodeDir, "agent.crt"), filepath.Join(nodeDir, "agent.key"))
 	if err != nil {
 		t.Fatal(err)

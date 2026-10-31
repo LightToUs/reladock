@@ -212,5 +212,9 @@ func Bootstrap(ctx context.Context, o BootstrapOptions) error {
 			}
 		}
 	}
+	identity := append(append([]byte{}, []byte(out.Certificate)...), keyPEM...)
+	if e = save("identity.pem", string(identity)); e != nil {
+		return e
+	}
 	return save("agent.crt", out.Certificate)
 }

@@ -79,6 +79,18 @@ func CreateLocalBundle(dir, nodeID string) error {
 		}
 		return closeErr
 	}
+	writeRaw := func(name string, data []byte) error {
+		file, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return err
+		}
+		_, err = file.Write(data)
+		closeErr := file.Close()
+		if err != nil {
+			return err
+		}
+		return closeErr
+	}
 	caKey, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return err
@@ -116,6 +128,12 @@ func CreateLocalBundle(dir, nodeID string) error {
 		}
 		if err = write(kind+".crt", "CERTIFICATE", der); err != nil {
 			return err
+		}
+		if kind == "agent" {
+			bundle := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER})...)
+			if err = writeRaw("identity.pem", bundle); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
