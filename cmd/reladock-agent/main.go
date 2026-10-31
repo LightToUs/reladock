@@ -77,17 +77,7 @@ func main() {
 	} else {
 		log.Print("Agent mode: validation-only; no nftables/tc execution and no applied ACK")
 	}
-	var lastPreflight time.Time
-	for {
-		// Contact and inspection are distinct from configuration/application health.
-		if !*once && time.Since(lastPreflight) >= time.Minute {
-			pctx, done := context.WithTimeout(ctx, 20*time.Second)
-			if err := runner.ReportPreflight(pctx); err != nil {
-				log.Print("Read-only environment report needs attention")
-			}
-			done()
-			lastPreflight = time.Now()
-		}
+	if *once {
 		if engine != nil {
 			tickCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			if err := engine.Tick(tickCtx, &runner); err != nil {
@@ -97,10 +87,7 @@ func main() {
 		}
 		done, err := runner.Once(ctx)
 		if err != nil {
-			if *once {
-				log.Fatal(err)
-			}
-			log.Printf("configuration cycle failed: %v", err)
+			log.Fatal(err)
 		} else if done {
 			if *apply {
 				log.Print("Configuration application report acknowledged; forwarding health remains unknown")
@@ -108,13 +95,38 @@ func main() {
 				log.Print("Desired configuration validated and acknowledged; traffic not enabled")
 			}
 		}
-		if *once {
+		return
+	}
+	activities := []agent.Activity{{Name: "preflight", Interval: time.Minute, Run: func(parent context.Context) error {
+		// Contact and inspection are distinct from configuration/application health.
+		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
+		defer cancel()
+		return runner.ReportPreflight(activityCtx)
+	}}, {Name: "configuration", Interval: 5 * time.Second, Run: func(parent context.Context) error {
+		done, err := runner.Once(parent)
+		if err == nil && done {
+			if *apply {
+				log.Print("Configuration application report acknowledged; forwarding health remains unknown")
+			} else {
+				log.Print("Desired configuration validated and acknowledged; traffic not enabled")
+			}
+		}
+		return err
+	}}}
+	if engine != nil {
+		activities = append(activities, agent.Activity{Name: "metering", Interval: 5 * time.Second, Run: func(parent context.Context) error {
+			activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
+			defer cancel()
+			return engine.Tick(activityCtx, &runner)
+		}})
+	}
+	if err := agent.RunSupervisor(ctx, activities, func(name string, err error) {
+		if name == "preflight" {
+			log.Print("Read-only environment report needs attention")
 			return
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(5 * time.Second):
-		}
+		log.Printf("%s cycle needs attention: %v", name, err)
+	}); err != nil {
+		log.Fatal(err)
 	}
 }
