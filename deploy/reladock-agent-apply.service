@@ -11,6 +11,7 @@ User=reladock
 Group=reladock
 WorkingDirectory=/var/lib/reladock-agent
 EnvironmentFile=/etc/reladock/agent.env
+ExecStartPre=/usr/sbin/conntrack --version
 ExecStart=/opt/reladock/reladock-agent --apply=true --node ${RELADOCK_NODE} --control ${RELADOCK_CONTROL} --pki ${RELADOCK_PKI} --state-dir ${RELADOCK_STATE_DIR} --snat=${RELADOCK_SNAT} --shaping-interface=${RELADOCK_SHAPING_INTERFACE} --metering-wal-dir ${RELADOCK_WAL_DIR} --nft-binary ${RELADOCK_NFT_BINARY} --tc-binary ${RELADOCK_TC_BINARY} --ip-binary ${RELADOCK_IP_BINARY} --ethtool-binary ${RELADOCK_ETHTOOL_BINARY} --shaping-lease ${RELADOCK_SHAPING_LEASE}
 Restart=on-failure
 RestartSec=5

@@ -27,7 +27,7 @@ for (const name of ['reladock.service', 'reladock-agent.service','reladock-agent
 }
 await copyFile(new URL('../docs/DEPLOYMENT.md', import.meta.url), new URL('DEPLOYMENT.md', output));
 hashes.push(`${createHash('sha256').update(await readFile(new URL('DEPLOYMENT.md',output))).digest('hex')}  DEPLOYMENT.md`);
-await writeFile(new URL('RELEASE.json',output),JSON.stringify({name:'RelaDock',version:metadata.version,os:'linux',arch,productionReady:false,agentMode:'validation-default; explicit composed Linux application',unverified:['production VPS acceptance and capacity','end-to-end cooperative protocol health','merchant activation and reconciliation','offsite disaster recovery','automatic conntrack-safe retired allocation reuse']},null,2)+'\n');
+await writeFile(new URL('RELEASE.json',output),JSON.stringify({name:'RelaDock',version:metadata.version,os:'linux',arch,productionReady:false,agentMode:'validation-default; explicit composed Linux application',unverified:['production VPS acceptance and capacity','end-to-end cooperative protocol health','merchant activation and reconciliation','offsite disaster recovery','privileged full safe-retirement lifecycle on a production-like VPS']},null,2)+'\n');
 hashes.push(`${createHash('sha256').update(await readFile(new URL('RELEASE.json',output))).digest('hex')}  RELEASE.json`);
 await writeFile(new URL('SHA256SUMS', output), `${hashes.join('\n')}\n`);
 const asset=await packRelease(fileURLToPath(output).replace(/\/$/,''),metadata.version,arch,releaseFiles);

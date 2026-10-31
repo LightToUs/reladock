@@ -11,6 +11,21 @@ case "$component" in control) service=reladock; configuration=control; binaries=
 case "$release" in /*) ;; *) echo 'Release directory must be absolute' >&2; exit 1;; esac
 command -v systemctl >/dev/null
 command -v sha256sum >/dev/null
+if [ "$component" = agent ] && [ ! -x /usr/sbin/conntrack ]; then
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y conntrack
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y conntrack-tools
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y conntrack-tools
+  elif command -v apk >/dev/null 2>&1; then
+    apk add conntrack-tools
+  else
+    echo 'Unable to install conntrack tools: supported package manager not found' >&2
+    exit 1
+  fi
+fi
+if [ "$component" = agent ] && [ ! -x /usr/sbin/conntrack ]; then echo 'Unable to install conntrack tools at /usr/sbin/conntrack' >&2; exit 1; fi
 test -f "$release/SHA256SUMS"
 (cd "$release" && sha256sum --check SHA256SUMS)
 for binary in $binaries; do test -f "$release/$binary"; done

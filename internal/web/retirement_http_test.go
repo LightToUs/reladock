@@ -45,6 +45,12 @@ func TestMTLSRetirementEndpointsAreStrictAndCertificateBound(t *testing.T) {
 		response.Body.Close()
 		return response.StatusCode
 	}
+	if status := request(http.MethodPost, "/agent/drain-status", "", ""); status != http.StatusOK {
+		t.Fatalf("drain status: %d", status)
+	}
+	if status := request(http.MethodPost, "/agent/drain-status", `{}`, ""); status != http.StatusBadRequest {
+		t.Fatalf("drain status body accepted: %d", status)
+	}
 	if status := request(http.MethodPost, "/agent/retirements/claim", "", ""); status != http.StatusNoContent {
 		t.Fatalf("empty claim: %d", status)
 	}

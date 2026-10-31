@@ -10,6 +10,7 @@ import (
 )
 
 type NodeEngine struct {
+	NodeID      string
 	Adapter     *dataplane.Adapter
 	WAL         *metering.WAL
 	Meter       dataplane.MeterHooks

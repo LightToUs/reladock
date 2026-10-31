@@ -31,6 +31,29 @@ func TestAdminUpgradePresentationContract(t *testing.T) {
 	}
 }
 
+func TestAdminRetirementPresentationContract(t *testing.T) {
+	adminJS, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(adminJS) + string(page)
+	for _, required := range []string{
+		"排空中", "排空完成 · 可最终退役", "进入安全排空", "最终退役节点", "不可恢复",
+		"撤销 Agent 身份", "仍有未删除规则", "等待最新 Agent 排空证明", "不提供强制释放",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("admin retirement presentation missing %q", required)
+		}
+	}
+	if strings.Contains(strings.ToLower(combined), "force release") || strings.Contains(combined, "强制释放端口") {
+		t.Fatal("admin exposes a force-release path")
+	}
+}
+
 func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
 	for _, path := range []string{"/admin.js", "/node-bootstrap.js", "/node-contact-status.js", "/operations-tools.js"} {

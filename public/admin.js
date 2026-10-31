@@ -7,7 +7,7 @@ const titles = { overview: '平台总览', nodes: '入口节点', tenants: '企�
 const deliveries = { queued: '等待领取', leased: '领取处理中', applying: '应用中 · 等待确认', applied: '已应用 · 健康未知', validated: '校验通过 · 未应用', failed: '配置失败', superseded: '已被新版本替代' };
 const upgradeStates = { queued: '等待 Agent 领取', claimed: '已领取', installing: '正在安装', verifying: '正在验证', succeeded: '升级成功', 'rolled-back': '已自动回滚', failed: '升级失败', cancelled: '已取消' };
 const upgradeErrors = { 'download-unavailable': '发布包下载失败', 'archive-invalid': '发布包格式无效', 'checksum-mismatch': '发布包摘要不匹配', 'install-failed': '安装失败', 'service-failed': 'Agent 启动失败', 'health-timeout': '控制链路验证超时', 'rollback-failed': '回滚失败，需要人工处理', 'state-invalid': '升级状态不一致' };
-const actions = { 'node.add': '新增节点', 'node.edit': '编辑节点', 'node.maintenance': '进入维护', 'node.enable': '恢复分配', 'node.enroll': '绑定 / 轮换证书', 'node.revoke-certificate': '撤销证书', 'node.agent-upgrade-request': '创建 Agent 升级', 'node.agent-upgrade-cancel': '取消 Agent 升级', 'node.agent-upgrade-claimed': 'Agent 领取升级', 'node.agent-upgrade-installing': 'Agent 安装升级', 'node.agent-upgrade-verifying': 'Agent 验证升级', 'node.agent-upgrade-succeeded': 'Agent 升级成功', 'node.agent-upgrade-rolled-back': 'Agent 已自动回滚', 'node.agent-upgrade-failed': 'Agent 升级失败', 'config.retry': '重新交付', 'tenant.access': '修改企业登录状态', 'platform.admin-access': '修改平台权限', 'rule.pause': '暂停规则', 'rule.resume': '恢复规则', 'rule.delete': '删除规则' };
+const actions = { 'node.add': '新增节点', 'node.edit': '编辑节点', 'node.maintenance': '进入维护', 'node.enable': '恢复分配', 'node.draining': '进入安全排空', 'node.retired': '最终退役节点', 'node.enroll': '绑定 / 轮换证书', 'node.revoke-certificate': '撤销证书', 'node.agent-upgrade-request': '创建 Agent 升级', 'node.agent-upgrade-cancel': '取消 Agent 升级', 'node.agent-upgrade-claimed': 'Agent 领取升级', 'node.agent-upgrade-installing': 'Agent 安装升级', 'node.agent-upgrade-verifying': 'Agent 验证升级', 'node.agent-upgrade-succeeded': 'Agent 升级成功', 'node.agent-upgrade-rolled-back': 'Agent 已自动回滚', 'node.agent-upgrade-failed': 'Agent 升级失败', 'config.retry': '重新交付', 'tenant.access': '修改企业登录状态', 'platform.admin-access': '修改平台权限', 'rule.pause': '暂停规则', 'rule.resume': '恢复规则', 'rule.delete': '删除规则' };
 const costNav = document.createElement('button'); costNav.dataset.view = 'costs'; costNav.textContent = '成本与经营差额'; document.querySelector('.admin-nav nav').append(costNav);
 const notificationNav = document.createElement('button'); notificationNav.dataset.view = 'notifications'; notificationNav.textContent = '通知交付'; document.querySelector('.admin-nav nav').append(notificationNav); titles.notifications = '通知交付';
 function access(mode) { if(mode!=='admin')bootstrapUI.clear(); $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
@@ -66,20 +66,43 @@ async function reload() {
 function renderSummary(data) { $('#stat-tenants').textContent = data.tenants; $('#stat-suspended').textContent = `${data.suspendedTenants} 家已停用登录`; $('#stat-nodes').textContent = data.nodes; $('#stat-maintenance').textContent = `${data.maintenanceNodes} 个维护中`; $('#stat-rules').textContent = data.rules; $('#stat-paused').textContent = `${data.pausedRules} 条已暂停`; $('#stat-failed').textContent = data.failedDeliveries; }
 async function mutate(path, body, success) {
   try { await api(path, body); }
-  catch (error) { if (error.status === 409) { await reload(); const nodeId = /^\/api\/admin\/nodes\/([^/]+)\//.exec(path)?.[1]; const latest = state.nodes.find(node => node.id === nodeId); if (latest && state.editingNode?.id === nodeId) editNode(latest); if (latest && state.certificateNode?.id === nodeId) editCertificate(latest); message('操作冲突，已载入最新数据，请重新确认后操作。有规则的节点不可更换绑定地址或降低至规则速率以下。'); return false; } throw error; }
+  catch (error) { if (error.status === 409) { await reload(); const nodeId = /^\/api\/admin\/nodes\/([^/]+)\//.exec(path)?.[1]; const latest = state.nodes.find(node => node.id === nodeId); if (latest && state.editingNode?.id === nodeId) editNode(latest); if (latest && state.certificateNode?.id === nodeId) editCertificate(latest); const detail = path.endsWith('/start-draining') ? '节点必须先进入维护；排空一旦开始不可恢复分配。' : path.endsWith('/finalize-retirement') ? `尚未满足最终退役门禁：${retirementReasonText(latest?.retirementReasons).join('；') || '状态已经变化'}。` : '有规则的节点不可更换绑定地址或降低至规则速率以下。'; message(`操作冲突，已载入最新数据，请重新确认后操作。${detail}`); return false; } throw error; }
   message(success);
   try { await reload(); } catch (error) { message(`${success} 列表刷新失败，请点击刷新查看结果：${error.message}`); }
   return true;
 }
+const retirementReasons = { status: '节点尚未进入排空', rules: '仍有未删除规则', allocations: '仍有端口占用', retirements: '仍有端口清理任务', generation: '最新配置尚未应用确认', 'configuration-active': '配置交付仍在进行', 'upgrade-active': 'Agent 升级仍在进行', 'rotation-pending': '证书轮换仍在进行', attestation: '等待最新 Agent 排空证明' };
+function retirementReasonText(reasons = []) { return reasons.map(reason => retirementReasons[reason] || `未知门禁 ${reason}`); }
+function nodeResourcePresentation(node) {
+  if (node.status === 'retired') return { label: '已退役 · 身份已撤销', detail: '历史与隔离证据保留；不可恢复' };
+  if (node.status === 'draining') { const reasons = retirementReasonText(node.retirementReasons); return node.retirementEligible ? { label: '排空完成 · 可最终退役', detail: '最新本地证明已通过全部门禁' } : { label: '排空中', detail: reasons.join('；') || '等待控制面重新核验' }; }
+  if (node.status === 'maintenance') return { label: '维护中', detail: '停止新增分配；已有流量不会自动停止' };
+  if (node.status === 'ready') return { label: '可分配', detail: node.appliedGeneration > 0 ? '已有应用确认 · 端到端健康未知' : '尚无应用确认' };
+  return { label: '尚未部署', detail: '仅登记了资源' };
+}
+function deliveryControl(node) { return button('交付记录', () => { $('#delivery-node').value = node.id; showView('deliveries'); }); }
 function renderNodes(nodes) {
   const root = $('#admin-nodes'); root.replaceChildren();
-  for (const node of nodes) { const row = root.insertRow(); cell(row, node.name, node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`); cell(row, node.status === 'maintenance' ? '维护中' : '尚未部署'); const contact = agentContactPresentation(node.contactStatus); const agentDetail = `${contact.detail}${node.agentMode ? `；${node.agentMode}` : ''}`; const contactCell = cell(row, contact.label, agentDetail); contactCell.classList.add('agent-status', `agent-status-${contact.tone}`); const upgrade = upgradePresentation(node); const upgradeCell = cell(row, upgrade.label, upgrade.detail); upgradeCell.classList.add('upgrade-status'); const configuration = configurationPresentation(node); cell(row, configuration.label, configuration.detail); cell(row, node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试耗尽 · 待处理' : deliveries[node.deliveryState] || '未知'); const probe = probePresentation(node); const probeCell = cell(row, probe.label, probe.detail); probeCell.classList.add('agent-status', `agent-status-${probe.tone}`); const certificate = certificatePresentation(node); const certificateCell = cell(row, certificate.label, certificate.detail); certificateCell.classList.add('agent-status', `agent-status-${certificate.tone}`); const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('编辑', () => editNode(node)), button(node.status === 'maintenance' ? '恢复分配' : '进入维护', () => mutate(`/api/admin/nodes/${node.id}/${node.status === 'maintenance' ? 'enable' : 'maintenance'}`, { revision: node.revision }, '节点分配状态已更新。')), button('证书', () => editCertificate(node)), button('重试交付', () => mutate(`/api/admin/nodes/${node.id}/retry`, { revision: node.revision }, '已生成最新完整快照，等待 Agent 领取。')), button('交付记录', () => { $('#delivery-node').value = node.id; showView('deliveries'); })); appendUpgradeControls(controls, node); }
-  empty(root, 11, '暂无节点，请先登记入口资源。');
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i]; const row = root.rows[i];
-    row.cells[3].textContent = node.status === 'maintenance' ? '维护中' : node.appliedGeneration > 0 ? '已有应用确认 · 健康未知' : '尚未部署';
-    row.cells[10].append(button('安装 Agent',()=>bootstrapUI.open(node)));
+  for (const node of nodes) {
+    const row = root.insertRow(); cell(row, node.name, node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`);
+    const resource = nodeResourcePresentation(node); cell(row, resource.label, resource.detail);
+    const contact = agentContactPresentation(node.contactStatus); const agentDetail = `${contact.detail}${node.agentMode ? `；${node.agentMode}` : ''}`; const contactCell = cell(row, contact.label, agentDetail); contactCell.classList.add('agent-status', `agent-status-${contact.tone}`);
+    const upgrade = upgradePresentation(node); const upgradeCell = cell(row, upgrade.label, upgrade.detail); upgradeCell.classList.add('upgrade-status'); const configuration = configurationPresentation(node); cell(row, configuration.label, configuration.detail); cell(row, node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试耗尽 · 待处理' : deliveries[node.deliveryState] || '未知');
+    const probe = probePresentation(node); const probeCell = cell(row, probe.label, probe.detail); probeCell.classList.add('agent-status', `agent-status-${probe.tone}`); const certificate = certificatePresentation(node); const certificateCell = cell(row, certificate.label, certificate.detail); certificateCell.classList.add('agent-status', `agent-status-${certificate.tone}`);
+    const controls = row.insertCell(); controls.className = 'table-actions';
+    if (node.status === 'retired') { controls.append(deliveryControl(node)); continue; }
+    if (node.status === 'draining') {
+      controls.append(button('重试交付', () => mutate(`/api/admin/nodes/${node.id}/retry`, { revision: node.revision }, '已生成最新完整快照，等待 Agent 领取。')), deliveryControl(node));
+      if (node.retirementEligible) controls.append(button('最终退役节点', async () => { if (!confirm(`最终退役“${node.name}”？这会撤销 Agent 身份，节点不可恢复；历史与隔离证据仍保留。`)) return; await mutate(`/api/admin/nodes/${node.id}/finalize-retirement`, { revision: node.revision }, '节点已最终退役，Agent 身份已撤销。'); }, true));
+      else { const waiting = button('等待安全退役条件', async () => {}); waiting.disabled = true; controls.append(waiting); }
+      continue;
+    }
+    controls.append(button('编辑', () => editNode(node)), button(node.status === 'maintenance' ? '恢复分配' : '进入维护', () => mutate(`/api/admin/nodes/${node.id}/${node.status === 'maintenance' ? 'enable' : 'maintenance'}`, { revision: node.revision }, '节点分配状态已更新。')), button('证书', () => editCertificate(node)), button('重试交付', () => mutate(`/api/admin/nodes/${node.id}/retry`, { revision: node.revision }, '已生成最新完整快照，等待 Agent 领取。')), deliveryControl(node));
+    appendUpgradeControls(controls, node);
+    if (node.status === 'maintenance') controls.append(button('进入安全排空', async () => { if (!confirm(`让“${node.name}”进入安全排空？此操作不可恢复分配；请继续删除全部规则并等待 Agent 证明。`)) return; await mutate(`/api/admin/nodes/${node.id}/start-draining`, { revision: node.revision }, '节点已进入排空；等待规则、端口、配置与 Agent 证明全部收敛。'); }, true));
+    controls.append(button('安装 Agent',()=>bootstrapUI.open(node)));
   }
+  empty(root, 11, '暂无节点，请先登记入口资源。');
 }
 function editNode(node) { state.editingNode = node; const form = $('#node-form'); for (const name of ['id', 'name', 'region', 'listenAddress', 'publicAddress', 'capacityMbps']) form.elements.namedItem(name).value = node[name]; form.elements.namedItem('id').readOnly = true; $('#node-form-title').textContent = `编辑节点 · ${node.name}`; $('#node-save').textContent = '保存节点修改'; $('#node-form-title').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 $('#node-new').addEventListener('click', () => { state.editingNode = null; $('#node-form').reset(); $('#node-form [name=id]').readOnly = false; $('#node-form-title').textContent = '新增入口节点'; $('#node-save').textContent = '登记节点'; });

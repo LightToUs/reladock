@@ -44,6 +44,8 @@ type ManagedNode struct {
 	UpgradeTargetVersion   string               `json:"upgradeTargetVersion"`
 	UpgradeEligible        bool                 `json:"upgradeEligible"`
 	UpgradeBlockedReason   string               `json:"upgradeBlockedReason"`
+	RetirementEligible     bool                 `json:"retirementEligible"`
+	RetirementReasons      []string             `json:"retirementReasons"`
 }
 
 func normalizeNode(input NodeInput) (NodeInput, error) {
@@ -96,7 +98,18 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 		}
 		items = append(items, n)
 	}
-	return items, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i := range items {
+		items[i].RetirementReasons, err = s.nodeRetirementReasons(ctx, tx, items[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		items[i].RetirementEligible = len(items[i].RetirementReasons) == 0
+	}
+	return items, nil
 }
 func nodeError(err error) error {
 	var pgerr *pgconn.PgError
@@ -139,8 +152,9 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 	}
 	var current int64
 	var bind string
+	var currentStatus string
 	if action != "node.add" {
-		err = tx.QueryRow(ctx, "SELECT revision,host(listen_address) FROM nodes WHERE id=$1 FOR UPDATE", id).Scan(&current, &bind)
+		err = tx.QueryRow(ctx, "SELECT revision,host(listen_address),status FROM nodes WHERE id=$1 FOR UPDATE", id).Scan(&current, &bind, &currentStatus)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -148,6 +162,9 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 			return err
 		}
 		if revision != nil && current != *revision {
+			return ErrConflict
+		}
+		if currentStatus == "retired" || currentStatus == "draining" && action != "config.retry" {
 			return ErrConflict
 		}
 	}
@@ -196,7 +213,7 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 		if !fingerprintPattern.MatchString(fingerprint) {
 			return ErrInvalid
 		}
-		if _, err = tx.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$2,last_seen_at=NULL,agent_heartbeat_at=NULL,agent_version='',agent_mode='',agent_started_at=NULL,agent_certificate_not_after=$3,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL WHERE id=$1`, id, fingerprint, certificateNotAfter); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$2,last_seen_at=NULL,agent_heartbeat_at=NULL,agent_version='',agent_mode='',agent_started_at=NULL,agent_certificate_not_after=$3,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL,agent_kernel_boot_id=NULL,agent_journal_sequence=0 WHERE id=$1`, id, fingerprint, certificateNotAfter); err != nil {
 			return nodeError(err)
 		}
 		if _, err = tx.Exec(ctx, "UPDATE config_outbox SET state='superseded' WHERE node_id=$1 AND state='leased'", id); err != nil {
@@ -207,7 +224,7 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 		}
 		details["fingerprint"] = fingerprint
 	case "node.revoke-certificate":
-		if _, err = tx.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=NULL,last_seen_at=NULL,agent_heartbeat_at=NULL,agent_version='',agent_mode='',agent_started_at=NULL,agent_certificate_not_after=NULL,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL WHERE id=$1`, id); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=NULL,last_seen_at=NULL,agent_heartbeat_at=NULL,agent_version='',agent_mode='',agent_started_at=NULL,agent_certificate_not_after=NULL,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL,agent_kernel_boot_id=NULL,agent_journal_sequence=0 WHERE id=$1`, id); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, "UPDATE config_outbox SET state='superseded' WHERE node_id=$1 AND state='leased'", id); err != nil {

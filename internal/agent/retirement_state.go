@@ -90,6 +90,29 @@ func (s *RetirementState) NextSequence(ctx context.Context, floor int64) (int64,
 	return next, nil
 }
 
+func (s *RetirementState) CurrentSequence() (int64, error) {
+	path := filepath.Join(s.dir, "retirement-sequence")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 64 {
+		return 0, errors.New("unsafe retirement sequence")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil || value < 0 {
+		return 0, errors.New("invalid retirement sequence")
+	}
+	return value, nil
+}
+
 func (s *RetirementState) Load(ctx context.Context) (*retirementRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -52,7 +52,7 @@ flowchart TD
 - `internal/web`：认证、租户写授权、同源/Host 检查、定制请求头、严格 JSON、8 KiB 业务正文限制和 HTTP 超时。开发模式进程内限流，生产模式 PostgreSQL 共享限流；Cookie 为 HttpOnly、SameSite=Strict，HTTPS 下启用 Secure/HSTS。独立支付 webhook 验签原始报文，上限 256 KiB，具有独立预算。
 - 端口按 `(node_id, listen_address, protocol, listen_port)` 数据库主键唯一；节点级事务锁分配 20000–60000 范围最小可用端口。TCP/UDP 可共用相同数字端口；both 同时预留，两者与规则、幂等记录、审计一起提交或回滚。
 - 创建规则必须提交企业内唯一的 `Idempotency-Key`（8–128 位字母数字及 `._:-`）；相同规范化请求重放返回原规则，不同请求返回冲突。幂等记录暂不自动过期。
-- 暂停保留端口；删除软删除规则并为每个 TCP/UDP allocation 建立 retirement，入队 schema-2 缺席快照。快照在 raw prerouting 安装新连接 quarantine，并保留 allocation-ID forward guard；平台只有在 applied quarantine 之后才允许领取精确清理任务。Agent 侧 conntrack 执行器与最终 ACK 编排仍未接入，因此当前不会自动释放或复用曾下发端口。重复暂停/删除不增加版本或审计。
+- 暂停保留端口；删除软删除规则并为每个 TCP/UDP allocation 建立 retirement，入队 schema-2 缺席快照。快照在 raw prerouting 安装新连接 quarantine，并保留 allocation-ID forward guard；平台只有在 applied quarantine 之后才允许领取精确清理任务。apply-only Agent 通过 mTLS 领取并确认任务，本地持久 journal 后按精确五元约束清理 conntrack，复核 quarantine 与零匹配，再持久化 proof、回报并等待 ACK；只有完整闭环才释放 allocation 并允许同一前驱的受控复用。validation-only Agent 不领取清理任务。重复暂停/删除不增加版本或审计。
 - 规则期望版本从 1 开始；仅 applied 回报推进对应快照的生效版本与 applied_status，校验不推进。节点 generation 与规则版本分开。applied 不代表端到端健康，页面不得显示运行中；无虚构充值、流量或余额。
 - 审计记录账户注册/登录/退出与规则创建/暂停/删除，查询仅返回本企业最近 50 条；尚未提供独立防篡改审计存储。
 - 注册只创建 owner。邀请仅生成 admin/viewer；角色变化撤销旧会话和 Key。Key 仅保存摘要，按 read/write 范围与当前数据库角色复核，不具备平台权限。每直接连接 IP 每分钟 120 次 API，认证预算 10 次；不信任代理转发头。
@@ -61,6 +61,8 @@ flowchart TD
 ### 节点配置交付（v2）
 
 平台后台与运维 CLI 管理全局节点、维护标志、精确证书摘要与人工重试；普通企业账号只读节点元数据。节点维护只拒绝新规则预留，不隐含暂停既有规则。`node_operator_events` 保留历史运维记录，v3 新操作写入 `platform_audit_logs`；企业审计仍只返回本企业。
+
+节点最终退役采用不可逆的 `maintenance -> draining -> retired` 状态机。进入 draining 会撤销安装凭证并禁止新建/恢复规则、升级和普通节点修改，但仍允许删除规则、配置重试、Agent 联系与必要的证书轮换，以便完成排空。最终退役要求规则、allocation、未释放 retirement、活动配置与升级均为空，desired/applied generation 一致，并取得与当前证书、内核 boot ID、Agent 启动时间、版本、journal sequence、last-good 摘要及完整 reusable quarantine 集合绑定的短时 mTLS attestation。心跳身份变化会消费旧证明；最终事务再次锁定节点并重算 quarantine 集合后才撤销节点身份。节点、审计、历史 retirement 与 quarantine 证据保留，不提供强制释放捷径。
 
 `config_outbox` 保存不可变 payload、SHA256 checksum、generation、状态、尝试次数与租约。创建/暂停/恢复/删除规则时，先获取节点事务锁，再更新规则/端口、生成完整快照、写审计，全部原子提交；创建还先获取企业幂等锁。快照包括节点全部未删除规则及企业标识，暂停规则明确标识，删除通过完整期望集合中缺失表达。当前 payload 上限 2 MiB，历史快照暂不清理。
 

@@ -122,7 +122,7 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 	if err != nil {
 		return Rule{}, err
 	}
-	if nodeStatus == "maintenance" {
+	if nodeStatus == "maintenance" || nodeStatus == "draining" || nodeStatus == "retired" {
 		return Rule{}, ErrConflict
 	}
 	if input.BandwidthMbps > nodeCapacity {
@@ -218,6 +218,15 @@ func (s *Store) changeRuleState(ctx context.Context, tx pgx.Tx, tenantID, id, st
 	}
 	if rule.Status == "deleted" && status != "deleted" {
 		return Rule{}, false, ErrNotFound
+	}
+	if status == "pending-agent" {
+		var nodeStatus string
+		if err = tx.QueryRow(ctx, "SELECT status FROM nodes WHERE id=$1", nodeID).Scan(&nodeStatus); err != nil {
+			return Rule{}, false, err
+		}
+		if nodeStatus == "draining" || nodeStatus == "retired" {
+			return Rule{}, false, ErrConflict
+		}
 	}
 	if status == "pending-agent" && !s.allowUnentitledRules {
 		if err := CheckRuleResumeAllowed(ctx, tx, id); err != nil {

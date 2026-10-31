@@ -41,14 +41,15 @@ func (s *Store) CreateNodeBootstrap(ctx context.Context, who Identity, id string
 		return g, err
 	}
 	var rev int64
-	err = tx.QueryRow(ctx, "SELECT revision FROM nodes WHERE id=$1 FOR UPDATE", id).Scan(&rev)
+	var status string
+	err = tx.QueryRow(ctx, "SELECT revision,status FROM nodes WHERE id=$1 FOR UPDATE", id).Scan(&rev, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return g, ErrNotFound
 	}
 	if err != nil {
 		return g, err
 	}
-	if rev != revision {
+	if rev != revision || status == "draining" || status == "retired" {
 		return g, ErrConflict
 	}
 	random := make([]byte, 32)
@@ -172,7 +173,7 @@ func (s *Store) RedeemNodeBootstrap(ctx context.Context, token string, csr []byt
 	if _, err = tx.Exec(ctx, "DELETE FROM node_certificate_rotations WHERE node_id=$1", id); err != nil {
 		return out, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$2,revision=revision+1,last_seen_at=NULL,agent_heartbeat_at=NULL,agent_version='',agent_mode='',agent_started_at=NULL,agent_certificate_not_after=$3,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL WHERE id=$1`, id, fingerprint, certificateNotAfter); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$2,revision=revision+1,last_seen_at=NULL,agent_heartbeat_at=NULL,agent_version='',agent_mode='',agent_started_at=NULL,agent_certificate_not_after=$3,agent_rotation_state='idle',agent_rotation_error_code='',agent_rotation_error_since=NULL,agent_kernel_boot_id=NULL,agent_journal_sequence=0 WHERE id=$1`, id, fingerprint, certificateNotAfter); err != nil {
 		return out, nodeError(err)
 	}
 	if _, err = tx.Exec(ctx, "UPDATE config_outbox SET state='superseded' WHERE node_id=$1 AND state='leased'", id); err != nil {

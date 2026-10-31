@@ -8,8 +8,9 @@ import (
 
 func revertRetirementSchema(t *testing.T, s *Store) {
 	t.Helper()
-	_, err := s.pool.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version=22;
+	_, err := s.pool.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version>=22;
 DROP TABLE node_drain_attestations;
+ALTER TABLE nodes DROP COLUMN agent_kernel_boot_id,DROP COLUMN agent_journal_sequence;
 ALTER TABLE endpoint_allocations DROP COLUMN predecessor_retirement_id;
 DROP TABLE endpoint_retirements;
 DROP TRIGGER endpoint_allocation_identity_immutable ON endpoint_allocations;
@@ -17,6 +18,17 @@ DROP FUNCTION endpoint_allocation_identity_immutable();
 ALTER TABLE endpoint_allocations DROP COLUMN allocation_id;
 ALTER TABLE nodes DROP CONSTRAINT nodes_status_check,
  ADD CONSTRAINT nodes_status_check CHECK (status IN ('unprovisioned','ready','maintenance'))`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func revertDrainSchemaTo22(t *testing.T, s *Store) {
+	t.Helper()
+	_, err := s.pool.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version=23;
+DROP INDEX node_drain_attestations_unconsumed;
+ALTER TABLE node_drain_attestations DROP COLUMN node_revision;
+ALTER TABLE nodes DROP COLUMN agent_kernel_boot_id,DROP COLUMN agent_journal_sequence`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,5 +189,43 @@ func TestMigration22RollsBackOnVersionRecordFailure(t *testing.T) {
 	}
 	if version != 21 || allocationColumn || retirementTable {
 		t.Fatalf("failed migration leaked state version=%d allocation=%v retirement=%v", version, allocationColumn, retirementTable)
+	}
+}
+
+func TestMigration23AddsMonotonicRuntimeAndConsumesOldAttestations(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, `INSERT INTO node_drain_attestations(id,node_id,generation,certificate_fingerprint,kernel_boot_id,agent_started_at,agent_version,journal_sequence,good_digest,quarantine_digest,observed_at,evidence) VALUES($1,'hk-01',1,$2,$3,now(),'v0.9.0',1,$4,$5,now(),'{}')`, newID(), strings.Repeat("a", 64), newID(), strings.Repeat("b", 64), strings.Repeat("c", 64)); err != nil {
+		t.Fatal(err)
+	}
+	revertDrainSchemaTo22(t, s)
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var version, consumed, runtimeColumns int
+	if err := s.pool.QueryRow(ctx, `SELECT max(version),(SELECT count(*) FROM node_drain_attestations WHERE consumed_at IS NOT NULL),(SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND ((table_name='nodes' AND column_name IN ('agent_kernel_boot_id','agent_journal_sequence')) OR (table_name='node_drain_attestations' AND column_name='node_revision'))) FROM schema_migrations`).Scan(&version, &consumed, &runtimeColumns); err != nil {
+		t.Fatal(err)
+	}
+	if version != 23 || consumed != 1 || runtimeColumns != 3 {
+		t.Fatalf("migration23 incomplete version=%d consumed=%d columns=%d", version, consumed, runtimeColumns)
+	}
+}
+
+func TestMigration23RollsBackOnVersionRecordFailure(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	revertDrainSchemaTo22(t, s)
+	if _, err := s.pool.Exec(ctx, "ALTER TABLE schema_migrations ADD CONSTRAINT reject_v23 CHECK (version<>23)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(ctx); err == nil {
+		t.Fatal("migration committed despite version record failure")
+	}
+	var version, runtimeColumns int
+	if err := s.pool.QueryRow(ctx, `SELECT max(version),(SELECT count(*) FROM information_schema.columns WHERE table_schema=current_schema() AND ((table_name='nodes' AND column_name IN ('agent_kernel_boot_id','agent_journal_sequence')) OR (table_name='node_drain_attestations' AND column_name='node_revision'))) FROM schema_migrations`).Scan(&version, &runtimeColumns); err != nil {
+		t.Fatal(err)
+	}
+	if version != 22 || runtimeColumns != 0 {
+		t.Fatalf("failed migration leaked state version=%d columns=%d", version, runtimeColumns)
 	}
 }

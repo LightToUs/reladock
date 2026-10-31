@@ -215,6 +215,38 @@ func TestAgentUpgradeClaimSelectsArchitectureAndProtectsLease(t *testing.T) {
 	}
 }
 
+func TestDrainingNodeCannotStartOrAdvanceAgentUpgrade(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	admin, fingerprint, revision := readyUpgradeNode(t, s)
+	task, err := s.RequestAgentUpgrade(ctx, admin, "hk-01", revision, upgradeTarget())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE nodes SET status='draining' WHERE id='hk-01'"); err != nil {
+		t.Fatal(err)
+	}
+	if claim, claimErr := s.ClaimAgentUpgrade(ctx, "hk-01", fingerprint, "amd64", "v0.8.0"); claimErr != nil || claim != nil {
+		t.Fatalf("draining node claimed queued upgrade: %+v %v", claim, claimErr)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE nodes SET status='ready' WHERE id='hk-01'"); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := s.ClaimAgentUpgrade(ctx, "hk-01", fingerprint, "amd64", "v0.8.0")
+	if err != nil || claim == nil {
+		t.Fatalf("ready node did not claim: %+v %v", claim, err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE nodes SET status='draining' WHERE id='hk-01'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReportAgentUpgrade(ctx, "hk-01", fingerprint, UpgradeReport{ID: task.ID, LeaseToken: claim.LeaseToken, State: "installing"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("draining node advanced upgrade: %v", err)
+	}
+	if failed, reportErr := s.ReportAgentUpgrade(ctx, "hk-01", fingerprint, UpgradeReport{ID: task.ID, LeaseToken: claim.LeaseToken, State: "failed", ErrorCode: "install-failed"}); reportErr != nil || failed.State != "failed" {
+		t.Fatalf("draining node could not safely fail upgrade: %+v %v", failed, reportErr)
+	}
+}
+
 func TestAgentUpgradeReportsFollowExplicitEdgesAndHeartbeatGate(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

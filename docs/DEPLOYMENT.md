@@ -8,7 +8,7 @@
 
 ## 控制平台安装
 
-发布包内有 `install-linux.sh`：在目标机器核对后执行 `sh /path/install-linux.sh control /absolute/release-directory`；节点使用 `agent`。脚本检查 Linux/root/systemd 和二进制 SHA256，安装系统账号、程序及服务模板，保留已有环境文件。它不会自动启动或启用服务，也不会修改网络规则。脚本完成后填写实际配置和证书，再显式启动服务。
+发布包内有 `install-linux.sh`：在目标机器核对后执行 `sh /path/install-linux.sh control /absolute/release-directory`；节点使用 `agent`。脚本检查 Linux/root/systemd 和二进制 SHA256，安装系统账号、程序及服务模板，保留已有环境文件。Agent 安装会在缺少固定 `/usr/sbin/conntrack` 时通过受支持的系统包管理器安装 `conntrack`/`conntrack-tools`，安装后仍会核对固定路径；它不会自动启动或启用服务，也不会修改网络规则。脚本完成后填写实际配置和证书，再显式启动服务。
 
 控制平台可用 `reladock --check-config` 校验当前进程环境和 TLS 文件，不连接数据库或监听网络；它不自动读取 env 文件，由 systemd EnvironmentFile 或受控启动器注入。
 
@@ -30,7 +30,7 @@
 
 先核对实际 IPv4 ingress 与 SNAT；控制平台的 `listenAddress` 必须为本节点实际地址，不可保留 `0.0.0.0`。客户目标须是可路由的非回环 IPv4；DNS 在受控应用时解析并固定，不承诺即时切换。平台不自动配置网卡、路由、ip_forward、卸载功能或云安全组。
 
-节点须有 nft、iproute2（tc/ip）与 ethtool。运维先明确启用 IPv4 forwarding；完成专用接口与 mark namespace 授权，关闭 GRO/GSO/TSO/LRO，并确保无 flowtable/offload 绕过。运行时只检查这些条件，拒绝不匹配，不自动更改系统前置设置。严禁与另一 NET_ADMIN 程序共同管理该接口/namespace；软件归属标记不是对恶意特权进程的隔离。
+节点须有 nft、iproute2（tc/ip）、ethtool 与 conntrack-tools。安全端口退役只执行固定 `/usr/sbin/conntrack`；apply systemd 单元在启动前运行版本检查，validation 单元没有 CAP_NET_ADMIN，也不会领取清理任务。运维先明确启用 IPv4 forwarding；完成专用接口与 mark namespace 授权，关闭 GRO/GSO/TSO/LRO，并确保无 flowtable/offload 绕过。运行时只检查这些条件，拒绝不匹配，不自动更改系统前置设置。严禁与另一 NET_ADMIN 程序共同管理该接口/namespace；软件归属标记不是对恶意特权进程的隔离。
 
 创建 `/etc/reladock/shaping.json`，权限 0600，所有者服务账号可读。以下是格式说明，实际值需从目标节点核对，不可原样复制：
 
@@ -46,7 +46,13 @@
 
 主 Agent 每周期保存真实 counter 并通过 mTLS 补传。WAL 满、磁盘不确定或 rollback 未完成时冻结平台业务或保留 applying 屏障；排障后由运维生成新快照，不能删 WAL/state 或直接清数据库状态。重启保留 `.control` journal 与 dataplane/shaping/WAL（实际控制子目录名 `control`）；恢复使用原 job/token，证书更换后仍须保留原状态。状态丢失的自动重建尚未实现，必须人工对账。35s 保守到期余量可能提前停止临近到期规则，不适用于秒级套餐。
 
-删除已经下发的规则会等待移除确认，并继续保留端口/conntrack 隔离。当前不自动回收这类端口，不应以手工删除 allocation 来强行复用。参阅 [tc 契约](SHAPING.md)、[计量契约](METERING.md)、[探测边界](PROBES.md)。
+删除已经下发的规则会先等待 quarantine 应用确认。apply-only Agent 随后通过 mTLS 领取精确 retirement，在本地持久 journal 中确认任务，核对前后 guard、清理匹配 conntrack、确认零匹配并上报 proof；控制端 ACK 后才释放 allocation，同一精确前驱才可受控复用。任一步不确定都会保留隔离和 journal，不应手工删除 allocation、retirement、WAL 或数据面状态强行复用。validation-only Agent 不执行此流程。参阅 [tc 契约](SHAPING.md)、[计量契约](METERING.md)、[探测边界](PROBES.md)。
+
+### 节点安全退役
+
+后台退役顺序固定为 `维护中 -> 排空中 -> 已退役`。先进入维护，确认不再创建新业务；进入排空是不可逆操作，此后只能删除剩余规则、重试必要配置并等待本地清理收敛。最终按钮只有在规则、allocation、retirement、活动配置/升级/证书轮换均清空，期望与生效 generation 一致，并收到当前证书、内核 boot、Agent 进程/版本、journal sequence、last-good 摘要与完整 quarantine 集合绑定的短时证明后才可用。
+
+最终退役会撤销节点 Agent 身份并保留节点、审计、retirement 与 quarantine 历史；不能恢复为可分配状态。心跳身份变化、节点修订变化、证明超时或隔离集合变化都会要求重新证明。不要通过数据库修改、删除状态目录或撤销证书来绕过门禁。完整流程仍需在获授权的生产式 Linux VPS 上完成特权验收后，才能作为生产退役保证。
 
 ## 备份与恢复
 
@@ -60,6 +66,7 @@
 
 - HTTPS、管理员授权撤销、租户隔离、邀请与 API Key 实测。
 - Linux 实际 TCP/UDP 转发、暂停/删除、节点重启、配置竞争及失败回滚。
+- TCP/UDP 精确 conntrack retirement、报告丢失重放、ACK 恢复、端口受控复用，以及完整节点排空/身份撤销。
 - 每规则限速实测、独立上下行计量、计数重置、补传去重、配额耗尽与续期。
 - 所选支付渠道回调验签、重复回调、金额/币种/订单校验、退款冲正和到账对账。
 - 外部健康探测、UDP 未知状态、失联告警及备份恢复演练。
@@ -92,7 +99,7 @@ CA 必须仍有至少 31 天有效期。签发节点证书固定 ClientAuth、�
 ## 操作者使用
 
 - 后台登记节点 → 得到专属命令 → 在该 VPS 粘贴执行 → 等待服务连接 → 点击“刷新连接与检查结果”。后台尚未配置发布信息时明确提示未配置，不生成虚构下载地址。
-- 系统要求 Linux、systemd、curl、tar、sha256sum、useradd 等；不自动更改软件包源或安装系统依赖。缺项会指出具体命令。支持 amd64/arm64，脚本依赖常规 IPv4/DNS HTTPS origin，暂不支持引导地址使用 IPv6 字面量。
+- 系统要求 Linux、systemd、curl、tar、sha256sum、useradd 等；Agent 安装仅在缺少 `/usr/sbin/conntrack` 时尝试通过 apt/dnf/yum/apk 安装对应 conntrack 工具，其他缺项会明确失败。不会修改软件包源。支持 amd64/arm64，脚本依赖常规 IPv4/DNS HTTPS origin，暂不支持引导地址使用 IPv6 字面量。
 - 安装凭证有效 15 分钟、绑定一个节点身份、数据库只存摘要。生成新命令使旧命令失效，撤销凭证不等于撤销已签发的节点证书；已接入身份应通过“证书 → 撤销”处理。
 - 生成的命令先从可信控制台下载引导脚本，再从固定 GitHub tag 下载归档，使用控制台固定摘要验证后才执行包内 Agent。凭证经 stdin 交给 Agent，不进入 URL、服务参数、环境文件或后台审计。
 - **复制命令本身含短期凭证**，可能被终端历史、剪贴板或屏幕录制保存；不要发给他人。界面仅内存保存命令，过期、收起或退出后清除。控制台及反向代理不得记录 Authorization/响应正文。

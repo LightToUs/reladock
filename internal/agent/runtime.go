@@ -156,7 +156,7 @@ func PrepareApply(o RuntimeOptions, nodeID string) (*ApplyState, Applier, error)
 		wal.Close()
 		return nil, nil, errors.Join(err, stopErr)
 	}
-	return state, &NodeEngine{Adapter: adapter, WAL: wal, Meter: meter}, nil
+	return state, &NodeEngine{NodeID: nodeID, Adapter: adapter, WAL: wal, Meter: meter}, nil
 }
 
 func readShapingLease(path string) (shaping.Lease, error) {

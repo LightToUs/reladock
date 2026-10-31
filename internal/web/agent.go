@@ -107,6 +107,20 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 			respond(w, 200, map[string]bool{"ok": true})
 			return
 		}
+		if r.URL.Path == "/agent/drain-status" {
+			body, bodyErr := io.ReadAll(io.LimitReader(r.Body, 2))
+			if bodyErr != nil || len(body) != 0 {
+				failure(w, platform.ErrInvalid)
+				return
+			}
+			draining, statusErr := store.NodeDrainRequested(ctx, id)
+			if statusErr != nil {
+				failure(w, statusErr)
+				return
+			}
+			respond(w, http.StatusOK, map[string]bool{"draining": draining})
+			return
+		}
 		if r.URL.Path == "/agent/upgrade/claim" {
 			var input struct {
 				Arch           string `json:"arch"`
@@ -193,6 +207,18 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 				err = store.ReportRetirementFailure(ctx, id, fingerprint, input.TaskID, input.LeaseToken, input.ErrorCode)
 			}
 			if err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
+		if r.URL.Path == "/agent/drain-attestation" {
+			var attestation platform.DrainAttestation
+			if !decode(w, r, &attestation) {
+				return
+			}
+			if err = store.ReportNodeDrainAttestation(ctx, id, fingerprint, attestation); err != nil {
 				failure(w, err)
 				return
 			}

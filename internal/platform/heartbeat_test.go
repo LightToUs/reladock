@@ -48,16 +48,37 @@ func TestAgentHeartbeatPersistsOnlyAfterExactCredentialCheck(t *testing.T) {
 	}
 }
 
+func TestAgentHeartbeatCannotReduceJournalSequence(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	fingerprint := strings.Repeat("9", 64)
+	if _, err := s.pool.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$1,agent_journal_sequence=5 WHERE id='hk-01'", fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	h := validAgentHeartbeat(time.Now().UTC())
+	h.JournalSequence = 4
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, h); !errors.Is(err, ErrConflict) {
+		t.Fatalf("journal sequence rollback accepted: %v", err)
+	}
+	var sequence int64
+	if err := s.pool.QueryRow(ctx, "SELECT agent_journal_sequence FROM nodes WHERE id='hk-01'").Scan(&sequence); err != nil || sequence != 5 {
+		t.Fatalf("journal high-water changed to %d: %v", sequence, err)
+	}
+}
+
 func TestManualCredentialReplacementClearsPriorHeartbeatFacts(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	old := strings.Repeat("1", 64)
-	if _, err := s.pool.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$1 WHERE id='hk-01'", old); err != nil {
+	bootID := newID()
+	if _, err := s.pool.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$1,agent_kernel_boot_id=$2,agent_journal_sequence=9 WHERE id='hk-01'", old, bootID); err != nil {
 		t.Fatal(err)
 	}
 	h := validAgentHeartbeat(time.Now().UTC())
 	h.RotationState = "error"
 	h.RotationErrorCode = "renew-unavailable"
+	h.KernelBootID = bootID
+	h.JournalSequence = 9
 	if err := s.ReportAgentHeartbeat(ctx, "hk-01", old, h); err != nil {
 		t.Fatal(err)
 	}
@@ -66,11 +87,13 @@ func TestManualCredentialReplacementClearsPriorHeartbeatFacts(t *testing.T) {
 	}
 	var heartbeat, expiry, errorSince *time.Time
 	var version, mode, rotation, code string
-	if err := s.pool.QueryRow(ctx, `SELECT agent_heartbeat_at,agent_certificate_not_after,agent_rotation_error_since,agent_version,agent_mode,agent_rotation_state,agent_rotation_error_code FROM nodes WHERE id='hk-01'`).Scan(&heartbeat, &expiry, &errorSince, &version, &mode, &rotation, &code); err != nil {
+	var persistedBootID *string
+	var journalSequence int64
+	if err := s.pool.QueryRow(ctx, `SELECT agent_heartbeat_at,agent_certificate_not_after,agent_rotation_error_since,agent_version,agent_mode,agent_rotation_state,agent_rotation_error_code,agent_kernel_boot_id::text,agent_journal_sequence FROM nodes WHERE id='hk-01'`).Scan(&heartbeat, &expiry, &errorSince, &version, &mode, &rotation, &code, &persistedBootID, &journalSequence); err != nil {
 		t.Fatal(err)
 	}
-	if heartbeat != nil || expiry != nil || errorSince != nil || version != "" || mode != "" || rotation != "idle" || code != "" {
-		t.Fatalf("old identity facts survived replacement: heartbeat=%v expiry=%v errorSince=%v version=%q mode=%q rotation=%q code=%q", heartbeat, expiry, errorSince, version, mode, rotation, code)
+	if heartbeat != nil || expiry != nil || errorSince != nil || version != "" || mode != "" || rotation != "idle" || code != "" || persistedBootID != nil || journalSequence != 0 {
+		t.Fatalf("old identity facts survived replacement: heartbeat=%v expiry=%v errorSince=%v version=%q mode=%q rotation=%q code=%q boot=%v sequence=%d", heartbeat, expiry, errorSince, version, mode, rotation, code, persistedBootID, journalSequence)
 	}
 }
 

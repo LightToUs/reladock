@@ -124,7 +124,7 @@ func (s *Store) RequestAgentUpgrade(ctx context.Context, who Identity, nodeID st
 	if err != nil {
 		return AgentUpgrade{}, err
 	}
-	if currentRevision != revision || status == "maintenance" || heartbeatAt == nil || heartbeatAt.Before(time.Now().UTC().Add(-AgentHeartbeatStaleAfter)) || !buildinfo.CanUpgrade(currentVersion, target.Version) {
+	if currentRevision != revision || status == "maintenance" || status == "draining" || status == "retired" || heartbeatAt == nil || heartbeatAt.Before(time.Now().UTC().Add(-AgentHeartbeatStaleAfter)) || !buildinfo.CanUpgrade(currentVersion, target.Version) {
 		return AgentUpgrade{}, ErrConflict
 	}
 	var active bool
@@ -220,6 +220,13 @@ func (s *Store) ClaimAgentUpgrade(ctx context.Context, nodeID, fingerprint, arch
 	if err = checkNodeCredential(ctx, tx, nodeID, []string{fingerprint}); err != nil {
 		return nil, err
 	}
+	var nodeStatus string
+	if err = tx.QueryRow(ctx, "SELECT status FROM nodes WHERE id=$1", nodeID).Scan(&nodeStatus); err != nil {
+		return nil, err
+	}
+	if nodeStatus == "draining" || nodeStatus == "retired" {
+		return nil, tx.Commit(ctx)
+	}
 	var retirementActive bool
 	if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM endpoint_retirements WHERE node_id=$1 AND state<>'released')", nodeID).Scan(&retirementActive); err != nil {
 		return nil, err
@@ -304,6 +311,10 @@ func (s *Store) ReportAgentUpgrade(ctx context.Context, nodeID, fingerprint stri
 	if err = checkNodeCredential(ctx, tx, nodeID, []string{fingerprint}); err != nil {
 		return AgentUpgrade{}, err
 	}
+	var nodeStatus string
+	if err = tx.QueryRow(ctx, "SELECT status FROM nodes WHERE id=$1", nodeID).Scan(&nodeStatus); err != nil {
+		return AgentUpgrade{}, err
+	}
 	var current, targetVersion, storedError, leaseDigest string
 	var leaseExpires *time.Time
 	err = tx.QueryRow(ctx, `SELECT state,target_version,error_code,COALESCE(lease_token_hash,''),lease_expires_at FROM node_agent_upgrades WHERE id=$1 AND node_id=$2 FOR UPDATE`, report.ID, nodeID).Scan(&current, &targetVersion, &storedError, &leaseDigest, &leaseExpires)
@@ -328,6 +339,9 @@ func (s *Store) ReportAgentUpgrade(ctx context.Context, nodeID, fingerprint stri
 			return AgentUpgrade{}, scanErr
 		}
 		return value, tx.Commit(ctx)
+	}
+	if (nodeStatus == "draining" || nodeStatus == "retired") && report.State != "failed" && report.State != "rolled-back" {
+		return AgentUpgrade{}, ErrConflict
 	}
 	if !validUpgradeTransition(current, report.State, report.ErrorCode) {
 		return AgentUpgrade{}, ErrConflict

@@ -37,4 +37,9 @@ test('production release manifest includes the hardened root updater',async()=>{
   assert.match(script,/install -d -o reladock -g reladock -m 0700 \/var\/lib\/reladock-agent\/control/);
   assert.match(script,/install -o root -g reladock -m 0640 \/dev\/null \/var\/lib\/reladock-locks\/control\.lock/);
  }
+ const apply=await readFile(join(process.cwd(),'deploy','reladock-agent-apply.service'),'utf8');
+ assert.match(apply,/^ExecStartPre=\/usr\/sbin\/conntrack --version$/m);
+ assert.match(installer,/apt-get install -y conntrack/);
+ assert.match(installer,/dnf install -y conntrack-tools/);
+ assert.match(installer,/test -x \/usr\/sbin\/conntrack|\[ ! -x \/usr\/sbin\/conntrack \]/);
 });

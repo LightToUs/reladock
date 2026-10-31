@@ -75,8 +75,11 @@ func main() {
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	runner := agent.Client{HTTP: client, BaseURL: *endpoint, NodeID: *nodeID, State: state, Applier: applier}
+	kernelBootID := ""
+	var retirementState *agent.RetirementState
 	if engine != nil {
-		retirementState, stateErr := agent.NewRetirementState(*stateDir)
+		var stateErr error
+		retirementState, stateErr = agent.NewRetirementState(*stateDir)
 		if stateErr != nil {
 			log.Fatal(stateErr)
 		}
@@ -84,6 +87,7 @@ func main() {
 		if bootErr != nil {
 			log.Fatal("kernel boot identity unavailable")
 		}
+		kernelBootID = bootID
 		runner.Retirement = &agent.RetirementWorker{State: retirementState, Adapter: engine.Adapter, BootID: bootID}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -113,7 +117,7 @@ func main() {
 		}
 		return
 	}
-	startedAt := time.Now().UTC()
+	startedAt := time.Now().UTC().Truncate(time.Microsecond)
 	mode := "validation"
 	if *apply {
 		mode = "apply"
@@ -136,13 +140,35 @@ func main() {
 				log.Print("Desired configuration validated and acknowledged; traffic not enabled")
 			}
 		}
+		if err == nil && !done && engine != nil {
+			if sampleErr := engine.Sample(parent); sampleErr == nil {
+				_ = engine.FlushUsage(parent, &runner)
+				draining, statusErr := runner.DrainRequested(parent)
+				if statusErr != nil {
+					err = statusErr
+				} else if draining {
+					current := credentials.Current()
+					if attestation, evidenceErr := engine.BuildDrainAttestation(parent, retirementState, current.Fingerprint, kernelBootID, startedAt, agent.UpdaterStable("/var/lib/reladock-updater/state.json")); evidenceErr == nil {
+						err = runner.ReportDrainAttestation(parent, attestation)
+					}
+				}
+			}
+		}
 		return err
 	}, Heartbeat: func(parent context.Context) error {
 		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
 		defer cancel()
 		current := credentials.Current()
+		journalSequence := int64(0)
+		if retirementState != nil {
+			var sequenceErr error
+			journalSequence, sequenceErr = retirementState.CurrentSequence()
+			if sequenceErr != nil {
+				return sequenceErr
+			}
+		}
 		rotationState, rotationError := credentials.RotationStatus()
-		if err := runner.ReportHeartbeat(activityCtx, platform.AgentHeartbeat{Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError}); err != nil {
+		if err := runner.ReportHeartbeat(activityCtx, platform.AgentHeartbeat{Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError, KernelBootID: kernelBootID, JournalSequence: journalSequence}); err != nil {
 			return err
 		}
 		return upgradeHealth.HeartbeatSucceeded()
