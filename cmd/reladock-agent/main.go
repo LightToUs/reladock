@@ -107,6 +107,7 @@ func main() {
 	if *apply {
 		mode = "apply"
 	}
+	upgradeHealth := agent.NewUpgradeHealth("/run/reladock-updater/health-request.json", "/run/reladock-agent", buildinfo.Current())
 	hooks := agent.RuntimeHooks{Preflight: func(parent context.Context) error {
 		// Contact and inspection are distinct from configuration/application health.
 		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
@@ -114,6 +115,9 @@ func main() {
 		return runner.ReportPreflight(activityCtx)
 	}, Configuration: func(parent context.Context) error {
 		done, err := runner.Once(parent)
+		if err == nil {
+			err = upgradeHealth.ConfigurationSucceeded()
+		}
 		if err == nil && done {
 			if *apply {
 				log.Print("Configuration application report acknowledged; forwarding health remains unknown")
@@ -127,7 +131,10 @@ func main() {
 		defer cancel()
 		current := credentials.Current()
 		rotationState, rotationError := credentials.RotationStatus()
-		return runner.ReportHeartbeat(activityCtx, platform.AgentHeartbeat{Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError})
+		if err := runner.ReportHeartbeat(activityCtx, platform.AgentHeartbeat{Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError}); err != nil {
+			return err
+		}
+		return upgradeHealth.HeartbeatSucceeded()
 	}, Renewal: func(parent context.Context) error {
 		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
 		defer cancel()

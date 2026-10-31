@@ -17,10 +17,13 @@ UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/etc/reladock/node-pki
+ReadOnlyPaths=-/run/reladock-updater/health-request.json
+ReadWritePaths=/etc/reladock/node-pki /run/reladock-agent
 ProtectHome=true
 StateDirectory=reladock-agent
 StateDirectoryMode=0700
+RuntimeDirectory=reladock-agent
+RuntimeDirectoryMode=0700
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 CapabilityBoundingSet=
 # No CAP_NET_ADMIN is granted. Explicit reviewed application uses the separate
