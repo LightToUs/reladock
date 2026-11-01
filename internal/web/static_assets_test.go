@@ -283,7 +283,7 @@ func TestAdminMobileNavigationHasExplicitToggle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	navigationJS, err := fs.ReadFile(assets.Files, "admin-navigation.js")
+	navigationJS, err := fs.ReadFile(assets.Files, "console-navigation.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,6 +294,31 @@ func TestAdminMobileNavigationHasExplicitToggle(t *testing.T) {
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("admin mobile navigation missing %q", required)
+		}
+	}
+}
+
+func TestAdminConsoleUsesRoutedPagesAndCollapsibleSidebar(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJS, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css, err := fs.ReadFile(assets.Files, "admin.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(adminJS) + string(css)
+	for _, required := range []string{
+		`id="admin-sidebar-collapse"`, `id="admin-nav-toggle"`, `id="admin-view-description"`,
+		`data-view="overview"`, `href="#/overview"`, `href="#/nodes"`, `href="#/audit"`,
+		"bindConsoleNavigation", "sidebar-collapsed", "nav-open", "adminNavigation.select",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("admin routed navigation missing %q", required)
 		}
 	}
 }

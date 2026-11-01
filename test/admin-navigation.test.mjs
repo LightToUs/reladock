@@ -1,18 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-let bindAdminNavigation;
+let bindConsoleNavigation;
 try {
-  ({ bindAdminNavigation } = await import('../public/admin-navigation.js'));
+  ({ bindConsoleNavigation } = await import('../public/console-navigation.js'));
 } catch {
-  bindAdminNavigation = undefined;
+  bindConsoleNavigation = undefined;
 }
 
 class FakeClassList {
   constructor() { this.values = new Set(); }
   contains(name) { return this.values.has(name); }
   add(name) { this.values.add(name); }
-  toggle(name) { if (this.values.has(name)) { this.values.delete(name); return false; } this.values.add(name); return true; }
+  toggle(name, force) { const enabled = force === undefined ? !this.values.has(name) : Boolean(force); if (enabled) this.values.add(name); else this.values.delete(name); return enabled; }
   remove(name) { this.values.delete(name); }
 }
 
@@ -30,22 +30,29 @@ function keydown(key) {
   return event;
 }
 
-test('mobile admin navigation expands, selects dynamic items, and restores focus', () => {
-  assert.equal(typeof bindAdminNavigation, 'function');
+test('admin navigation includes runtime items in URL-backed page selection', () => {
+  assert.equal(typeof bindConsoleNavigation, 'function');
   const root = new FakeElement();
   const toggle = new FakeElement();
+  const collapse = new FakeElement();
   const title = new FakeElement();
   const documentTarget = new EventTarget();
   const items = [new FakeElement('overview'), new FakeElement('costs'), new FakeElement('notifications')];
+  const panes = items.map(item => { const pane = new FakeElement(); pane.dataset.pane = item.dataset.view; return pane; });
   const selected = [];
-  const binding = bindAdminNavigation({ root, toggle, title, items, documentTarget, onSelect: view => selected.push(view) });
+  const locationTarget = { hash: '#/overview', pathname: '/admin', search: '' };
+  const historyTarget = { pushState(_state, _title, path) { locationTarget.hash = path.slice(path.indexOf('#')); }, replaceState(_state, _title, path) { locationTarget.hash = path.slice(path.indexOf('#')); } };
+  const storage = { getItem() { return null; }, setItem() {} };
+  const binding = bindConsoleNavigation({ root, sidebar: root, mobileToggle: toggle, collapseToggle: collapse, title, items, panes, documentTarget, windowTarget: documentTarget, locationTarget, historyTarget, storage, onSelect: view => selected.push(view) });
 
   toggle.dispatchEvent(new Event('click'));
   assert.equal(root.classList.contains('nav-open'), true);
   assert.equal(toggle.getAttribute('aria-expanded'), 'true');
 
   items[2].dispatchEvent(new Event('click'));
-  assert.deepEqual(selected, ['notifications']);
+  assert.deepEqual(selected, ['overview', 'notifications']);
+  assert.equal(locationTarget.hash, '#/notifications');
+  assert.equal(panes[2].hidden, false);
   assert.equal(root.classList.contains('nav-open'), false);
   assert.equal(toggle.getAttribute('aria-expanded'), 'false');
   assert.equal(title.focused, 1);

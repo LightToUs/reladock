@@ -1,6 +1,6 @@
 import { bindOperations } from './operations-tools.js';
 import { bindNodeBootstrap } from './node-bootstrap.js';
-import { bindAdminNavigation } from './admin-navigation.js';
+import { bindConsoleNavigation } from './console-navigation.js';
 import { agentContactPresentation, certificatePresentation, configurationPresentation, probePresentation, resourcePresentation } from './node-contact-status.js';
 import { bindNodeActionDialog, createNodeActionRunner, nodeActionDescriptor } from './node-action-dialog.js';
 import { bindNodeContentDialog, bindNodeDeliveryDialog, runDialogSession } from './node-content-dialog.js';
@@ -9,13 +9,16 @@ import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation
 const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], monitoring: new Map(), certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '' };
 let adminNodeMonitoringPoller;
+let adminNavigation;
 const titles = { overview: '平台总览', nodes: '入口节点', tenants: '企业客户', rules: '全局规则', deliveries: '配置交付', plans:'规则套餐',operations:'告警工单',costs:'成本与经营差额',audit: '操作审计' };
+const descriptions = { overview: '跨企业查看资源与配置，受独立平台权限保护。', nodes: '管理入口节点的登记、接入、升级、维护与安全退役。', tenants: '查看企业客户并管理其控制台登录权限。', rules: '跨企业查看和控制转发配置，所有操作保留平台审计。', deliveries: '查看节点最近配置版本的领取、校验和应用确认。', plans: '创建不可变的逐规则套餐价格版本。', operations: '处理控制面告警并回复企业工单。', costs: '录入不可变节点成本并查看现金口径经营差额。', audit: '查看最近的平台管理操作记录。', notifications: '查看外部告警通知的真实交付状态。' };
 const deliveries = { queued: '等待领取', leased: '领取处理中', applying: '应用中 · 等待确认', applied: '已应用 · 健康未知', validated: '校验通过 · 未应用', failed: '配置失败', superseded: '已被新版本替代' };
 const upgradeStates = { queued: '等待 Agent 领取', claimed: '已领取', installing: '正在安装', verifying: '正在验证', succeeded: '升级成功', 'rolled-back': '已自动回滚', failed: '升级失败', cancelled: '已取消' };
 const upgradeErrors = { 'download-unavailable': '发布包下载失败', 'archive-invalid': '发布包格式无效', 'checksum-mismatch': '发布包摘要不匹配', 'install-failed': '安装失败', 'service-failed': 'Agent 启动失败', 'health-timeout': '控制链路验证超时', 'rollback-failed': '回滚失败，需要人工处理', 'state-invalid': '升级状态不一致' };
 const actions = { 'node.add': '新增节点', 'node.edit': '编辑节点', 'node.withdraw-registration': '撤销节点登记', 'node.maintenance': '进入维护', 'node.enable': '恢复分配', 'node.draining': '进入安全排空', 'node.retired': '最终退役节点', 'node.enroll': '绑定 / 轮换证书', 'node.revoke-certificate': '撤销证书', 'node.agent-upgrade-request': '创建 Agent 升级', 'node.agent-upgrade-cancel': '取消 Agent 升级', 'node.agent-upgrade-claimed': 'Agent 领取升级', 'node.agent-upgrade-installing': 'Agent 安装升级', 'node.agent-upgrade-verifying': 'Agent 验证升级', 'node.agent-upgrade-succeeded': 'Agent 升级成功', 'node.agent-upgrade-rolled-back': 'Agent 已自动回滚', 'node.agent-upgrade-failed': 'Agent 升级失败', 'config.retry': '重新交付', 'tenant.access': '修改企业登录状态', 'platform.admin-access': '修改平台权限', 'rule.pause': '暂停规则', 'rule.resume': '恢复规则', 'rule.delete': '删除规则' };
-const costNav = document.createElement('button'); costNav.dataset.view = 'costs'; costNav.textContent = '成本与经营差额'; document.querySelector('.admin-nav nav').append(costNav);
-const notificationNav = document.createElement('button'); notificationNav.dataset.view = 'notifications'; notificationNav.textContent = '通知交付'; document.querySelector('.admin-nav nav').append(notificationNav); titles.notifications = '通知交付';
+function appendNavigationItem(view, label, short) { const link = document.createElement('a'); link.href = `#/${view}`; link.dataset.view = view; link.dataset.short = short; const text = document.createElement('span'); text.textContent = label; link.append(text); document.querySelector('.admin-nav nav').append(link); return link; }
+appendNavigationItem('costs', '成本与经营差额', '成');
+appendNavigationItem('notifications', '通知交付', '通'); titles.notifications = '通知交付';
 function access(mode) { if(mode!=='admin'){bootstrapUI.clear();adminNodeMonitoringPoller?.stop();adminNodeMonitoringPoller=undefined;} $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
 function message(text) { $('#admin-message').textContent = text; }
 async function api(path, body, key, signal) {
@@ -44,11 +47,8 @@ function appendUpgradeControls(controls, node) {
   if (['queued', 'claimed'].includes(node.upgrade?.state)) controls.append(button('取消升级', () => openNodeAction('upgrade-cancel', node)));
   if (['installing', 'verifying'].includes(node.upgrade?.state)) { const locked = button('升级中，操作已锁定', async () => {}); locked.disabled = true; controls.append(locked); }
 }
-function showView(view) { state.view = view; for (const pane of document.querySelectorAll('[data-pane]')) pane.hidden = pane.dataset.pane !== view; for (const nav of document.querySelectorAll('[data-view]')) nav.classList.toggle('selected', nav.dataset.view === view); $('#view-title').textContent = titles[view]; if (view === 'deliveries') loadDeliveries().catch(error => message(error.message)); if(view==='plans')loadPlans().catch(e=>message(e.message));if(view==='operations')operations.refresh().catch(e=>message(e.message)); }
-bindAdminNavigation({ root: document.querySelector('.admin-nav'), toggle: $('#admin-nav-toggle'), title: $('#view-title'), items: document.querySelectorAll('[data-view]'), documentTarget: document, onSelect: showView });
-costNav.addEventListener('click', () => loadCosts().catch(error => message(error.message)));
-notificationNav.addEventListener('click', () => loadNotifications().catch(error => message(error.message)));
-for (const nav of document.querySelectorAll('[data-jump]')) nav.addEventListener('click', () => showView(nav.dataset.jump));
+function showView(view) { state.view = view; if ($('#admin-shell').hidden) return; if (view === 'deliveries') loadDeliveries().catch(error => message(error.message)); if(view==='plans')loadPlans().catch(e=>message(e.message));if(view==='operations')operations.refresh().catch(e=>message(e.message));if(view==='costs')loadCosts().catch(e=>message(e.message));if(view==='notifications')loadNotifications().catch(e=>message(e.message)); }
+for (const nav of document.querySelectorAll('[data-jump]')) nav.addEventListener('click', () => adminNavigation.select(nav.dataset.jump, { focus: true }));
 
 async function reload() {
   const paths = ['/api/admin/overview', '/api/admin/nodes', `/api/admin/tenants?page=${state.tenantPage}`, `/api/admin/rules?page=${state.rulePage}&tenantId=${encodeURIComponent(state.tenantFilter)}&nodeId=${encodeURIComponent(state.nodeFilter)}`, '/api/admin/audit'];
@@ -169,7 +169,7 @@ $('#certificate-form').addEventListener('submit', async event => { event.prevent
 $('#certificate-revoke').addEventListener('click', () => { const node = state.certificateNode; if (node) openNodeAction('revoke-certificate', node, () => certificateDialog.close()); });
 
 function pager(kind, page) { $(`#${kind}-page`).textContent = `第 ${page.page} 页 · 共 ${page.total} 条`; $(`#${kind}-prev`).disabled = page.page <= 1; $(`#${kind}-next`).disabled = page.page * page.pageSize >= page.total; }
-function renderTenants(page) { const root = $('#admin-tenants'); root.replaceChildren(); for (const tenant of page.items) { const row = root.insertRow(); cell(row, tenant.name, tenant.ownerEmail); cell(row, tenant.members); cell(row, tenant.rules); cell(row, tenant.status === 'active' ? '允许登录' : '已停用登录', tenant.hasPlatformAdmin ? '含平台管理员账户' : ''); const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('查看规则', async () => { state.tenantFilter = tenant.id; state.tenantName = tenant.name; state.rulePage = 1; await reload(); showView('rules'); })); if (!tenant.hasPlatformAdmin) controls.append(button(tenant.status === 'active' ? '停用登录' : '恢复登录', async () => { if (tenant.status === 'active' && !confirm(`停用“${tenant.name}”登录并撤销其全部会话？已有转发流量不会自动停止。`)) return; await mutate(`/api/admin/tenants/${tenant.id}/access`, { enabled: tenant.status !== 'active', revision: tenant.revision }, '企业登录权限已更新，原会话已撤销。'); }, tenant.status === 'active')); } empty(root, 5, '本页暂无企业。'); pager('tenants', page); }
+function renderTenants(page) { const root = $('#admin-tenants'); root.replaceChildren(); for (const tenant of page.items) { const row = root.insertRow(); cell(row, tenant.name, tenant.ownerEmail); cell(row, tenant.members); cell(row, tenant.rules); cell(row, tenant.status === 'active' ? '允许登录' : '已停用登录', tenant.hasPlatformAdmin ? '含平台管理员账户' : ''); const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('查看规则', async () => { state.tenantFilter = tenant.id; state.tenantName = tenant.name; state.rulePage = 1; await reload(); adminNavigation.select('rules', { focus: true }); })); if (!tenant.hasPlatformAdmin) controls.append(button(tenant.status === 'active' ? '停用登录' : '恢复登录', async () => { if (tenant.status === 'active' && !confirm(`停用“${tenant.name}”登录并撤销其全部会话？已有转发流量不会自动停止。`)) return; await mutate(`/api/admin/tenants/${tenant.id}/access`, { enabled: tenant.status !== 'active', revision: tenant.revision }, '企业登录权限已更新，原会话已撤销。'); }, tenant.status === 'active')); } empty(root, 5, '本页暂无企业。'); pager('tenants', page); }
 function renderRules(page) {
   const root = $('#admin-rules'); root.replaceChildren(); $('#rules-tenant-label').textContent = state.tenantFilter ? `企业：${state.tenantName}` : '全部企业';
   for (const rule of page.items) {
@@ -191,7 +191,7 @@ $('#delivery-node').addEventListener('change', () => loadDeliveries().catch(erro
 $('#rule-filters').addEventListener('submit', async event => { event.preventDefault(); state.nodeFilter = $('#rules-node').value; state.rulePage = 1; try { await reload(); } catch (error) { message(error.message); } });
 $('#rules-clear-tenant').addEventListener('click', async () => { state.tenantFilter = ''; state.tenantName = ''; state.rulePage = 1; try { await reload(); } catch (error) { message(error.message); } });
 for (const kind of ['tenants', 'rules']) for (const direction of ['prev', 'next']) $(`#${kind}-${direction}`).addEventListener('click', async () => { const key = kind === 'tenants' ? 'tenantPage' : 'rulePage'; state[key] += direction === 'next' ? 1 : -1; try { await reload(); } catch (error) { message(error.message); } });
-async function enter() { const who = await api('/api/auth/me'); if (!who.platformAdmin) { access('denied'); return; } $('#admin-email').textContent = who.email; access('admin'); await reload(); startAdminNodeMonitoring(); }
+async function enter() { const who = await api('/api/auth/me'); if (!who.platformAdmin) { access('denied'); return; } $('#admin-email').textContent = who.email; access('admin'); await reload(); adminNavigation.sync(); startAdminNodeMonitoring(); }
 $('#admin-login-form').addEventListener('submit', async event => { event.preventDefault(); const submit = event.target.querySelector('button'); submit.disabled = true; try { await api('/api/auth/login', Object.fromEntries(new FormData(event.target))); event.target.reset(); $('#login-message').textContent = ''; await enter(); } catch (error) { $('#login-message').textContent = error.message; } finally { submit.disabled = false; } });
 async function logout() { try { await api('/api/auth/logout', {}); location.assign('/admin'); } catch (error) { message(error.message); } }
 $('#admin-logout').addEventListener('click', logout); $('#denied-logout').addEventListener('click', logout);
@@ -199,6 +199,11 @@ $('#admin-refresh').addEventListener('click', async () => { $('#admin-refresh').
 async function loadPlans(){const data=await api('/api/admin/plans');const root=$('#plan-rows');root.replaceChildren();for(const p of data.items){const row=root.insertRow();for(const v of [p.name,`${p.code} / ${p.version}`,`$${(p.priceCents/100).toFixed(2)}`,`${(p.quotaBytes/1e9).toLocaleString()} GB`,`${p.bandwidthMbps} Mbps`,`${p.periodSeconds/86400} 天`])cell(row,v);}empty(root,6,'尚未配置套餐。');}
 $('#plan-form').addEventListener('submit',async e=>{e.preventDefault();const b=e.target.querySelector('button');b.disabled=true;try{const fields=Object.fromEntries(new FormData(e.target));const input={code:fields.code,name:fields.name,version:Number(fields.version),priceCents:Number(fields.priceCents),quotaBytes:Number(fields.quotaGB)*1e9,bandwidthMbps:Number(fields.bandwidthMbps),periodSeconds:Number(fields.periodDays)*86400};await api('/api/admin/plans',input);e.target.reset();await loadPlans();message('已创建不可变价格版本。');}catch(err){message(err.message);}finally{b.disabled=false;}});
 const operations=bindOperations((path,{body}={})=>api(path,body),{admin:true});
+adminNavigation = bindConsoleNavigation({
+  root: $('#admin-shell'), sidebar: document.querySelector('.admin-nav'), mobileToggle: $('#admin-nav-toggle'), collapseToggle: $('#admin-sidebar-collapse'),
+  title: $('#view-title'), description: $('#admin-view-description'), items: document.querySelectorAll('#admin-navigation [data-view]'), panes: document.querySelectorAll('[data-pane]'),
+  defaultView: 'overview', titles, descriptions, storageKey: 'reladock.admin.sidebar.collapsed', onSelect: showView,
+});
 let costPage = 1; let costDraft;
 let notificationPage = 1;
 async function loadNotifications() {
