@@ -17,7 +17,7 @@ import (
 	"reladock/internal/platform"
 )
 
-func operationsHTTPServer(t *testing.T) (*server, platform.Identity) {
+func operationsHTTPServer(t *testing.T) (*server, platform.Identity, *pgxpool.Pool) {
 	t.Helper()
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
@@ -54,7 +54,7 @@ func operationsHTTPServer(t *testing.T) (*server, platform.Identity) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	var exists bool
 	if err = pool.QueryRow(context.Background(), `SELECT to_regclass('operations_incidents') IS NOT NULL`).Scan(&exists); err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func operationsHTTPServer(t *testing.T) (*server, platform.Identity) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &server{store: store, origin: "http://127.0.0.1:3001", host: "127.0.0.1:3001", limits: map[string]window{}}, owner
+	return &server{store: store, origin: "http://127.0.0.1:3001", host: "127.0.0.1:3001", limits: map[string]window{}}, owner, pool
 }
 func operationsHTTP(s *server, who platform.Identity, method, path, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, "http://127.0.0.1:3001"+path, strings.NewReader(body))
@@ -85,7 +85,17 @@ func operationsHTTP(s *server, who platform.Identity, method, path, body string)
 }
 
 func TestOperationsHTTPTicketLifecycleAndStrictBoundaries(t *testing.T) {
-	s, owner := operationsHTTPServer(t)
+	s, owner, pool := operationsHTTPServer(t)
+	if _, err := s.store.CreateRule(context.Background(), owner, "operations-resource-rule", platform.RuleInput{Name: "resource relay", Protocol: "tcp", TargetHost: "192.0.2.10", TargetPort: 443, BandwidthMbps: 100, NodeID: "hk-01"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO node_resource_latest(node_id,sampled_at,cpu_percent,memory_percent,disk_percent,conntrack_percent,clock_skew_seconds,dataplane_state) VALUES('hk-01',clock_timestamp(),11,22,33,4,5,'in-sync')`); err != nil {
+		t.Fatal(err)
+	}
+	nodes := operationsHTTP(s, owner, "GET", "/api/operations/nodes", "")
+	if nodes.Code != 200 || !strings.Contains(nodes.Body.String(), `"resourceStatus":"normal"`) || !strings.Contains(nodes.Body.String(), `"cpuPercent":11`) || !strings.Contains(nodes.Body.String(), `"conntrackPercent":4`) || !strings.Contains(nodes.Body.String(), `"dataPlaneState":"in-sync"`) {
+		t.Fatalf("resource HTTP facts: %d %s", nodes.Code, nodes.Body.String())
+	}
 	for _, body := range []string{`{"subject":"Question","body":"Details","tenantId":"other"}`, `{} {}`, `null`} {
 		w := operationsHTTP(s, owner, "POST", "/api/operations/tickets", body)
 		if w.Code != 400 {
@@ -132,7 +142,7 @@ func TestOperationsHTTPTicketLifecycleAndStrictBoundaries(t *testing.T) {
 }
 
 func TestOperationsHTTPIntegratedAdminReplyAndBearerDenial(t *testing.T) {
-	s, owner := operationsHTTPServer(t)
+	s, owner, _ := operationsHTTPServer(t)
 	ctx := context.Background()
 	ticket, err := s.store.CreateSupportTicket(ctx, owner, "Admin response", "Please verify the control contact.")
 	if err != nil {

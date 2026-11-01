@@ -22,6 +22,14 @@ type OperationNode struct {
 	DeliveryState       string     `json:"deliveryState"`
 	DataPlaneStatus     string     `json:"dataPlaneStatus"`
 	RuleIDs             []string   `json:"ruleIds"`
+	ResourceStatus      string     `json:"resourceStatus"`
+	ResourceObservedAt  *time.Time `json:"resourceObservedAt"`
+	CPUPercent          *int       `json:"cpuPercent"`
+	MemoryPercent       *int       `json:"memoryPercent"`
+	DiskPercent         *int       `json:"diskPercent"`
+	ConntrackPercent    *int       `json:"conntrackPercent"`
+	ClockSkewSeconds    *int       `json:"clockSkewSeconds"`
+	DataPlaneState      string     `json:"dataPlaneState"`
 }
 type Incident struct {
 	ID          string     `json:"id"`
@@ -237,14 +245,19 @@ func (s *Store) ListOperationsNodes(ctx context.Context, who Identity, admin boo
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM nodes n`+where, admin, who.TenantID).Scan(&result.Total); err != nil {
 		return result, err
 	}
-	rows, err := tx.Query(ctx, `SELECT n.id,n.name,CASE WHEN n.status='maintenance' THEN 'maintenance' WHEN n.certificate_fingerprint IS NULL THEN 'unknown' WHEN n.last_seen_at IS NULL THEN 'never-seen' WHEN n.last_seen_at<clock_timestamp()-$3*interval '1 second' THEN 'stale' ELSE 'recent' END,n.last_seen_at,n.desired_generation,n.validated_generation,COALESCE(o.state,'unknown'),ARRAY(SELECT r.id::text FROM relay_rules r WHERE r.node_id=n.id AND r.status<>'deleted' AND ($1 OR r.tenant_id=$2) ORDER BY r.id LIMIT 100) FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation`+where+` ORDER BY n.id LIMIT 100 OFFSET $4`, admin, who.TenantID, staleAfter.Seconds(), (page-1)*100)
+	rows, err := tx.Query(ctx, `SELECT n.id,n.name,CASE WHEN n.status='maintenance' THEN 'maintenance' WHEN n.certificate_fingerprint IS NULL THEN 'unknown' WHEN n.last_seen_at IS NULL THEN 'never-seen' WHEN n.last_seen_at<clock_timestamp()-$3*interval '1 second' THEN 'stale' ELSE 'recent' END,n.last_seen_at,n.desired_generation,n.validated_generation,COALESCE(o.state,'unknown'),ARRAY(SELECT r.id::text FROM relay_rules r WHERE r.node_id=n.id AND r.status<>'deleted' AND ($1 OR r.tenant_id=$2) ORDER BY r.id LIMIT 100),
+	CASE WHEN rs.node_id IS NULL THEN 'unknown' WHEN rs.received_at<clock_timestamp()-$5*interval '1 second' THEN 'stale' WHEN rs.dataplane_state='drifted' THEN 'drifted' WHEN COALESCE(rs.cpu_percent>=90,false) OR COALESCE(rs.memory_percent>=90,false) OR COALESCE(rs.disk_percent>=85,false) OR COALESCE(rs.conntrack_percent>=80,false) OR rs.clock_skew_seconds>120 THEN 'pressure' WHEN rs.cpu_percent IS NULL AND rs.memory_percent IS NULL AND rs.disk_percent IS NULL AND rs.conntrack_percent IS NULL THEN 'unknown' ELSE 'normal' END,
+	rs.received_at,rs.cpu_percent,rs.memory_percent,rs.disk_percent,rs.conntrack_percent,rs.clock_skew_seconds,COALESCE(rs.dataplane_state,'')
+	FROM nodes n
+	LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation
+	LEFT JOIN node_resource_latest rs ON rs.node_id=n.id`+where+` ORDER BY n.id LIMIT 100 OFFSET $4`, admin, who.TenantID, staleAfter.Seconds(), (page-1)*100, AgentHeartbeatStaleAfter.Seconds())
 	if err != nil {
 		return result, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		v := OperationNode{DataPlaneStatus: "unknown"}
-		if err = rows.Scan(&v.ID, &v.Name, &v.ContactStatus, &v.LastSeenAt, &v.DesiredGeneration, &v.ValidatedGeneration, &v.DeliveryState, &v.RuleIDs); err != nil {
+		v := OperationNode{DataPlaneStatus: "unknown", ResourceStatus: "unknown"}
+		if err = rows.Scan(&v.ID, &v.Name, &v.ContactStatus, &v.LastSeenAt, &v.DesiredGeneration, &v.ValidatedGeneration, &v.DeliveryState, &v.RuleIDs, &v.ResourceStatus, &v.ResourceObservedAt, &v.CPUPercent, &v.MemoryPercent, &v.DiskPercent, &v.ConntrackPercent, &v.ClockSkewSeconds, &v.DataPlaneState); err != nil {
 			return result, err
 		}
 		result.Items = append(result.Items, v)
