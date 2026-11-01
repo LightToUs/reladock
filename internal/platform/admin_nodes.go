@@ -44,6 +44,7 @@ type ManagedNode struct {
 	UpgradeTargetVersion   string               `json:"upgradeTargetVersion"`
 	UpgradeEligible        bool                 `json:"upgradeEligible"`
 	UpgradeBlockedReason   string               `json:"upgradeBlockedReason"`
+	Withdrawable           bool                 `json:"withdrawable"`
 	RetirementEligible     bool                 `json:"retirementEligible"`
 	RetirementReasons      []string             `json:"retirementReasons"`
 	ResourceStatus         string               `json:"resourceStatus"`
@@ -114,6 +115,10 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 	}
 	rows.Close()
 	for i := range items {
+		items[i].Withdrawable, err = s.nodeRegistrationWithdrawable(ctx, tx, items[i].ID)
+		if err != nil {
+			return nil, err
+		}
 		items[i].RetirementReasons, err = s.nodeRetirementReasons(ctx, tx, items[i].ID)
 		if err != nil {
 			return nil, err
@@ -122,6 +127,93 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 	}
 	return items, nil
 }
+
+func (s *Store) nodeRegistrationWithdrawable(ctx context.Context, tx pgx.Tx, id string) (bool, error) {
+	var withdrawable bool
+	err := tx.QueryRow(ctx, `SELECT
+		n.status='unprovisioned'
+		AND n.desired_generation=1
+		AND n.validated_generation=0
+		AND n.applied_generation=0
+		AND n.last_seen_at IS NULL
+		AND n.agent_version=''
+		AND n.certificate_fingerprint IS NULL
+		AND n.agent_heartbeat_at IS NULL
+		AND n.agent_mode=''
+		AND n.agent_started_at IS NULL
+		AND n.agent_certificate_not_after IS NULL
+		AND n.agent_rotation_state='idle'
+		AND n.agent_rotation_error_code=''
+		AND n.agent_rotation_error_since IS NULL
+		AND n.agent_kernel_boot_id IS NULL
+		AND n.agent_journal_sequence=0
+		AND (SELECT count(*)=1 FROM config_outbox c WHERE c.node_id=n.id)
+		AND EXISTS(SELECT 1 FROM config_outbox c WHERE c.node_id=n.id AND c.generation=1 AND c.state='queued' AND c.attempts=0 AND c.lease_token IS NULL AND c.lease_until IS NULL AND c.error_code='' AND c.reported_at IS NULL)
+		AND NOT EXISTS(SELECT 1 FROM node_bootstrap b WHERE b.node_id=n.id AND (b.csr_hash IS NOT NULL OR b.certificate IS NOT NULL OR b.fingerprint IS NOT NULL))
+		AND NOT EXISTS(SELECT 1 FROM relay_rules r WHERE r.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM endpoint_allocations a WHERE a.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM endpoint_retirements e WHERE e.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM node_operator_events e WHERE e.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM node_preflight p WHERE p.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM node_certificate_rotations r WHERE r.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM node_agent_upgrades u WHERE u.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM node_drain_attestations a WHERE a.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM node_resource_latest r WHERE r.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM operations_incidents i WHERE i.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM node_cost_entries c WHERE c.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM probe_latest p WHERE p.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM billing_usage_totals u WHERE u.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM billing_usage_epochs e WHERE e.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM billing_usage_reports r WHERE r.node_id=n.id)
+		AND NOT EXISTS(SELECT 1 FROM subscription_usage u WHERE u.node_id=n.id)
+		FROM nodes n WHERE n.id=$1`, id).Scan(&withdrawable)
+	return withdrawable, err
+}
+
+func (s *Store) AdminWithdrawNodeRegistration(ctx context.Context, who Identity, id string, revision int64) error {
+	if !nodeIDPattern.MatchString(id) || revision < 1 {
+		return ErrInvalid
+	}
+	tx, err := s.adminTx(ctx, who)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockNode(ctx, tx, id); err != nil {
+		return err
+	}
+	var current int64
+	if err = tx.QueryRow(ctx, "SELECT revision FROM nodes WHERE id=$1 FOR UPDATE", id).Scan(&current); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if current != revision {
+		return ErrConflict
+	}
+	withdrawable, err := s.nodeRegistrationWithdrawable(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if !withdrawable {
+		return ErrConflict
+	}
+	if _, err = tx.Exec(ctx, "DELETE FROM node_bootstrap WHERE node_id=$1", id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, "DELETE FROM config_outbox WHERE node_id=$1", id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, "DELETE FROM nodes WHERE id=$1", id); err != nil {
+		return err
+	}
+	if err = platformLog(ctx, tx, &who, "node.withdraw-registration", id, map[string]any{"revision": current}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func nodeError(err error) error {
 	var pgerr *pgconn.PgError
 	if errors.As(err, &pgerr) && pgerr.Code == "23505" {
@@ -180,12 +272,16 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 		}
 	}
 	details := map[string]any{}
+	createdRevision := int64(1)
 	switch action {
 	case "node.add":
 		if input == nil {
 			return ErrInvalid
 		}
-		if _, err = tx.Exec(ctx, "INSERT INTO nodes(id,name,region,status,listen_address,public_address,capacity_mbps) VALUES($1,$2,$3,'unprovisioned',$4,NULLIF($5,'')::inet,$6)", id, input.Name, input.Region, input.ListenAddress, input.PublicAddress, input.CapacityMbps); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX((details->>'revision')::bigint),0)+1 FROM platform_audit_logs WHERE resource_id=$1 AND jsonb_typeof(details->'revision')='number'`, id).Scan(&createdRevision); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO nodes(id,name,region,status,listen_address,public_address,capacity_mbps,revision) VALUES($1,$2,$3,'unprovisioned',$4,NULLIF($5,'')::inet,$6,$7)", id, input.Name, input.Region, input.ListenAddress, input.PublicAddress, input.CapacityMbps, createdRevision); err != nil {
 			return nodeError(err)
 		}
 		if err = s.enqueueConfig(ctx, tx, id); err != nil {
@@ -268,7 +364,7 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 		}
 		details["revision"] = current + 1
 	} else {
-		details["revision"] = 1
+		details["revision"] = createdRevision
 	}
 	if err = platformLog(ctx, tx, actor, action, id, details); err != nil {
 		return err

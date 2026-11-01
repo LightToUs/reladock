@@ -20,7 +20,11 @@ func TestAdminUpgradePresentationContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	combined := string(adminJS) + string(page)
+	actionDialogJS, err := fs.ReadFile(assets.Files, "node-action-dialog.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(adminJS) + string(page) + string(actionDialogJS)
 	for _, required := range []string{
 		"升级到当前固定版本", "upgrade-cancel", "当前版本", "目标版本", "升级中，操作已锁定",
 		"rollback-failed", "回滚失败，需要人工处理", "控制连接与配置轮询恢复", "不代表实际转发健康",
@@ -40,7 +44,11 @@ func TestAdminRetirementPresentationContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	combined := string(adminJS) + string(page)
+	actionDialogJS, err := fs.ReadFile(assets.Files, "node-action-dialog.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(adminJS) + string(page) + string(actionDialogJS)
 	for _, required := range []string{
 		"排空中", "排空完成 · 可最终退役", "进入安全排空", "最终退役节点", "不可恢复",
 		"撤销 Agent 身份", "仍有未删除规则", "等待最新 Agent 排空证明", "不提供强制释放",
@@ -56,7 +64,7 @@ func TestAdminRetirementPresentationContract(t *testing.T) {
 
 func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
-	for _, path := range []string{"/admin.js", "/admin-navigation.js", "/node-bootstrap.js", "/node-contact-status.js", "/operations-tools.js"} {
+	for _, path := range []string{"/admin.js", "/admin-navigation.js", "/node-action-dialog.js", "/node-bootstrap.js", "/node-contact-status.js", "/node-content-dialog.js", "/node-editor.js", "/node-withdrawal.js", "/operations-tools.js"} {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001"+path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -68,6 +76,124 @@ func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 		}
 		if rec.Body.Len() == 0 {
 			t.Fatalf("GET %s returned an empty module", path)
+		}
+	}
+}
+
+func TestEnterpriseRuleEditorModuleIsServedOverHTTP(t *testing.T) {
+	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001/rule-editor.js", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /rule-editor.js status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/javascript") {
+		t.Fatalf("GET /rule-editor.js content-type=%q", contentType)
+	}
+	if rec.Body.Len() == 0 {
+		t.Fatal("GET /rule-editor.js returned an empty module")
+	}
+}
+
+func TestEnterpriseWorkspaceExposesOperationalSummaryAndRouteSignal(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := fs.ReadFile(assets.Files, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(app)
+	for _, required := range []string{
+		`class="workspace-summary"`, `id="summary-rule-total"`, `id="summary-rule-applied"`,
+		`id="summary-rule-pending"`, `id="summary-node-contact"`, `class="relay-signal"`,
+		"workspaceSummary", "ruleStatusPresentation",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("enterprise workspace redesign contract missing %q", required)
+		}
+	}
+}
+
+func TestEnterpriseWorkspaceKeepsRuleTableIDUnique(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(page)
+	if count := strings.Count(source, `id="rules"`); count != 1 {
+		t.Fatalf("rule table id must be unique, got %d occurrences", count)
+	}
+	if !strings.Contains(source, `href="#rules-section"`) || !strings.Contains(source, `id="rules-section"`) {
+		t.Fatal("rule navigation must target the dedicated rules section anchor")
+	}
+}
+
+func TestEnterpriseRuleManagementUsesOneCreateEditDialog(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := fs.ReadFile(assets.Files, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(app)
+	for _, required := range []string{`<dialog id="rule-dialog"`, `id="rule-create"`, "createRuleEditor", "ruleEditor.openEdit(rule)", "method: 'PATCH'"} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("enterprise rule dialog contract missing %q", required)
+		}
+	}
+	if strings.Contains(combined, `<section><h2>创建中转规则</h2>`) {
+		t.Fatal("the enterprise workspace still exposes the old inline create form")
+	}
+}
+
+func TestNodeRowContentActionsUseDialogs(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJS, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(adminJS)
+	for _, required := range []string{
+		`<dialog id="certificate-dialog"`, `<dialog id="node-delivery-dialog"`,
+		"bindNodeContentDialog", "bindNodeDeliveryDialog", "deliveryDialog.open(node)",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("node-row dialog contract missing %q", required)
+		}
+	}
+	if strings.Contains(combined, `id="certificate-panel"`) {
+		t.Fatal("certificate editor remains an inline panel")
+	}
+}
+
+func TestNodeDialogConflictRefreshStaysInsideSessionGuard(t *testing.T) {
+	adminJS, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(adminJS)
+	start := strings.Index(source, "async function mutate")
+	end := strings.Index(source, "const retirementReasons")
+	if start < 0 || end <= start {
+		t.Fatal("cannot locate mutate implementation")
+	}
+	mutateSource := source[start:end]
+	for _, forbidden := range []string{"editNode(", "editCertificate("} {
+		if strings.Contains(mutateSource, forbidden) {
+			t.Fatalf("mutate refreshes dialog outside its submission session via %q", forbidden)
+		}
+	}
+	for _, required := range []string{"runDialogSession(nodeEditor", "runDialogSession(certificateDialog", "if (latest) editNode(latest)", "if (latest) editCertificate(latest)"} {
+		if !strings.Contains(source, required) {
+			t.Errorf("session-guarded conflict refresh missing %q", required)
 		}
 	}
 }
@@ -93,5 +219,19 @@ func TestAdminMobileNavigationHasExplicitToggle(t *testing.T) {
 		if !strings.Contains(combined, required) {
 			t.Errorf("admin mobile navigation missing %q", required)
 		}
+	}
+}
+
+func TestAdminSummaryUsesConciseSuspendedTenantLabel(t *testing.T) {
+	adminJS, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(adminJS)
+	if !strings.Contains(source, "`${data.suspendedTenants} 家已停用`") {
+		t.Fatal("admin summary does not use the concise suspended-tenant label")
+	}
+	if strings.Contains(source, "`${data.suspendedTenants} 家已停用登录`") {
+		t.Fatal("admin summary still includes the redundant login suffix")
 	}
 }

@@ -202,7 +202,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin.js" || r.URL.Path == "/admin-navigation.js" || r.URL.Path == "/admin.css" || r.URL.Path == "/app.js" || r.URL.Path == "/app.css" || r.URL.Path == "/rule-submission.js" || r.URL.Path == "/account-tools.js" || r.URL.Path == "/business-tools.js" || r.URL.Path == "/operations-tools.js" || r.URL.Path == "/node-contact-status.js" {
+	if r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin.js" || r.URL.Path == "/admin-navigation.js" || r.URL.Path == "/admin.css" || r.URL.Path == "/app.js" || r.URL.Path == "/app.css" || r.URL.Path == "/workspace-summary.js" || r.URL.Path == "/rule-submission.js" || r.URL.Path == "/rule-editor.js" || r.URL.Path == "/account-tools.js" || r.URL.Path == "/business-tools.js" || r.URL.Path == "/operations-tools.js" || r.URL.Path == "/node-action-dialog.js" || r.URL.Path == "/node-contact-status.js" || r.URL.Path == "/node-content-dialog.js" || r.URL.Path == "/node-editor.js" || r.URL.Path == "/node-withdrawal.js" {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			respond(w, 405, map[string]string{"error": "方法不支持"})
 			return
@@ -223,7 +223,13 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		contentType["account-tools.js"] = "text/javascript; charset=utf-8"
 		contentType["business-tools.js"] = "text/javascript; charset=utf-8"
 		contentType["operations-tools.js"] = "text/javascript; charset=utf-8"
+		contentType["rule-editor.js"] = "text/javascript; charset=utf-8"
+		contentType["workspace-summary.js"] = "text/javascript; charset=utf-8"
+		contentType["node-action-dialog.js"] = "text/javascript; charset=utf-8"
 		contentType["node-contact-status.js"] = "text/javascript; charset=utf-8"
+		contentType["node-content-dialog.js"] = "text/javascript; charset=utf-8"
+		contentType["node-editor.js"] = "text/javascript; charset=utf-8"
+		contentType["node-withdrawal.js"] = "text/javascript; charset=utf-8"
 		contentType["admin-navigation.js"] = "text/javascript; charset=utf-8"
 		w.Header().Set("Content-Type", contentType[path])
 		w.WriteHeader(200)
@@ -398,6 +404,22 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respond(w, 201, rule)
+	case r.Method == "PATCH" && strings.HasPrefix(r.URL.Path, "/api/rules/"):
+		id := strings.TrimPrefix(r.URL.Path, "/api/rules/")
+		if !uuid.MatchString(id) {
+			failure(w, platform.ErrNotFound)
+			return
+		}
+		var input platform.RuleUpdateInput
+		if !decode(w, r, &input) {
+			return
+		}
+		rule, err := s.store.UpdateRule(ctx, who, id, input)
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		respond(w, 200, rule)
 	case r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/api/rules/"):
 		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/rules/"), "/")
 		if len(parts) != 2 || !uuid.MatchString(parts[0]) {

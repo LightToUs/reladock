@@ -1,5 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+test('agent installation opens as a dialog and every close clears credentials',async()=>{
+ const {bindBootstrapDialog}=await import('../public/node-bootstrap.js');
+ const dialog=new EventTarget();dialog.open=false;dialog.showModal=()=>{dialog.open=true};dialog.close=()=>{dialog.open=false;dialog.dispatchEvent(new Event('close'))};
+ const closeButton=new EventTarget();closeButton.click=()=>closeButton.dispatchEvent(new Event('click'));
+ let clears=0;const view=bindBootstrapDialog({dialog,closeButton,onClose:()=>{clears++}});
+ view.open();assert.equal(dialog.open,true);assert.equal(clears,0);
+ closeButton.click();assert.equal(dialog.open,false);assert.equal(clears,1);
+ view.open();dialog.close();assert.equal(dialog.open,false);assert.equal(clears,2);
+});
 test('late generation cannot restore cleared credentials or replace a different node',async()=>{
  const {createBootstrapSession}=await import('../public/node-bootstrap.js');const pending=[];
  const session=createBootstrapSession({api:()=>new Promise(resolve=>pending.push(resolve)),copy:async()=>{}});

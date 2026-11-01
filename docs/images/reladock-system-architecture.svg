@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1180" viewBox="0 0 1600 1180" role="img" aria-labelledby="title desc">
+  <title id="title">RelaDock 系统架构图</title>
+  <desc id="desc">展示企业和平台访问层、Go 控制平台、PostgreSQL 事实来源、mTLS Agent 控制通道、Linux 中转节点及独立业务数据路径，并区分可选组件和后续方向。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#eef4ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#183153" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L12,6 L0,12 Z" fill="#2563eb"/></marker>
+    <marker id="arrow-teal" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L12,6 L0,12 Z" fill="#0f766e"/></marker>
+    <marker id="arrow-purple" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L12,6 L0,12 Z" fill="#7c3aed"/></marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif; fill: #172033; }
+      .title { font-size: 40px; font-weight: 700; }
+      .subtitle { font-size: 20px; fill: #536178; }
+      .group-title { font-size: 22px; font-weight: 700; }
+      .box-title { font-size: 19px; font-weight: 700; }
+      .box-text { font-size: 15px; fill: #4c5a70; }
+      .small { font-size: 14px; fill: #637188; }
+      .legend { font-size: 15px; font-weight: 600; }
+      .on-dark { fill: #ffffff; }
+      .on-dark-muted { fill: #dbeafe; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1180" fill="url(#bg)"/>
+  <text x="70" y="66" class="title">RelaDock 系统架构图</text>
+  <text x="70" y="102" class="subtitle">PostgreSQL 是业务与账务事实来源；控制通道和客户业务数据路径彼此分离。</text>
+
+  <rect x="60" y="140" width="1480" height="160" rx="24" fill="#ffffff" stroke="#dbe5f5" stroke-width="2" filter="url(#shadow)"/>
+  <text x="90" y="178" class="group-title">访问与运营层</text>
+  <rect x="95" y="202" width="300" height="70" rx="14" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="245" y="232" text-anchor="middle" class="box-title">企业控制台 / API Key</text>
+  <text x="245" y="256" text-anchor="middle" class="box-text">租户规则、套餐、用量与工单</text>
+  <rect x="455" y="202" width="300" height="70" rx="14" fill="#eef2ff" stroke="#a5b4fc"/>
+  <text x="605" y="232" text-anchor="middle" class="box-title">平台管理后台 / 运维 CLI</text>
+  <text x="605" y="256" text-anchor="middle" class="box-text">节点、交付、审计、升级与退役</text>
+  <rect x="815" y="202" width="300" height="70" rx="14" fill="#fff7ed" stroke="#fdba74" stroke-dasharray="8 6"/>
+  <text x="965" y="232" text-anchor="middle" class="box-title">Stripe 连接器</text>
+  <text x="965" y="256" text-anchor="middle" class="box-text">可选 · 默认关闭 · 尚无真实收款</text>
+  <rect x="1175" y="202" width="300" height="70" rx="14" fill="#fff7ed" stroke="#fdba74" stroke-dasharray="8 6"/>
+  <text x="1325" y="232" text-anchor="middle" class="box-title">Webhook / Prometheus</text>
+  <text x="1325" y="256" text-anchor="middle" class="box-text">可选 · 默认关闭 · 运营环境待验收</text>
+
+  <rect x="60" y="340" width="950" height="450" rx="24" fill="#ffffff" stroke="#c7d2fe" stroke-width="2" filter="url(#shadow)"/>
+  <text x="90" y="380" class="group-title">Go 控制平台</text>
+  <text x="885" y="380" text-anchor="end" class="small">当前：Go HTTP + 静态页面</text>
+
+  <rect x="95" y="410" width="260" height="105" rx="16" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="225" y="445" text-anchor="middle" class="box-title">身份与权限</text>
+  <text x="225" y="474" text-anchor="middle" class="box-text">会话、成员、角色、API Key</text>
+  <text x="225" y="496" text-anchor="middle" class="box-text">租户隔离与独立平台权限</text>
+
+  <rect x="405" y="410" width="260" height="105" rx="16" fill="#eef2ff" stroke="#a5b4fc"/>
+  <text x="535" y="445" text-anchor="middle" class="box-title">规则与端口</text>
+  <text x="535" y="474" text-anchor="middle" class="box-text">TCP / UDP、幂等、唯一约束</text>
+  <text x="535" y="496" text-anchor="middle" class="box-text">期望版本与端口 retirement</text>
+
+  <rect x="715" y="410" width="260" height="105" rx="16" fill="#f5f3ff" stroke="#c4b5fd"/>
+  <text x="845" y="445" text-anchor="middle" class="box-title">套餐与账务</text>
+  <text x="845" y="474" text-anchor="middle" class="box-text">单规则套餐、USD 整数金额</text>
+  <text x="845" y="496" text-anchor="middle" class="box-text">钱包与不可变账本</text>
+
+  <rect x="95" y="555" width="260" height="105" rx="16" fill="#ecfeff" stroke="#67e8f9"/>
+  <text x="225" y="590" text-anchor="middle" class="box-title">配置编排</text>
+  <text x="225" y="619" text-anchor="middle" class="box-text">事务 Outbox、快照、租约</text>
+  <text x="225" y="641" text-anchor="middle" class="box-text">applying 屏障与 ACK</text>
+
+  <rect x="405" y="555" width="260" height="105" rx="16" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="535" y="590" text-anchor="middle" class="box-title">计量与额度</text>
+  <text x="535" y="619" text-anchor="middle" class="box-text">epoch / sequence 去重</text>
+  <text x="535" y="641" text-anchor="middle" class="box-text">周期归属、迟到报告与扣减</text>
+
+  <rect x="715" y="555" width="260" height="105" rx="16" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="845" y="590" text-anchor="middle" class="box-title">运营与节点生命周期</text>
+  <text x="845" y="619" text-anchor="middle" class="box-text">告警、工单、通知、成本</text>
+  <text x="845" y="641" text-anchor="middle" class="box-text">安装、证书、升级、排空、退役</text>
+
+  <rect x="250" y="700" width="570" height="58" rx="15" fill="#172554"/>
+  <text x="535" y="727" text-anchor="middle" class="box-title on-dark">PostgreSQL</text>
+  <text x="535" y="748" text-anchor="middle" class="box-text on-dark-muted">事务、唯一约束、版本、任务状态、审计与不可变账本</text>
+
+  <path d="M245 272 V325 H225 V395" fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <path d="M605 272 V325 H535 V395" fill="none" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow-blue)"/>
+  <path d="M965 272 V325 H845 V395" fill="none" stroke="#7c3aed" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrow-purple)"/>
+  <path d="M1325 272 V315 H955 V540" fill="none" stroke="#7c3aed" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrow-purple)"/>
+  <path d="M225 515 V540 M535 515 V540 M845 515 V540" fill="none" stroke="#94a3b8" stroke-width="2"/>
+  <path d="M225 660 V685 H535 M535 660 V700 M845 660 V685 H535" fill="none" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow-blue)"/>
+
+  <rect x="1060" y="340" width="480" height="450" rx="24" fill="#ffffff" stroke="#99f6e4" stroke-width="2" filter="url(#shadow)"/>
+  <text x="1090" y="380" class="group-title">Linux 中转节点</text>
+  <rect x="1100" y="410" width="400" height="86" rx="16" fill="#ecfeff" stroke="#67e8f9"/>
+  <text x="1300" y="444" text-anchor="middle" class="box-title">Go Agent Supervisor</text>
+  <text x="1300" y="470" text-anchor="middle" class="box-text">配置、心跳、续期、探测、计量分别调度与退避</text>
+  <rect x="1100" y="520" width="190" height="86" rx="16" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="1195" y="552" text-anchor="middle" class="box-title">私有持久状态</text>
+  <text x="1195" y="579" text-anchor="middle" class="box-text">journal / WAL / PKI</text>
+  <rect x="1310" y="520" width="190" height="86" rx="16" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="1405" y="552" text-anchor="middle" class="box-title">Root Updater</text>
+  <text x="1405" y="579" text-anchor="middle" class="box-text">固定 Release / 自动回滚</text>
+  <rect x="1100" y="630" width="400" height="64" rx="16" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="1300" y="658" text-anchor="middle" class="box-title">受控数据面 Adapter</text>
+  <text x="1300" y="681" text-anchor="middle" class="box-text">互斥、冻结、回读、持久候选与失败回滚</text>
+  <rect x="1100" y="718" width="120" height="48" rx="12" fill="#d1fae5"/>
+  <text x="1160" y="748" text-anchor="middle" class="box-text">nftables</text>
+  <rect x="1240" y="718" width="120" height="48" rx="12" fill="#d1fae5"/>
+  <text x="1300" y="748" text-anchor="middle" class="box-text">tc / HTB</text>
+  <rect x="1380" y="718" width="120" height="48" rx="12" fill="#d1fae5"/>
+  <text x="1440" y="748" text-anchor="middle" class="box-text">conntrack</text>
+  <path d="M1300 496 V510 M1195 606 V615 H1300 M1405 606 V615 H1300 M1300 694 V710" fill="none" stroke="#0f766e" stroke-width="3" marker-end="url(#arrow-teal)"/>
+
+  <path d="M975 608 H1042 V453 H1085" fill="none" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow-blue)"/>
+  <path d="M1085 480 H1042 V635 H975" fill="none" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow-teal)"/>
+  <rect x="990" y="440" width="120" height="58" rx="29" fill="#172554"/>
+  <text x="1050" y="464" text-anchor="middle" class="box-text on-dark-muted">TLS 1.3</text>
+  <text x="1050" y="485" text-anchor="middle" class="box-text on-dark-muted">mTLS / SPIFFE</text>
+
+  <rect x="60" y="840" width="1480" height="175" rx="24" fill="#ffffff" stroke="#bbf7d0" stroke-width="2" filter="url(#shadow)"/>
+  <text x="90" y="880" class="group-title">独立业务数据路径</text>
+  <text x="1430" y="880" text-anchor="end" class="small">不经过 Go 控制 API · 不采集或解密业务载荷</text>
+  <rect x="100" y="910" width="270" height="70" rx="15" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="235" y="941" text-anchor="middle" class="box-title">客户业务终端</text>
+  <text x="235" y="964" text-anchor="middle" class="box-text">客户自有 VPN / 代理客户端</text>
+  <rect x="480" y="910" width="270" height="70" rx="15" fill="#eef2ff" stroke="#a5b4fc"/>
+  <text x="615" y="941" text-anchor="middle" class="box-title">入口节点 IP : 端口</text>
+  <text x="615" y="964" text-anchor="middle" class="box-text">TCP / UDP 规则与端口隔离</text>
+  <rect x="860" y="910" width="270" height="70" rx="15" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="995" y="941" text-anchor="middle" class="box-title">nftables + tc</text>
+  <text x="995" y="964" text-anchor="middle" class="box-text">转发、限速、配额、全包计数</text>
+  <rect x="1240" y="910" width="250" height="70" rx="15" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="1365" y="941" text-anchor="middle" class="box-title">客户自有目标服务</text>
+  <text x="1365" y="964" text-anchor="middle" class="box-text">新加坡落地 IP : 端口</text>
+  <path d="M370 933 H465 M750 933 H845 M1130 933 H1225" fill="none" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow-blue)"/>
+  <path d="M1225 962 H1145 M845 962 H765 M465 962 H385" fill="none" stroke="#0f766e" stroke-width="3" marker-end="url(#arrow-teal)"/>
+
+  <rect x="60" y="1055" width="1480" height="80" rx="20" fill="#ffffff" stroke="#dbe5f5"/>
+  <text x="90" y="1086" class="group-title">状态说明</text>
+  <rect x="250" y="1070" width="24" height="24" rx="6" fill="#dbeafe" stroke="#93c5fd"/>
+  <text x="286" y="1088" class="legend">已实现</text>
+  <rect x="420" y="1070" width="24" height="24" rx="6" fill="#ffedd5" stroke="#fdba74" stroke-dasharray="5 4"/>
+  <text x="456" y="1088" class="legend">可选、默认关闭或待环境验收</text>
+  <rect x="795" y="1070" width="24" height="24" rx="6" fill="#f3e8ff" stroke="#c4b5fd" stroke-dasharray="5 4"/>
+  <text x="831" y="1088" class="legend">后续方向：Redis、Realm、主动内网穿透、企业组网</text>
+  <text x="90" y="1118" class="small">注意：Agent applied、节点在线、资源正常和目标 TCP 可达均不等于客户端到端协议健康；UDP 无合作探针时保持 unknown。</text>
+</svg>

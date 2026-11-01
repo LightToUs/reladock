@@ -53,8 +53,8 @@ flowchart TD
 - 端口按 `(node_id, listen_address, protocol, listen_port)` 数据库主键唯一；节点级事务锁分配 20000–60000 范围最小可用端口。TCP/UDP 可共用相同数字端口；both 同时预留，两者与规则、幂等记录、审计一起提交或回滚。
 - 创建规则必须提交企业内唯一的 `Idempotency-Key`（8–128 位字母数字及 `._:-`）；相同规范化请求重放返回原规则，不同请求返回冲突。幂等记录暂不自动过期。
 - 暂停保留端口；删除软删除规则并为每个 TCP/UDP allocation 建立 retirement，入队 schema-2 缺席快照。快照在 raw prerouting 安装新连接 quarantine，并保留 allocation-ID forward guard；平台只有在 applied quarantine 之后才允许领取精确清理任务。apply-only Agent 通过 mTLS 领取并确认任务，本地持久 journal 后按精确五元约束清理 conntrack，复核 quarantine 与零匹配，再持久化 proof、回报并等待 ACK；只有完整闭环才释放 allocation 并允许同一前驱的受控复用。validation-only Agent 不领取清理任务。重复暂停/删除不增加版本或审计。
-- 规则期望版本从 1 开始；仅 applied 回报推进对应快照的生效版本与 applied_status，校验不推进。节点 generation 与规则版本分开。applied 不代表端到端健康，页面不得显示运行中；无虚构充值、流量或余额。
-- 审计记录账户注册/登录/退出与规则创建/暂停/删除，查询仅返回本企业最近 50 条；尚未提供独立防篡改审计存储。
+- 规则期望版本从 1 开始；企业编辑名称、目标主机、目标端口或逐规则带宽时必须提交当前 `desiredVersion`，旧版本返回冲突。入口节点、传输类型和已分配端口不通过编辑迁移；活动套餐存在时编辑带宽不得超过其版本上限。编辑、版本递增、完整配置快照与 `rule.update` 审计原子提交。仅 applied 回报推进生效版本与 applied_status，校验不推进。节点 generation 与规则版本分开。applied 不代表端到端健康，页面不得显示运行中；无虚构充值、流量或余额。
+- 审计记录账户注册/登录/退出与规则创建/编辑/暂停/删除，查询仅返回本企业最近 50 条；尚未提供独立防篡改审计存储。
 - 注册只创建 owner。邀请仅生成 admin/viewer；角色变化撤销旧会话和 Key。Key 仅保存摘要，按 read/write 范围与当前数据库角色复核，不具备平台权限。每直接连接 IP 每分钟 120 次 API，认证预算 10 次；不信任代理转发头。
 - 数据库使用项目独立容器与数据卷，仅映射 `127.0.0.1:55434`。集成测试建立随机 schema 并清理自身数据，不清空业务表。旧 JSON 不自动导入，因为缺少可信租户归属。
 
@@ -62,9 +62,11 @@ flowchart TD
 
 平台后台与运维 CLI 管理全局节点、维护标志、精确证书摘要与人工重试；普通企业账号只读节点元数据。节点维护只拒绝新规则预留，不隐含暂停既有规则。`node_operator_events` 保留历史运维记录，v3 新操作写入 `platform_audit_logs`；企业审计仍只返回本企业。
 
-节点最终退役采用不可逆的 `maintenance -> draining -> retired` 状态机。进入 draining 会撤销安装凭证并禁止新建/恢复规则、升级和普通节点修改，但仍允许删除规则、配置重试、Agent 联系与必要的证书轮换，以便完成排空。最终退役要求规则、allocation、未释放 retirement、活动配置与升级均为空，desired/applied generation 一致，并取得与当前证书、内核 boot ID、Agent 启动时间、版本、journal sequence、last-good 摘要及完整 reusable quarantine 集合绑定的短时 mTLS attestation。心跳身份变化会消费旧证明；最终事务再次锁定节点并重算 quarantine 集合后才撤销节点身份。节点、审计、历史 retirement 与 quarantine 证据保留，不提供强制释放捷径。
+节点登记撤销是安全退役之外的窄例外：仅 `unprovisioned`、从未签发证书或收到 Agent 事实、没有任何规则/端口/交付尝试/升级/退役/成本/事件/探测/计量历史，且只有自动创建的 generation-1 未领取配置的空节点可撤销。未兑换的短期安装凭证随节点在同一事务中删除；已兑换凭证会阻止撤销。服务端在节点锁下按修订号重新核验，先删除允许的初始依赖，再删除节点并写平台审计；审计失败全部回滚。节点 ID 只有完成这条未部署撤销路径后才可重新登记；重新登记的 revision 从保留审计中的历史最大值继续递增，旧页面请求不能作用于同 ID 的新登记实例。
 
-`config_outbox` 保存不可变 payload、SHA256 checksum、generation、状态、尝试次数与租约。创建/暂停/恢复/删除规则时，先获取节点事务锁，再更新规则/端口、生成完整快照、写审计，全部原子提交；创建还先获取企业幂等锁。快照包括节点全部未删除规则及企业标识，暂停规则明确标识，删除通过完整期望集合中缺失表达。当前 payload 上限 2 MiB，历史快照暂不清理。
+其他节点的最终退役采用不可逆的 `maintenance -> draining -> retired` 状态机。进入 draining 会撤销安装凭证并禁止新建/恢复规则、升级和普通节点修改，但仍允许删除规则、配置重试、Agent 联系与必要的证书轮换，以便完成排空。最终退役要求规则、allocation、未释放 retirement、活动配置与升级均为空，desired/applied generation 一致，并取得与当前证书、内核 boot ID、Agent 启动时间、版本、journal sequence、last-good 摘要及完整 reusable quarantine 集合绑定的短时 mTLS attestation。心跳身份变化会消费旧证明；最终事务再次锁定节点并重算 quarantine 集合后才撤销节点身份。节点、审计、历史 retirement 与 quarantine 证据保留，不提供强制释放捷径。
+
+`config_outbox` 保存不可变 payload、SHA256 checksum、generation、状态、尝试次数与租约。创建/编辑/暂停/恢复/删除规则时，先获取节点事务锁，再更新规则/端口、生成完整快照、写审计，全部原子提交；创建还先获取企业幂等锁，编辑还锁定规则并比较 `desiredVersion`。快照包括节点全部未删除规则及企业标识，暂停规则明确标识，删除通过完整期望集合中缺失表达。当前 payload 上限 2 MiB，历史快照暂不清理。
 
 Agent 领取最新 generation，领取租约 60 秒，最多 5 次。应用前以同一 token/checksum 调用 begin；节点锁与唯一 applying 索引串行化。applying 不因租约过期自动清除，防止旧执行者尚未停止时新任务进入。规则变更可以排队，但 Claim 不绕过应用屏障。陈旧 applied 仅记录其实际版本，不能确认较新删除。失败只能在独立本地 Stable 核对后终结；未知结果保留 Agent journal 和平台屏障。丢失状态或轮换后无法恢复凭据须人工核对，不能通过超时或随意 SQL 清屏障。
 

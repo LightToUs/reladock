@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -210,5 +211,122 @@ func TestRejectInvalidRulesBeforeAllocation(t *testing.T) {
 	input.NodeID = "absent"
 	if _, err := s.CreateRule(ctx, who, "missing-node", input); err != ErrNotFound {
 		t.Fatalf("node: %v", err)
+	}
+}
+
+func TestUpdateRuleIsVersionedTenantScopedAndEnqueued(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	owner, _ := register(t, s, "update-owner@example.com")
+	other, _ := register(t, s, "update-other@example.com")
+	rule, err := s.CreateRule(ctx, owner, "update-rule", ruleInput("both"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generationBefore int64
+	if err = s.pool.QueryRow(ctx, "SELECT desired_generation FROM nodes WHERE id=$1", rule.NodeID).Scan(&generationBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := s.UpdateRule(ctx, owner, rule.ID, RuleUpdateInput{
+		Name: "  新加坡落地 B  ", TargetHost: "EDGE.EXAMPLE.COM", TargetPort: 8443,
+		BandwidthMbps: 500, DesiredVersion: rule.DesiredVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "新加坡落地 B" || updated.TargetHost != "edge.example.com" || updated.TargetPort != 8443 || updated.BandwidthMbps != 500 {
+		t.Fatalf("update not normalized: %+v", updated)
+	}
+	if updated.Protocol != rule.Protocol || updated.NodeID != rule.NodeID || updated.ListenPort != rule.ListenPort || updated.DesiredVersion != rule.DesiredVersion+1 {
+		t.Fatalf("allocation identity or version changed incorrectly: before=%+v after=%+v", rule, updated)
+	}
+	var generation int64
+	var payload []byte
+	if err = s.pool.QueryRow(ctx, `SELECT n.desired_generation,o.payload FROM nodes n JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation WHERE n.id=$1`, rule.NodeID).Scan(&generation, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if generation != generationBefore+1 || !strings.Contains(string(payload), `"targetPort":8443`) || !strings.Contains(string(payload), `"bandwidthMbps":500`) {
+		t.Fatalf("latest config was not enqueued: generation=%d payload=%s", generation, payload)
+	}
+	logs, err := s.AuditLogs(ctx, owner)
+	if err != nil || len(logs) < 1 || logs[0].Action != "rule.update" || logs[0].ResourceID != rule.ID {
+		t.Fatalf("update audit missing: %+v %v", logs, err)
+	}
+
+	if _, err = s.UpdateRule(ctx, owner, rule.ID, RuleUpdateInput{Name: "stale", TargetHost: "192.0.2.2", TargetPort: 443, BandwidthMbps: 10, DesiredVersion: rule.DesiredVersion}); err != ErrConflict {
+		t.Fatalf("stale update: %v", err)
+	}
+	if _, err = s.UpdateRule(ctx, other, rule.ID, RuleUpdateInput{Name: "foreign", TargetHost: "192.0.2.2", TargetPort: 443, BandwidthMbps: 10, DesiredVersion: updated.DesiredVersion}); err != ErrNotFound {
+		t.Fatalf("cross-tenant update: %v", err)
+	}
+	viewer := owner
+	viewer.Role = "viewer"
+	if _, err = s.UpdateRule(ctx, viewer, rule.ID, RuleUpdateInput{Name: "viewer", TargetHost: "192.0.2.2", TargetPort: 443, BandwidthMbps: 10, DesiredVersion: updated.DesiredVersion}); err != ErrForbidden {
+		t.Fatalf("viewer update: %v", err)
+	}
+	if _, err = s.UpdateRule(ctx, owner, rule.ID, RuleUpdateInput{Name: "invalid", TargetHost: "https://bad.example/a", TargetPort: 443, BandwidthMbps: 10, DesiredVersion: updated.DesiredVersion}); err != ErrInvalid {
+		t.Fatalf("invalid update: %v", err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE nodes SET capacity_mbps=100 WHERE id=$1", rule.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.UpdateRule(ctx, owner, rule.ID, RuleUpdateInput{Name: "too large", TargetHost: "192.0.2.2", TargetPort: 443, BandwidthMbps: 101, DesiredVersion: updated.DesiredVersion}); err != ErrInvalid {
+		t.Fatalf("over-capacity update: %v", err)
+	}
+}
+
+func TestUpdateRuleRollsBackWhenAuditFails(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	owner, _ := register(t, s, "update-rollback@example.com")
+	rule, err := s.CreateRule(ctx, owner, "update-rollback-rule", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generationBefore int64
+	if err = s.pool.QueryRow(ctx, "SELECT desired_generation FROM nodes WHERE id=$1", rule.NodeID).Scan(&generationBefore); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `CREATE FUNCTION reject_rule_update_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='rule.update' THEN RAISE EXCEPTION 'audit unavailable'; END IF; RETURN NEW; END; $$; CREATE TRIGGER reject_rule_update_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION reject_rule_update_audit()`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.UpdateRule(ctx, owner, rule.ID, RuleUpdateInput{Name: "must roll back", TargetHost: "192.0.2.55", TargetPort: 9443, BandwidthMbps: 250, DesiredVersion: rule.DesiredVersion})
+	if err == nil {
+		t.Fatal("failed audit reported update success")
+	}
+	current, err := s.ListRules(ctx, owner)
+	if err != nil || len(current) != 1 {
+		t.Fatalf("read rule after rollback: %+v %v", current, err)
+	}
+	if current[0].Name != rule.Name || current[0].TargetHost != rule.TargetHost || current[0].DesiredVersion != rule.DesiredVersion {
+		t.Fatalf("failed audit leaked rule mutation: before=%+v after=%+v", rule, current[0])
+	}
+	var generation int64
+	if err = s.pool.QueryRow(ctx, "SELECT desired_generation FROM nodes WHERE id=$1", rule.NodeID).Scan(&generation); err != nil || generation != generationBefore {
+		t.Fatalf("failed audit leaked node generation: %d %v", generation, err)
+	}
+}
+
+func TestUpdateRuleCannotExceedActivePlanBandwidth(t *testing.T) {
+	s, _, owner, rule, plan := subscriptionFixture(t)
+	ctx := context.Background()
+	if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: owner.TenantID, Key: "update-plan-funds", AmountCents: 500, Reason: "test funding", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PurchasePlan(ctx, owner, "update-plan-purchase", PurchasePlanInput{RuleID: rule.ID, PriceVersionID: plan.ID}); err != nil {
+		t.Fatal(err)
+	}
+	rules, err := s.ListRules(ctx, owner)
+	if err != nil || len(rules) != 1 {
+		t.Fatalf("current rule: %+v %v", rules, err)
+	}
+	current := rules[0]
+	if _, err = s.UpdateRule(ctx, owner, current.ID, RuleUpdateInput{Name: current.Name, TargetHost: current.TargetHost, TargetPort: current.TargetPort, BandwidthMbps: plan.BandwidthMbps + 1, DesiredVersion: current.DesiredVersion}); err != ErrInvalid {
+		t.Fatalf("edit exceeded active plan bandwidth: %v", err)
+	}
+	updated, err := s.UpdateRule(ctx, owner, current.ID, RuleUpdateInput{Name: current.Name, TargetHost: current.TargetHost, TargetPort: current.TargetPort, BandwidthMbps: plan.BandwidthMbps - 25, DesiredVersion: current.DesiredVersion})
+	if err != nil || updated.BandwidthMbps != plan.BandwidthMbps-25 {
+		t.Fatalf("lower per-rule bandwidth rejected: %+v %v", updated, err)
 	}
 }

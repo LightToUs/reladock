@@ -179,7 +179,7 @@ button.danger, .danger { background: var(--danger-bg); color: var(--danger) !imp
 .admin-nav nav button:nth-child(3), .metric:nth-child(3), .quick-actions button:nth-child(3) { animation-delay: 90ms; }
 .admin-nav nav button:nth-child(4), .metric:nth-child(4) { animation-delay: 135ms; }
 .admin-nav nav button:nth-child(n+5) { animation-delay: 180ms; }
-[data-pane] > section, #bootstrap-panel, #certificate-panel {
+[data-pane] > section {
   margin-top: 22px;
   padding: clamp(20px, 2.2vw, 32px);
   background: var(--surface-strong);
@@ -189,6 +189,44 @@ button.danger, .danger { background: var(--danger-bg); color: var(--danger) !imp
 .section-heading h2 { margin-bottom: 0; }
 .hint { max-width: 105ch; font-size: .9rem; line-height: 1.7; }
 section > .hint { margin-bottom: 20px; }
+
+.node-dialog {
+  width: min(780px, calc(100% - 32px));
+  max-width: none;
+  max-height: calc(100svh - 32px);
+  padding: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink);
+  box-shadow: 0 24px 72px rgba(8, 18, 13, .3);
+}
+.node-dialog::backdrop { background: rgba(10, 18, 14, .68); backdrop-filter: blur(3px); }
+.node-dialog-card { padding: clamp(22px, 3vw, 34px); background: var(--surface-strong); }
+.dialog-heading { padding-bottom: 20px; border-bottom: 1px solid var(--table-line); }
+.dialog-heading .context-label { margin-bottom: 7px; }
+.dialog-heading h2 { margin-bottom: 0; }
+.node-dialog form { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 22px; }
+.dialog-hint, .dialog-message, .dialog-actions { grid-column: 1 / -1; }
+.dialog-hint { margin: 2px 0 0; }
+.dialog-message { margin: -4px 0 0; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
+.node-action-dialog { width: min(590px, calc(100% - 32px)); }
+.dialog-description { margin: 22px 0 14px; color: var(--muted); line-height: 1.75; white-space: pre-line; }
+.node-action-dialog .dialog-message { min-height: 24px; margin: 0 0 6px; }
+.certificate-dialog { width: min(760px, calc(100% - 32px)); }
+.certificate-dialog form { grid-template-columns: 1fr; }
+.certificate-dialog .hint, .delivery-dialog .hint { margin: 20px 0 0; }
+.certificate-dialog .inline-actions { justify-content: flex-end; }
+.delivery-dialog { width: min(1080px, calc(100% - 32px)); }
+.delivery-dialog .scroll { margin-top: 16px; }
+.bootstrap-dialog { width: min(920px, calc(100% - 32px)); }
+.bootstrap-dialog .hint { margin: 20px 0 14px; }
+.bootstrap-dialog textarea { min-height: 132px; }
+.bootstrap-dialog [role="status"] { min-height: 24px; margin: 10px 0; color: var(--muted); }
+.bootstrap-dialog .inline-actions { margin-top: 12px; }
+.bootstrap-dialog pre { max-height: min(32rem, 42svh); }
 
 .operations-summary { display: grid; grid-template-columns: minmax(200px, .7fr) minmax(0, 2.3fr); gap: clamp(28px, 4vw, 72px); align-items: end; }
 .summary-intro { align-self: start; }
@@ -393,7 +431,7 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   .admin-main { padding-top: 22px; }
   h1 { font-size: 2.45rem; }
   .notice { padding: 13px 14px; }
-  [data-pane] > section, #bootstrap-panel, #certificate-panel { margin-top: 16px; padding: 18px 16px; }
+  [data-pane] > section { margin-top: 16px; padding: 18px 16px; }
   .admin-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .metric { min-height: 130px; padding: 14px; }
   .metric-primary { grid-column: 1 / -1; min-height: 154px; }
@@ -401,6 +439,12 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   .quick-actions { grid-template-columns: 1fr; }
   .quick-actions button { min-height: 82px; }
   form, .filter-form { grid-template-columns: 1fr; }
+  .node-dialog { width: calc(100% - 20px); max-height: calc(100svh - 20px); }
+  .node-dialog-card { padding: 20px 16px; }
+  .node-dialog form { grid-template-columns: 1fr; }
+  .dialog-hint, .dialog-message, .dialog-actions { grid-column: auto; }
+  .dialog-actions { display: grid; grid-template-columns: 1fr; }
+  .dialog-actions button { width: 100%; }
   .section-heading { align-items: flex-start; }
   .inline-actions { display: grid; grid-template-columns: 1fr; }
   .inline-actions button { width: 100%; }

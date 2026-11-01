@@ -23,6 +23,13 @@ type RuleInput struct {
 	BandwidthMbps int    `json:"bandwidthMbps"`
 	NodeID        string `json:"nodeId"`
 }
+type RuleUpdateInput struct {
+	Name           string `json:"name"`
+	TargetHost     string `json:"targetHost"`
+	TargetPort     int    `json:"targetPort"`
+	BandwidthMbps  int    `json:"bandwidthMbps"`
+	DesiredVersion int64  `json:"desiredVersion"`
+}
 type Rule struct {
 	ID string `json:"id"`
 	RuleInput
@@ -185,6 +192,78 @@ func (s *Store) ListRules(ctx context.Context, who Identity) ([]Rule, error) {
 		rules = append(rules, r)
 	}
 	return rules, rows.Err()
+}
+
+func (s *Store) UpdateRule(ctx context.Context, who Identity, id string, input RuleUpdateInput) (Rule, error) {
+	if !canWrite(who) {
+		return Rule{}, ErrForbidden
+	}
+	if input.DesiredVersion < 1 {
+		return Rule{}, ErrInvalid
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Rule{}, err
+	}
+	defer tx.Rollback(ctx)
+	if err = tenantWriteAccess(ctx, tx, who); err != nil {
+		return Rule{}, err
+	}
+	var nodeID string
+	if err = tx.QueryRow(ctx, "SELECT node_id FROM relay_rules WHERE id=$1 AND tenant_id=$2 AND status<>'deleted'", id, who.TenantID).Scan(&nodeID); errors.Is(err, pgx.ErrNoRows) {
+		return Rule{}, ErrNotFound
+	} else if err != nil {
+		return Rule{}, err
+	}
+	if err = lockNode(ctx, tx, nodeID); err != nil {
+		return Rule{}, err
+	}
+	current, err := scanRule(tx.QueryRow(ctx, "SELECT "+ruleColumns+" FROM relay_rules WHERE id=$1 AND tenant_id=$2 AND status<>'deleted' FOR UPDATE", id, who.TenantID))
+	if err != nil {
+		return Rule{}, err
+	}
+	if current.DesiredVersion != input.DesiredVersion {
+		return Rule{}, ErrConflict
+	}
+	validated, err := validateRule(RuleInput{
+		Name: input.Name, Protocol: current.Protocol, TargetHost: input.TargetHost,
+		TargetPort: input.TargetPort, BandwidthMbps: input.BandwidthMbps, NodeID: current.NodeID,
+	})
+	if err != nil {
+		return Rule{}, err
+	}
+	var capacity int
+	if err = tx.QueryRow(ctx, "SELECT capacity_mbps FROM nodes WHERE id=$1", nodeID).Scan(&capacity); err != nil {
+		return Rule{}, err
+	}
+	if validated.BandwidthMbps > capacity {
+		return Rule{}, ErrInvalid
+	}
+	var planBandwidth int
+	err = tx.QueryRow(ctx, `SELECT v.bandwidth_mbps FROM rule_subscriptions p JOIN plan_price_versions v ON v.id=p.price_version_id WHERE p.rule_id=$1 AND p.tenant_id=$2 AND p.ends_at>clock_timestamp() AND p.final_upload_bytes IS NULL ORDER BY p.ordinal DESC LIMIT 1`, id, who.TenantID).Scan(&planBandwidth)
+	if err == nil && validated.BandwidthMbps > planBandwidth {
+		return Rule{}, ErrInvalid
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Rule{}, err
+	}
+	if current.Name == validated.Name && current.TargetHost == validated.TargetHost && current.TargetPort == validated.TargetPort && current.BandwidthMbps == validated.BandwidthMbps {
+		return current, nil
+	}
+	updated, err := scanRule(tx.QueryRow(ctx, `UPDATE relay_rules SET name=$1,target_host=$2,target_port=$3,bandwidth_mbps=$4,desired_version=desired_version+1,updated_at=now() WHERE id=$5 AND tenant_id=$6 RETURNING `+ruleColumns, validated.Name, validated.TargetHost, validated.TargetPort, validated.BandwidthMbps, id, who.TenantID))
+	if err != nil {
+		return Rule{}, err
+	}
+	if err = s.enqueueConfig(ctx, tx, nodeID); err != nil {
+		return Rule{}, err
+	}
+	if err = audit(ctx, tx, who, "rule.update", id); err != nil {
+		return Rule{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return Rule{}, err
+	}
+	return updated, nil
 }
 
 func (s *Store) PauseRule(ctx context.Context, who Identity, id string) (Rule, error) {

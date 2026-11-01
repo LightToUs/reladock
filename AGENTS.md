@@ -1,6 +1,6 @@
 # RelaDock AI 编程助手说明
 
-开发前必须完整阅读本文件、README.md、docs/REQUIREMENTS.md、docs/ARCHITECTURE.md 和 docs/ROADMAP.md。发生冲突时以用户最新明确指令为准；不要将推测写成已确认需求。
+开发前必须完整阅读本文件、README.md、docs/REQUIREMENTS.md、docs/ARCHITECTURE.md、docs/ROADMAP.md 和 docs/IMPLEMENTATION_STATUS.md。发生冲突时以用户最新明确指令为准；不要将推测写成已确认需求。每次功能状态、验证结果或生产验收边界发生变化时，同步更新 IMPLEMENTATION_STATUS.md，供后续编程助手接手。
 
 ## 项目定位和禁止偏移的边界
 

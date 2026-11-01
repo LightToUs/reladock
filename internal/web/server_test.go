@@ -92,6 +92,16 @@ func TestAuthenticatedRuleFlowAndLogout(t *testing.T) {
 	if rule.Status != "pending-agent" {
 		t.Fatal("claimed deployment")
 	}
+	rec = request(h, "PATCH", "/api/rules/"+rule.ID, `{"name":"Relay updated","targetHost":"198.51.100.20","targetPort":8443,"bandwidthMbps":250,"desiredVersion":1}`, cookie)
+	if rec.Code != 200 {
+		t.Fatalf("update: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &rule); err != nil {
+		t.Fatal(err)
+	}
+	if rule.Name != "Relay updated" || rule.TargetHost != "198.51.100.20" || rule.TargetPort != 8443 || rule.BandwidthMbps != 250 || rule.DesiredVersion != 2 {
+		t.Fatalf("unexpected updated rule: %+v", rule)
+	}
 	rec = request(h, "GET", "/api/overview", "", cookie)
 	if rec.Code != 200 {
 		t.Fatal(rec.Body.String())
@@ -287,5 +297,48 @@ func TestPlatformAdminAPIAuthorizationNodeWritesAndConflict(t *testing.T) {
 	}
 	if rec = request(h, "GET", "/api/admin/nodes", "", cookie); rec.Code != 401 {
 		t.Fatal("revoked session remains authorized")
+	}
+}
+
+func TestAdminWithdrawNodeRegistrationHTTP(t *testing.T) {
+	store := testWebStore(t)
+	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("tenant")}, "admin.html": &fstest.MapFile{Data: []byte("platform admin")}}
+	h := New(store, assets, "http://127.0.0.1:3001")
+	reg := request(h, "POST", "/api/auth/register", `{"company":"Operator","email":"withdraw-operator@example.com","password":"long-test-password-42"}`, nil)
+	if reg.Code != http.StatusCreated {
+		t.Fatal(reg.Body.String())
+	}
+	if err := store.SetPlatformAdmin(context.Background(), "withdraw-operator@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	login := request(h, "POST", "/api/auth/login", `{"email":"withdraw-operator@example.com","password":"long-test-password-42"}`, nil)
+	adminCookie := login.Result().Cookies()[0]
+	created := request(h, "POST", "/api/admin/nodes", `{"id":"unused-http","name":"误登记节点","region":"Hong Kong","listenAddress":"0.0.0.0","capacityMbps":1000}`, adminCookie)
+	if created.Code != http.StatusCreated {
+		t.Fatal(created.Body.String())
+	}
+	listed := request(h, "GET", "/api/admin/nodes", "", adminCookie)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"id":"unused-http"`) || !strings.Contains(listed.Body.String(), `"withdrawable":true`) {
+		t.Fatalf("withdrawal fact missing: %d %s", listed.Code, listed.Body.String())
+	}
+	if rec := request(h, "POST", "/api/admin/nodes/unused-http/withdraw-registration", `{"revision":1,"force":true}`, adminCookie); rec.Code != http.StatusBadRequest {
+		t.Fatalf("withdrawal accepted unknown field: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(h, "POST", "/api/admin/nodes/unused-http/withdraw-registration", `{"revision":2}`, adminCookie); rec.Code != http.StatusConflict {
+		t.Fatalf("withdrawal accepted stale revision: %d %s", rec.Code, rec.Body.String())
+	}
+	other := request(h, "POST", "/api/auth/register", `{"company":"Customer","email":"withdraw-customer@example.com","password":"long-test-password-42"}`, nil)
+	if other.Code != http.StatusCreated {
+		t.Fatal(other.Body.String())
+	}
+	if rec := request(h, "POST", "/api/admin/nodes/unused-http/withdraw-registration", `{"revision":1}`, other.Result().Cookies()[0]); rec.Code != http.StatusForbidden {
+		t.Fatalf("tenant withdrew platform node: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(h, "POST", "/api/admin/nodes/unused-http/withdraw-registration", `{"revision":1}`, adminCookie); rec.Code != http.StatusOK {
+		t.Fatalf("withdrawal failed: %d %s", rec.Code, rec.Body.String())
+	}
+	listed = request(h, "GET", "/api/admin/nodes", "", adminCookie)
+	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), `"id":"unused-http"`) {
+		t.Fatalf("withdrawn node remained listed: %d %s", listed.Code, listed.Body.String())
 	}
 }

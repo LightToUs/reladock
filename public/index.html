@@ -15,20 +15,66 @@
   <details><summary>接受企业邀请</summary><form id="accept-invitation"><label>邀请令牌<input name="token" required autocomplete="off"></label><label>受邀邮箱<input name="email" type="email" required autocomplete="username"></label><label>设置密码<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"></label><button>接受邀请并登录</button></form><p id="accept-message" class="error" role="status"></p></details>
 </section>
 <div id="console" hidden>
-<aside><h2>RelaDock<span class="tag">.</span></h2><p>网络中转控制台</p><p class="tag">概览与转发规则</p><p>节点与配置交付</p><p>规则套餐与钱包</p><p>企业成员与工单</p><p>企业组网 · 规划中</p></aside>
+<aside>
+  <div class="brand"><span class="brand-mark" aria-hidden="true">R</span><div><h2>RelaDock</h2><p>Relay operations</p></div></div>
+  <nav aria-label="工作台导航">
+    <a class="active" href="#overview">运行概览</a>
+    <a href="#rules-section">转发规则</a>
+    <a href="#nodes-section">节点交付</a>
+    <a href="#business">套餐账务</a>
+    <a href="#team">企业协作</a>
+    <a href="#operations">告警工单</a>
+  </nav>
+  <div class="sidebar-note"><span class="signal-dot"></span><div><b>控制面工作台</b><small>应用状态不等于端到端健康</small></div></div>
+</aside>
 <main>
-<header><div><div class="tag">香港 → 新加坡</div><h1>网络中转工作台</h1><p class="muted" id="company-name"></p></div><div class="account"><span class="muted" id="account-email"></span><a href="/admin" id="platform-link" class="tag" hidden>平台管理</a><button class="secondary" id="refresh">刷新</button><button class="secondary" id="logout">退出登录</button></div></header>
-<div class="notice">每条规则独立购买套餐、设置带宽和统计流量。节点当前只校验配置，尚未自动启用转发；实际限速和自动采集仍待接入。支付渠道默认关闭。</div>
-<section><h2>创建中转规则</h2><p class="muted">预留 TCP/UDP 入口端口，保存配置并等待节点交付。</p>
-<form id="rule-form"><label>规则名称<input name="name" required maxlength="80" placeholder="新加坡落地 A"></label><label>传输类型<select name="protocol"><option value="udp">UDP</option><option value="tcp">TCP</option><option value="both">TCP + UDP</option></select></label><label>目标 IP / 域名<input name="targetHost" required maxlength="253" placeholder="客户落地服务器地址"></label><label>目标端口<input name="targetPort" type="number" min="1" max="65535" value="443" required></label><label>带宽上限 / Mbps<input name="bandwidthMbps" type="number" min="1" max="1000" value="1000" required></label><label>入口节点<select name="nodeId" id="node-select" required></select></label><button id="rule-submit">预留端口并保存配置</button></form><p id="message" class="error" role="status"></p></section>
-<section><h2>转发规则 <span class="muted" id="rule-count"></span></h2><p class="hint muted">每条转发独立设置带宽、统计上下行流量。入口 IP 将在实际转发接入后提供。暂停保留端口；删除尚未交付的配置会释放端口。</p><div class="scroll"><table><thead><tr><th>名称 / 节点</th><th>预留端口</th><th>传输</th><th>目标</th><th>带宽上限</th><th>流量</th><th>配置版本</th><th>状态</th><th>操作</th></tr></thead><tbody id="rules"></tbody></table></div><p id="rules-message" class="error" role="status"></p></section>
-<section><h2>节点与配置交付</h2><p class="muted hint">最近联系、配置校验和应用确认均不代表端到端转发健康。节点登记、维护和证书由平台运维管理。</p><div class="scroll"><table><thead><tr><th>节点</th><th>地区</th><th>资源状态</th><th>期望 / 校验 / 应用版本</th><th>交付状态</th><th>最近联系</th></tr></thead><tbody id="nodes"></tbody></table></div><p id="refresh-message" class="muted hint" role="status"></p></section>
-<section><h2>最近操作</h2><p class="muted hint">显示当前企业最近 50 条账户与规则操作。</p><div class="scroll"><table id="audit"><thead><tr><th>时间</th><th>操作</th><th>资源</th></tr></thead><tbody id="audit-rows"></tbody></table></div></section>
-<section id="member-tools"><h2>企业成员</h2><div class="scroll"><table><thead><tr><th>邮箱</th><th>角色</th><th>管理</th></tr></thead><tbody id="member-rows"></tbody></table></div><form id="invitation-form"><label>受邀邮箱<input name="email" type="email" required></label><label>角色<select name="role"><option value="viewer">只读成员</option><option value="admin">企业管理员</option></select></label><button>生成邀请（24 小时有效）</button></form><p class="hint muted">邀请令牌只显示一次，请通过可信渠道发给受邀人，由其在登录页接受。平台暂不自动发送邮件。</p><div class="scroll"><table><thead><tr><th>受邀邮箱</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="invitation-rows"></tbody></table></div></section>
-<section><h2>API Key</h2><p class="muted hint">Key 仅拥有当前企业权限，不能操作平台管理。令牌只在创建时显示，可随时撤销。</p><form id="api-key-form"><label>名称<input name="name" maxlength="80" required></label><label>范围<select name="scope"><option value="read">只读</option><option value="write">读写</option></select></label><button>创建 Key（30 天有效）</button></form><div class="scroll"><table><thead><tr><th>名称</th><th>范围</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="key-rows"></tbody></table></div></section>
+<header id="overview"><div><div class="workspace-label">Enterprise relay control</div><h1>网络中转工作台</h1><p class="workspace-company" id="company-name"></p></div><div class="account"><span class="account-identity" id="account-email"></span><a href="/admin" id="platform-link" class="text-link" hidden>平台管理</a><button class="secondary" id="refresh">刷新数据</button><button class="secondary quiet" id="logout">退出</button></div></header>
+<div class="command-deck">
+  <div class="relay-signal" aria-label="业务流量从入口经转发到达客户目标">
+    <div><span class="route-point is-entry"></span><small>ENTRY</small><b>入口节点</b></div>
+    <div class="route-track"><i></i><i></i><i></i></div>
+    <div><span class="route-point"></span><small>RELAY</small><b>透明转发</b></div>
+    <div class="route-track"><i></i><i></i><i></i></div>
+    <div><span class="route-point is-target"></span><small>TARGET</small><b>客户落地</b></div>
+  </div>
+  <p>在一处确认配置交付、节点联系与逐规则运行状态。RelaDock 只透传业务流量，不终结客户协议。</p>
+</div>
+<section class="workspace-summary" aria-label="工作台运行概览">
+  <article><span>规则总数</span><strong id="summary-rule-total">0</strong><small>当前企业配置</small></article>
+  <article><span>配置已应用</span><strong id="summary-rule-applied">0</strong><small>不代表链路健康</small></article>
+  <article><span>待交付处理</span><strong id="summary-rule-pending">0</strong><small>待部署或待确认</small></article>
+  <article><span>有联系记录</span><strong id="summary-node-contact">0/0</strong><small>节点数 / 节点总数</small></article>
+</section>
+<div class="notice"><span>运行边界</span><p>每条规则独立设置带宽与统计流量。配置应用、节点在线和目标可达是不同事实；端到端转发仍需真实客户端验证。</p></div>
+<section class="rule-management primary-section" id="rules-section">
+  <div class="section-index">Relay rules</div>
+  <div class="section-heading"><div><h2>转发规则 <span class="muted" id="rule-count"></span></h2><p class="hint muted">每条转发独立设置带宽并统计上下行流量。暂停保留端口；删除已下发规则后，端口继续隔离等待安全回收。</p></div><button id="rule-create" class="compact">创建规则</button></div>
+  <div class="scroll"><table><thead><tr><th>名称 / 节点</th><th>预留端口</th><th>传输</th><th>目标</th><th>带宽上限</th><th>流量</th><th>配置版本</th><th>状态</th><th>操作</th></tr></thead><tbody id="rules"></tbody></table></div><p id="rules-message" class="error" role="status"></p>
+</section>
+<dialog id="rule-dialog" class="editor-dialog" aria-labelledby="rule-dialog-title">
+  <div class="dialog-heading"><div><h2 id="rule-dialog-title">创建中转规则</h2><p id="rule-dialog-description" class="muted"></p></div><button id="rule-dialog-close" class="icon-button" type="button" aria-label="关闭规则弹窗">×</button></div>
+  <p id="rule-allocation" class="allocation-note" hidden></p>
+  <form id="rule-form">
+    <div class="editor-grid">
+      <label class="field-wide">规则名称<input name="name" required maxlength="80" placeholder="新加坡落地 A"></label>
+      <label>传输类型<select name="protocol"><option value="udp">UDP</option><option value="tcp">TCP</option><option value="both">TCP + UDP</option></select></label>
+      <label>入口节点<select name="nodeId" id="node-select" required></select></label>
+      <label class="field-wide">目标 IP / 域名<input name="targetHost" required maxlength="253" placeholder="客户落地服务器地址"></label>
+      <label>目标端口<input name="targetPort" type="number" min="1" max="65535" value="443" required></label>
+      <label>带宽上限 / Mbps<input name="bandwidthMbps" type="number" min="1" max="1000" value="1000" required></label>
+    </div>
+    <input name="desiredVersion" type="hidden"><input name="listenPort" type="hidden">
+    <p id="rule-dialog-status" class="error" role="status"></p>
+    <div class="dialog-actions"><button id="rule-dialog-cancel" class="secondary" type="button">取消</button><button id="rule-submit" type="submit">预留端口并保存</button></div>
+  </form>
+</dialog>
+<section id="nodes-section"><div class="section-index">Delivery</div><h2>节点与配置交付</h2><p class="muted hint">最近联系、配置校验和应用确认均不代表端到端转发健康。节点登记、维护和证书由平台运维管理。</p><div class="scroll"><table><thead><tr><th>节点</th><th>地区</th><th>资源状态</th><th>期望 / 校验 / 应用版本</th><th>交付状态</th><th>最近联系</th></tr></thead><tbody id="nodes"></tbody></table></div><p id="refresh-message" class="muted hint" role="status"></p></section>
+<section><div class="section-index">Activity</div><h2>最近操作</h2><p class="muted hint">显示当前企业最近 50 条账户与规则操作。</p><div class="scroll"><table id="audit"><thead><tr><th>时间</th><th>操作</th><th>资源</th></tr></thead><tbody id="audit-rows"></tbody></table></div></section>
+<section id="member-tools"><div class="section-index" id="team">Team</div><h2>企业成员</h2><div class="scroll"><table><thead><tr><th>邮箱</th><th>角色</th><th>管理</th></tr></thead><tbody id="member-rows"></tbody></table></div><form id="invitation-form"><label>受邀邮箱<input name="email" type="email" required></label><label>角色<select name="role"><option value="viewer">只读成员</option><option value="admin">企业管理员</option></select></label><button>生成邀请（24 小时有效）</button></form><p class="hint muted">邀请令牌只显示一次，请通过可信渠道发给受邀人，由其在登录页接受。平台暂不自动发送邮件。</p><div class="scroll"><table><thead><tr><th>受邀邮箱</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="invitation-rows"></tbody></table></div></section>
+<section><div class="section-index">Access</div><h2>API Key</h2><p class="muted hint">Key 仅拥有当前企业权限，不能操作平台管理。令牌只在创建时显示，可随时撤销。</p><form id="api-key-form"><label>名称<input name="name" maxlength="80" required></label><label>范围<select name="scope"><option value="read">只读</option><option value="write">读写</option></select></label><button>创建 Key（30 天有效）</button></form><div class="scroll"><table><thead><tr><th>名称</th><th>范围</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="key-rows"></tbody></table></div></section>
 <section id="credential-result" hidden><h2>一次性令牌</h2><p class="hint muted">关闭或刷新后无法再次查看，请妥善保管。</p><input id="credential-token" readonly autocomplete="off" aria-label="一次性令牌"><button id="credential-clear" class="secondary">清除显示</button></section><p id="account-tools-message" class="error" role="status"></p>
-<section><h2>规则套餐与钱包</h2><p id="wallet-status" class="muted"></p><p id="payment-availability" class="hint muted"></p><form id="top-up-form" hidden><label>充值金额 / 美分<input name="amountCents" type="number" min="50" max="1000000" required></label><button>前往支付页面</button></form><p id="plan-availability" class="muted"></p><form id="purchase-form"><label>转发规则<select name="ruleId" required></select></label><label>独立套餐<select name="priceVersionId" required></select></label><button>从钱包购买本规则套餐</button></form><p id="business-message" class="error" role="status"></p><button id="subscription-refresh" class="secondary">查询选中规则的套餐用量</button><div class="scroll"><table><thead><tr><th>套餐</th><th>本周期流量</th><th>带宽上限</th><th>到期时间</th><th>状态</th></tr></thead><tbody id="subscription-rows"></tbody></table></div><button id="wallet-ledger-refresh" class="secondary">查询钱包账本</button><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>所属规则</th><th>金额</th><th>说明</th></tr></thead><tbody id="wallet-ledger-rows"></tbody></table></div></section>
-<section><h2>告警与工单</h2><button id="operations-refresh" class="secondary">刷新告警和工单</button><div class="scroll"><table><thead><tr><th>节点</th><th>告警</th><th>状态</th><th>最近观察</th></tr></thead><tbody id="incident-rows"></tbody></table></div><form id="ticket-create"><label>工单标题<input name="subject" required maxlength="160"></label><label>问题描述<input name="body" required maxlength="4000"></label><button>提交工单</button></form><div class="scroll"><table><thead><tr><th>工单</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="ticket-rows"></tbody></table></div><div id="ticket-thread" hidden><h3 id="ticket-subject"></h3><div id="ticket-messages"></div><form id="ticket-reply"><label>回复内容<input name="body" required maxlength="4000"></label><label>状态<select name="status"><option value="open">处理中</option><option value="resolved">已解决</option></select></label><button>回复工单</button></form></div><p id="operations-message" class="error" role="status"></p></section>
+<section id="business"><div class="section-index">Billing</div><h2>规则套餐与钱包</h2><p id="wallet-status" class="muted"></p><p id="payment-availability" class="hint muted"></p><form id="top-up-form" hidden><label>充值金额 / 美分<input name="amountCents" type="number" min="50" max="1000000" required></label><button>前往支付页面</button></form><p id="plan-availability" class="muted"></p><form id="purchase-form"><label>转发规则<select name="ruleId" required></select></label><label>独立套餐<select name="priceVersionId" required></select></label><button>从钱包购买本规则套餐</button></form><p id="business-message" class="error" role="status"></p><button id="subscription-refresh" class="secondary">查询选中规则的套餐用量</button><div class="scroll"><table><thead><tr><th>套餐</th><th>本周期流量</th><th>带宽上限</th><th>到期时间</th><th>状态</th></tr></thead><tbody id="subscription-rows"></tbody></table></div><button id="wallet-ledger-refresh" class="secondary">查询钱包账本</button><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>所属规则</th><th>金额</th><th>说明</th></tr></thead><tbody id="wallet-ledger-rows"></tbody></table></div></section>
+<section id="operations"><div class="section-index">Support</div><h2>告警与工单</h2><button id="operations-refresh" class="secondary">刷新告警和工单</button><div class="scroll"><table><thead><tr><th>节点</th><th>告警</th><th>状态</th><th>最近观察</th></tr></thead><tbody id="incident-rows"></tbody></table></div><form id="ticket-create"><label>工单标题<input name="subject" required maxlength="160"></label><label>问题描述<input name="body" required maxlength="4000"></label><button>提交工单</button></form><div class="scroll"><table><thead><tr><th>工单</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="ticket-rows"></tbody></table></div><div id="ticket-thread" hidden><h3 id="ticket-subject"></h3><div id="ticket-messages"></div><form id="ticket-reply"><label>回复内容<input name="body" required maxlength="4000"></label><label>状态<select name="status"><option value="open">处理中</option><option value="resolved">已解决</option></select></label><button>回复工单</button></form></div><p id="operations-message" class="error" role="status"></p></section>
 <footer>企业组网预留：站点、网关、路由与访问控制。生产链路、容量和客户协议仍须按真实环境验收。</footer>
 </main></div>
 </body></html>

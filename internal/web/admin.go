@@ -91,6 +91,20 @@ func (s *server) serveAdmin(w http.ResponseWriter, r *http.Request, who platform
 			return
 		}
 		id, action := parts[0], parts[1]
+		if r.Method == "POST" && action == "withdraw-registration" {
+			var input struct {
+				Revision int64 `json:"revision"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			if err := s.store.AdminWithdrawNodeRegistration(ctx, who, id, input.Revision); err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
 		if r.Method == "POST" && (action == "start-draining" || action == "finalize-retirement") {
 			var input struct {
 				Revision int64 `json:"revision"`

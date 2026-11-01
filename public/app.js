@@ -1,4 +1,6 @@
-import { submitRule } from './rule-submission.js';
+import { submitRule, submitRuleUpdate } from './rule-submission.js';
+import { createRuleEditor } from './rule-editor.js';
+import { workspaceSummary, ruleStatusPresentation } from './workspace-summary.js';
 import { bindAccountTools,refreshAccountTools,clearCredential } from './account-tools.js';
 import { bindBusinessTools,refreshBusinessTools } from './business-tools.js';
 import { bindOperations } from './operations-tools.js';
@@ -6,6 +8,12 @@ const $ = selector => document.querySelector(selector);
 let mode = 'login';
 let identity;
 const ruleDraft = {};
+const ruleEditor = createRuleEditor($('#rule-dialog'), $('#rule-form'), {
+  title: $('#rule-dialog-title'), description: $('#rule-dialog-description'), submit: $('#rule-submit'),
+  status: $('#rule-dialog-status'), allocation: $('#rule-allocation'),
+  createButton: $('#rule-create'), cancelButton: $('#rule-dialog-cancel'),
+});
+$('#rule-dialog-close').addEventListener('click', ruleEditor.close);
 
 async function api(path, { method = 'GET', body, key } = {}) {
   const headers = {};
@@ -20,7 +28,7 @@ async function api(path, { method = 'GET', body, key } = {}) {
   }
   return data;
 }
-function showAuth() { clearCredential();identity = undefined; ruleDraft.pending = undefined; $('#auth').hidden = false; $('#console').hidden = true; for (const id of ['message','rules-message','refresh-message','account-tools-message']) $(`#${id}`).textContent = ''; }
+function showAuth() { clearCredential();identity = undefined; ruleDraft.pending = undefined; ruleEditor.close(); $('#auth').hidden = false; $('#console').hidden = true; for (const id of ['rules-message','refresh-message','account-tools-message','rule-dialog-status']) $(`#${id}`).textContent = ''; }
 function setMode(value) {
   mode = value;
   $('#company-field').hidden = value !== 'register'; $('#company-field input').required = value === 'register';
@@ -45,13 +53,18 @@ $('#logout').addEventListener('click', async () => {
   catch (error) { $('#rules-message').textContent = error.message; } finally { $('#logout').disabled = false; }
 });
 function cell(row, value) { row.insertCell().textContent = value; }
-const actions = { 'account.register': '开通企业', 'account.login': '登录', 'account.logout': '退出登录', 'rule.create': '创建规则', 'rule.pause': '暂停配置', 'rule.resume': '恢复配置', 'rule.delete': '删除配置' };
+const actions = { 'account.register': '开通企业', 'account.login': '登录', 'account.logout': '退出登录', 'rule.create': '创建规则', 'rule.update': '编辑规则', 'rule.pause': '暂停配置', 'rule.resume': '恢复配置', 'rule.delete': '删除配置' };
 const deliveryStates = { queued: '等待领取', leased: '领取处理中', applying: '应用中 · 等待确认', applied: '已应用 · 健康未验证', validated: '校验通过 · 未应用', failed: '配置失败 / 待重试', superseded: '已被新版本替代' };
 async function refresh() {
   const data = await api('/api/overview'); identity = data.account;
   $('#auth').hidden = true; $('#console').hidden = false; $('#company-name').textContent = identity.company; $('#account-email').textContent = identity.email;
   $('#platform-link').hidden = !identity.platformAdmin;
-  const editable = ['owner', 'admin'].includes(identity.role); $('#rule-submit').disabled = !editable;
+  const summary = workspaceSummary(data);
+  $('#summary-rule-total').textContent = summary.totalRules.toLocaleString();
+  $('#summary-rule-applied').textContent = summary.appliedRules.toLocaleString();
+  $('#summary-rule-pending').textContent = summary.pendingRules.toLocaleString();
+  $('#summary-node-contact').textContent = `${summary.contactedNodes}/${summary.totalNodes}`;
+  const editable = ['owner', 'admin'].includes(identity.role); $('#rule-create').disabled = !editable;
   const nodeRoot = $('#nodes'); nodeRoot.replaceChildren();
   const selector = $('#node-select'); const selected = selector.value; selector.replaceChildren();
   for (const node of data.nodes) {
@@ -63,7 +76,8 @@ async function refresh() {
   }
   if ([...selector.options].some(option => option.value === selected && !option.disabled)) selector.value = selected;
   else { const available = [...selector.options].find(option => !option.disabled); selector.value = available?.value || ''; }
-  $('#rule-submit').disabled = !editable || !selector.value;
+  $('#rule-create').disabled = !editable || !selector.value;
+  if ($('#rule-dialog').open) $('#rule-submit').disabled = !editable || (!ruleEditor.current() && !selector.value);
   $('#refresh-message').textContent = `最近刷新：${new Date().toLocaleTimeString()}。应用确认不等于端到端健康。`;
   const root = $('#rules'); root.replaceChildren(); $('#rule-count').textContent = `(${data.rules.length})`;
   if (!data.rules.length) { const c = root.insertRow().insertCell(); c.colSpan = 9; c.className = 'table-empty'; c.textContent = '暂无规则，请填写客户的目标服务器。'; }
@@ -73,7 +87,10 @@ async function refresh() {
     cell(row,'未收到采集');cell(row,`期望 ${rule.desiredVersion} / 生效 ${rule.appliedVersion}`);
     const usageCell=row.cells[5];
     const usageButton=document.createElement('button');usageButton.className='secondary';usageButton.textContent='查询本规则';usageButton.addEventListener('click',async()=>{usageButton.disabled=true;try{const u=await api(`/api/billing/usage?ruleId=${encodeURIComponent(rule.id)}`);usageCell.textContent=u.hasReports?`上行 ${u.uploadBytes.toLocaleString()} B / 下行 ${u.downloadBytes.toLocaleString()} B`:'未收到采集报告';}catch(e){usageCell.textContent=e.message;}});usageCell.append(usageButton);
-    const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = rule.appliedVersion !== rule.desiredVersion ? '等待应用确认' : rule.appliedStatus === 'paused' ? '已应用暂停配置' : '已应用 · 健康未知'; if (!rule.appliedVersion) badge.textContent = rule.status === 'paused' ? '待确认暂停' : '待 Agent 部署'; row.insertCell().append(badge);
+    const presentation = ruleStatusPresentation(rule);
+    const statusCell = row.insertCell();
+    const badge = document.createElement('span'); badge.className = `badge badge-${presentation.tone}`; badge.textContent = presentation.label; statusCell.append(badge);
+    const detail = document.createElement('small'); detail.className = 'status-detail'; detail.textContent = presentation.detail; statusCell.append(detail);
     const probeButton = document.createElement('button'); probeButton.className = 'secondary'; probeButton.textContent = '目标可达性';
     probeButton.addEventListener('click', async () => {
       probeButton.disabled = true;
@@ -85,9 +102,13 @@ async function refresh() {
       } catch (error) { probeButton.textContent = error.message; }
       finally { probeButton.disabled = false; }
     });
-    row.cells[7].append(probeButton);
+    statusCell.append(probeButton);
     const controls = row.insertCell(); controls.className = 'table-actions';
-    if (editable) { controls.append(actionButton(rule.status === 'paused' ? '恢复' : '暂停', rule.id, rule.status === 'paused' ? 'resume' : 'pause')); controls.append(actionButton('删除', rule.id, 'delete')); }
+    if (editable) {
+      const editButton = document.createElement('button'); editButton.className = 'secondary'; editButton.textContent = '编辑'; editButton.addEventListener('click', () => ruleEditor.openEdit(rule)); controls.append(editButton);
+      controls.append(actionButton(rule.status === 'paused' ? '恢复' : '暂停', rule.id, rule.status === 'paused' ? 'resume' : 'pause'));
+      controls.append(actionButton('删除', rule.id, 'delete'));
+    }
   }
   const audit = $('#audit-rows'); audit.replaceChildren();
   for (const entry of data.auditLogs) { const row = audit.insertRow(); cell(row, new Date(entry.createdAt).toLocaleString()); cell(row, actions[entry.action] || entry.action); cell(row, entry.resourceId); }
@@ -104,13 +125,31 @@ function actionButton(label, id, action) {
   }); return button;
 }
 $('#rule-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = $('#rule-submit'); button.disabled = true;
+  event.preventDefault();
+  const button = $('#rule-submit'); const editing = ruleEditor.current(); const session = ruleEditor.session(); button.disabled = true;
   const fields = Object.fromEntries(new FormData(event.target)); fields.targetPort = Number(fields.targetPort); fields.bandwidthMbps = Number(fields.bandwidthMbps);
+  delete fields.listenPort;
   try {
-    const { rule, refreshError } = await submitRule(ruleDraft, fields, (body, key) => api('/api/rules', { method: 'POST', body, key }), refresh);
-    $('#message').textContent = `已预留 ${rule.protocol.toUpperCase()} 端口 ${rule.listenPort}。配置等待 Agent 交付，尚未转发流量。${refreshError ? ' 配置已保存，但列表刷新失败；可重试，原请求不会重复创建。' : ''}`;
+    let result;
+    if (editing) {
+      const update = { name: fields.name, targetHost: fields.targetHost, targetPort: fields.targetPort, bandwidthMbps: fields.bandwidthMbps, desiredVersion: Number(fields.desiredVersion) };
+      result = await submitRuleUpdate(update, body => api(`/api/rules/${editing.id}`, { method: 'PATCH', body }), refresh);
+    } else {
+      delete fields.desiredVersion;
+      result = await submitRule(ruleDraft, fields, (body, key) => api('/api/rules', { method: 'POST', body, key }), refresh);
+    }
+    if (!ruleEditor.isCurrent(session)) return;
+    const message = editing
+      ? `规则“${result.rule.name}”已保存为期望版本 ${result.rule.desiredVersion}，等待 Agent 确认。`
+      : `已预留 ${result.rule.protocol.toUpperCase()} 端口 ${result.rule.listenPort}。配置等待 Agent 交付，尚未转发流量。`;
+    if (result.refreshError) $('#rule-dialog-status').textContent = `${message} 列表刷新失败，请关闭弹窗后重试刷新。`;
+    else { $('#rules-message').textContent = message; ruleEditor.close(); }
   }
-  catch (error) { $('#message').textContent = error.message; } finally { button.disabled = !identity || !['owner', 'admin'].includes(identity.role) || !$('#node-select').value; }
+  catch (error) {
+    if (ruleEditor.isCurrent(session)) $('#rule-dialog-status').textContent = error.status === 409 ? '规则已被其他操作更新。请关闭弹窗、刷新列表后重新编辑。' : error.message;
+  } finally {
+    if (ruleEditor.isCurrent(session)) button.disabled = !identity || !['owner', 'admin'].includes(identity.role) || (!editing && !$('#node-select').value);
+  }
 });
 setMode('login');
 bindAccountTools(api,refresh);
