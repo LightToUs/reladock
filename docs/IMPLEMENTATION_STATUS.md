@@ -1,10 +1,12 @@
 # 当前实现状态与 AI 交接
 
-> 最后核验：2026-11-01，本地控制端发布目标已更新为 `0.9.8`，生产控制端仍为 `0.9.7`（发布提交 `1bc7562`），生产入口 Agent 仍为 `0.9.5`。`0.9.8` 只增加控制端动态节点监控和蓝色主题，不增加 Agent 功能。本文是实现状态入口，不替代需求与架构文档；用户最新明确指令始终优先。
+> 最后核验：2026-11-01，生产控制端已部署 `0.9.8`，生产入口 Agent 仍为 `0.9.5`。`0.9.8` 只增加控制端动态节点监控和蓝色主题，不增加 Agent 功能。本文是实现状态入口，不替代需求与架构文档；用户最新明确指令始终优先。
 
 ## 一句话结论
 
 RelaDock 已经是具备真实 PostgreSQL 状态、租户权限、规则交付、逐规则计量与账务、mTLS Agent、Linux nftables/tc 应用、安全升级/退役和运维后台的完整预生产实现，不是静态面板或 JSON 原型。控制端与一台入口 VPS 已部署并完成一条 TCP 转发的有限实机验收，但客户协议、UDP 端到端、容量、支付商户、离机恢复及完整生产运维尚未完成，因此不能直接宣称生产就绪。发行清单仍明确输出 `productionReady=false`。
+
+仓库许可证：MIT License；版权人 `reladock`，年份 `2026`，详见根目录 `LICENSE`。
 
 ## 状态判定规则
 
@@ -45,7 +47,7 @@ RelaDock 已经是具备真实 PostgreSQL 状态、租户权限、规则交付�
 - 企业工作台规则列表自动展示逐规则累计上下行和近期带宽；独立遥测区提供带宽利用率、1h/24h/7d 稀疏流量趋势及租户关联入口节点的最新资源样本。近期速率按平台接收时间估算，空档、样本不足与过期保持未知，不伪造零流量或健康状态。
 - 企业工作台新增“节点状态”菜单，只显示当前企业规则关联节点；管理后台“全部入口节点”追加动态监控列。两端统一蓝色主色，按页面可见性 5/30 秒刷新，失败保留最后成功值；Agent 运行时间明确不是 VPS uptime。
 
-这些增量位于当前功能分支：此前逐规则流量与资源遥测已作为 `v0.9.7` 部署生产，本轮动态节点监控和蓝色主题属于待部署的 `v0.9.8`。分支尚未在本文记录中标记为已合并；继续开发前先执行 `git status --short --branch` 和 `git diff`，保留用户已有修改。
+这些增量位于当前功能分支：此前逐规则流量与资源遥测已作为 `v0.9.7` 部署生产，本轮动态节点监控和蓝色主题已作为 `v0.9.8` 部署到生产控制端。分支尚未在本文记录中标记为已合并；继续开发前先执行 `git status --short --branch` 和 `git diff`，保留用户已有修改。
 
 ## 质量评价
 
@@ -78,24 +80,27 @@ RelaDock 已经是具备真实 PostgreSQL 状态、租户权限、规则交付�
 ```text
 npm test     通过
   Go: go test -race ./... 全部包通过
-  Node: 66 项，65 通过，0 失败，1 跳过（最终交互守卫后单独重跑全部 Node 测试）
+  Node: 73 项，72 通过，0 失败，1 跳过
   跳过项: Linux installer verifies archive, enrolls, enables only validation, and protects existing state
 
 npm run vet  通过
+build:release 通过
+  reladock-v0.9.8-linux-amd64.tar.gz SHA256: 4c509d6c2830ca73ffa8f85822a8661d98239b476bfc20fdabcabfa43a4d5a19
 工作台视觉检查  通过（桌面与 Chrome 500px 窄屏；窄屏 body 无横向溢出）
 ```
 
 同日生产有限验收记录：
 
 - 公开官网已按用户要求恢复为重设计前版本，仅覆盖现有静态目录中的 `index.html`、`css/style.css`、`js/main.js`，未再修改 Nginx 配置；`https://reladock.com/` 及两个静态资源均返回 200，线上内容 SHA256 与本地备份一致。企业后台 `https://console.reladock.com/` 返回 200，未登录会话接口返回预期 401，Nginx 与 RelaDock 服务均为 active。
-- 控制端 `103.30.78.5` 已部署 `v0.9.7`，已安装二进制摘要与发布目录一致；入口 `103.30.78.63` Agent 未升级，仍为公开 Release `v0.9.5`。公网首页、管理页与 `telemetry.js` 返回 200，新遥测接口未登录访问返回预期 401。
+- 控制端 `103.30.78.5` 已部署 `v0.9.8`，已安装二进制 SHA256 为 `38492c871d694d94dec2117b928f9dcab13c62605e360b98f737ad577da34212`，与本地发布产物一致；入口 `103.30.78.63` Agent 未升级，仍为公开 Release `v0.9.5`。公网首页、管理页与 `node-monitoring.js` 返回 200，租户及平台节点接口未登录访问均返回预期 401。
 - 控制端重启后 `node-01` 在 21 秒内恢复 Agent 心跳与资源上报；最新资源样本为 CPU 0%、内存 15%、磁盘 15%、conntrack 0%，数据面状态 `in-sync`。该状态是 Agent/内核配置证据，不等于客户协议端到端健康。
 - `node-01` Agent 版本为 v0.9.5，期望/校验/应用代次均为 24；本地 `HighWater=24`、无 pending/retirement，四条旧端口回收任务均为 released。
 - 规则 TCP/UDP `20003 -> 103.6.234.223:443` 已写入内核；从控制机连接入口 TCP 20003 成功。该结果只证明 TCP 路径能建立连接，不证明客户 VLESS/Reality 等协议端到端健康。
 - TCP 内核计数从 216/164 增至 432/328 字节，平台收到对应 216/164 字节逐规则增量；UDP 没有测试流量。
 - 第 24 代 TCP 目标探测为 `targetReachable`，UDP 记录为 `unknown`；后者是明确的未知状态，不是失败或健康结论。
 - 预检报告为 2891 字节并成功入库；apply 服务与 updater timer 为 active，最终观察窗口没有 Agent 错误，relay 链没有 `reladock-meter-freeze`。
-- 本次控制端部署前备份位于 `/var/backups/reladock/20261101-v097-workspace-telemetry-predeploy`，包含旧二进制、服务文件、环境文件及 PostgreSQL custom-format dump，摘要和 `pg_restore --list` 均校验通过。两台服务器的 `/var/backups/reladock/20261031-v095-*-preupgrade` 与更早备份继续保留。
+- 本次控制端部署前备份位于 `/var/backups/reladock/20261101-v098-dynamic-monitoring-predeploy`，包含旧二进制、服务文件、环境文件及 PostgreSQL custom-format dump，摘要和 `pg_restore --list` 均校验通过。部署后服务为 enabled/active，数据库迁移版本为 24；`node-01` 心跳和资源样本已继续上报，数据面状态为 `in-sync`。这些状态仍不等于客户协议端到端健康。两台服务器的更早备份继续保留。
+- 生产浏览器会话的动态数值变化未在本次收尾中独立复核：内置浏览器访问控制台时返回站点不可达。服务端公开路径和未授权边界已由独立 HTTPS 探测确认，已登录页面的 5/30 秒刷新行为由自动测试和部署前浏览器检查覆盖。
 
 这组结果验证代码和 PostgreSQL 集成路径，但不替代上面的真实环境验收。任何后续 AI 在声称“完成”“修复”或“可上线”前，必须重新运行与改动相称的测试，并把命令、结果、跳过项和未验证部分追加到这里或对应验收文档。
 
