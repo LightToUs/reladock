@@ -18,6 +18,7 @@ type OperationNode struct {
 	ContactStatus       string     `json:"contactStatus"`
 	LastSeenAt          *time.Time `json:"lastSeenAt"`
 	AgentStartedAt      *time.Time `json:"agentStartedAt"`
+	AgentHeartbeatAt    *time.Time `json:"agentHeartbeatAt"`
 	DesiredGeneration   int64      `json:"desiredGeneration"`
 	ValidatedGeneration int64      `json:"validatedGeneration"`
 	DeliveryState       string     `json:"deliveryState"`
@@ -92,7 +93,10 @@ type nodeTrafficAccumulator struct {
 	fresh, stale               bool
 }
 
-func scopedNodeTraffic(ctx context.Context, tx pgx.Tx, tenantID string, admin bool) (map[string]NodeTraffic, error) {
+func scopedNodeTraffic(ctx context.Context, tx pgx.Tx, tenantID string, admin bool, nodeIDs []string) (map[string]NodeTraffic, error) {
+	if len(nodeIDs) == 0 {
+		return map[string]NodeTraffic{}, nil
+	}
 	rows, err := tx.Query(ctx, `SELECT r.node_id,r.id::text,r.bandwidth_mbps,
 	COALESCE(t.upload_bytes,0),COALESCE(t.download_bytes,0),t.rule_id IS NOT NULL,t.updated_at,
 	l.upload_delta_bytes,l.download_delta_bytes,l.received_at,p.received_at
@@ -110,8 +114,8 @@ func scopedNodeTraffic(ctx context.Context, tx pgx.Tx, tenantID string, admin bo
 	 WHERE rule_id=r.id AND tenant_id=r.tenant_id AND epoch=l.epoch AND sequence<l.sequence
 	 ORDER BY sequence DESC LIMIT 1
 	) p ON true
-	WHERE r.status<>'deleted' AND ($1 OR r.tenant_id=$2)
-	ORDER BY r.node_id,r.created_at,r.id`, admin, tenantID)
+	WHERE r.status<>'deleted' AND ($1 OR r.tenant_id=$2) AND r.node_id=ANY($3::text[])
+	ORDER BY r.node_id,r.created_at,r.id`, admin, tenantID, nodeIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +356,7 @@ func (s *Store) ListOperationsNodes(ctx context.Context, who Identity, admin boo
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM nodes n`+where, admin, who.TenantID).Scan(&result.Total); err != nil {
 		return result, err
 	}
-	rows, err := tx.Query(ctx, `SELECT n.id,n.name,CASE WHEN n.status='maintenance' THEN 'maintenance' WHEN n.certificate_fingerprint IS NULL THEN 'unknown' WHEN n.last_seen_at IS NULL THEN 'never-seen' WHEN n.last_seen_at<clock_timestamp()-$3*interval '1 second' THEN 'stale' ELSE 'recent' END,n.last_seen_at,n.agent_started_at,n.desired_generation,n.validated_generation,COALESCE(o.state,'unknown'),ARRAY(SELECT r.id::text FROM relay_rules r WHERE r.node_id=n.id AND r.status<>'deleted' AND ($1 OR r.tenant_id=$2) ORDER BY r.id LIMIT 100),
+	rows, err := tx.Query(ctx, `SELECT n.id,n.name,CASE WHEN n.certificate_fingerprint IS NULL THEN 'unknown' WHEN n.agent_heartbeat_at IS NULL THEN 'never-seen' WHEN n.agent_heartbeat_at<clock_timestamp()-$3*interval '1 second' THEN 'offline' ELSE 'online' END,n.last_seen_at,n.agent_started_at,n.agent_heartbeat_at,n.desired_generation,n.validated_generation,COALESCE(o.state,'unknown'),ARRAY(SELECT r.id::text FROM relay_rules r WHERE r.node_id=n.id AND r.status<>'deleted' AND ($1 OR r.tenant_id=$2) ORDER BY r.id LIMIT 100),
 	CASE WHEN rs.node_id IS NULL THEN 'unknown' WHEN rs.received_at<clock_timestamp()-$5*interval '1 second' THEN 'stale' WHEN rs.dataplane_state='drifted' THEN 'drifted' WHEN COALESCE(rs.cpu_percent>=90,false) OR COALESCE(rs.memory_percent>=90,false) OR COALESCE(rs.disk_percent>=85,false) OR COALESCE(rs.conntrack_percent>=80,false) OR rs.clock_skew_seconds>120 THEN 'pressure' WHEN rs.cpu_percent IS NULL AND rs.memory_percent IS NULL AND rs.disk_percent IS NULL AND rs.conntrack_percent IS NULL THEN 'unknown' ELSE 'normal' END,
 	rs.received_at,rs.cpu_percent,rs.memory_percent,rs.disk_percent,rs.conntrack_percent,rs.clock_skew_seconds,COALESCE(rs.dataplane_state,'')
 	FROM nodes n
@@ -362,18 +366,20 @@ func (s *Store) ListOperationsNodes(ctx context.Context, who Identity, admin boo
 		return result, err
 	}
 	defer rows.Close()
+	nodeIDs := make([]string, 0, 100)
 	for rows.Next() {
 		v := OperationNode{DataPlaneStatus: "unknown", ResourceStatus: "unknown"}
-		if err = rows.Scan(&v.ID, &v.Name, &v.ContactStatus, &v.LastSeenAt, &v.AgentStartedAt, &v.DesiredGeneration, &v.ValidatedGeneration, &v.DeliveryState, &v.RuleIDs, &v.ResourceStatus, &v.ResourceObservedAt, &v.CPUPercent, &v.MemoryPercent, &v.DiskPercent, &v.ConntrackPercent, &v.ClockSkewSeconds, &v.DataPlaneState); err != nil {
+		if err = rows.Scan(&v.ID, &v.Name, &v.ContactStatus, &v.LastSeenAt, &v.AgentStartedAt, &v.AgentHeartbeatAt, &v.DesiredGeneration, &v.ValidatedGeneration, &v.DeliveryState, &v.RuleIDs, &v.ResourceStatus, &v.ResourceObservedAt, &v.CPUPercent, &v.MemoryPercent, &v.DiskPercent, &v.ConntrackPercent, &v.ClockSkewSeconds, &v.DataPlaneState); err != nil {
 			return result, err
 		}
 		v.RateState = "none"
 		result.Items = append(result.Items, v)
+		nodeIDs = append(nodeIDs, v.ID)
 	}
 	if err = rows.Err(); err != nil {
 		return result, err
 	}
-	traffic, err := scopedNodeTraffic(ctx, tx, who.TenantID, admin)
+	traffic, err := scopedNodeTraffic(ctx, tx, who.TenantID, admin, nodeIDs)
 	if err != nil {
 		return result, err
 	}

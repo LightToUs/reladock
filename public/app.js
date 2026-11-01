@@ -3,7 +3,7 @@ import { createRuleEditor } from './rule-editor.js';
 import { workspaceSummary, ruleStatusPresentation } from './workspace-summary.js';
 import { createLatestRequestGate, loadWorkspaceData, telemetryInteractionState, telemetryPresentation, trendBars, formatBytes } from './telemetry.js';
 import { resourcePresentation } from './node-contact-status.js';
-import { createAdaptivePoller, nodeMonitoringPresentation } from './node-monitoring.js';
+import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation } from './node-monitoring.js';
 import { bindAccountTools,refreshAccountTools,clearCredential } from './account-tools.js';
 import { bindBusinessTools,refreshBusinessTools } from './business-tools.js';
 import { bindOperations } from './operations-tools.js';
@@ -104,7 +104,7 @@ function renderEnterpriseNodeMonitoring(items, { error = '', refreshedAt = new D
     const plane = document.createElement('small'); plane.textContent = `配置：${view.dataPlane.state}`; plane.title = view.dataPlane.detail; stateCell.append(badge, plane);
     const rateCell = row.insertCell(); appendNodeFact(rateCell, `↑ ${view.traffic.uploadRate}`, `↓ ${view.traffic.downloadRate}`); rateCell.title = view.traffic.detail;
     const trafficCell = row.insertCell(); appendNodeFact(trafficCell, `↑ ${view.traffic.uploadTotal}`, `↓ ${view.traffic.downloadTotal}`);
-    const runtimeCell = row.insertCell(); appendNodeFact(runtimeCell, view.agent.runtime, 'Agent 本次进程'); runtimeCell.title = view.agent.detail;
+    const runtimeCell = row.insertCell(); appendNodeFact(runtimeCell, view.agent.runtime, view.agent.label); runtimeCell.title = view.agent.detail;
     const resourceCell = row.insertCell(); resourceCell.className = 'node-resource-metrics';
     appendNodeMetric(resourceCell, 'CPU', view.resources.cpu); appendNodeMetric(resourceCell, 'RAM', view.resources.memory); appendNodeMetric(resourceCell, '存储', view.resources.disk); appendNodeMetric(resourceCell, '连接跟踪', view.resources.conntrack);
     const observedCell = row.insertCell(); appendNodeFact(observedCell, `流量 ${view.lastReportedAt}`, `资源 ${view.resources.observedAt}`);
@@ -117,11 +117,13 @@ function renderEnterpriseNodeMonitoring(items, { error = '', refreshedAt = new D
 function startNodeMonitoring() {
   if (nodeMonitoringPoller) return;
   nodeMonitoringPoller = createAdaptivePoller({
-    run: async () => {
+    run: async cycle => {
       try {
-        const result = await api('/api/operations/nodes?staleAfterSeconds=90');
-        renderEnterpriseNodeMonitoring(result.items || [], { refreshedAt: new Date() });
+        const items = await loadAllOperationNodes(api, '/api/operations/nodes?staleAfterSeconds=90');
+        if (!cycle.isCurrent()) return;
+        renderEnterpriseNodeMonitoring(items, { refreshedAt: new Date() });
       } catch (error) {
+        if (!cycle.isCurrent()) return;
         renderEnterpriseNodeMonitoring([], { error: error.message });
         throw error;
       }

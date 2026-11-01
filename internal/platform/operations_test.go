@@ -331,7 +331,7 @@ func TestListOperationsNodesAggregatesTrafficByAuthorizationScope(t *testing.T) 
 	stale := create(a, "a-stale-rule", "stale-01")
 	single := create(a, "a-single-rule", "single-01")
 	_ = create(a, "a-empty-rule", "empty-01")
-	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET agent_started_at=clock_timestamp()-interval '1 hour' WHERE id='hk-01'`); err != nil {
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$1,agent_started_at=clock_timestamp()-interval '1 hour',agent_heartbeat_at=clock_timestamp() WHERE id='hk-01'`, strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
 	}
 	insertReports := func(rule Rule, tenantID, epoch string, upload, download int64, latestAge string) {
@@ -373,7 +373,7 @@ func TestListOperationsNodesAggregatesTrafficByAuthorizationScope(t *testing.T) 
 		t.Fatal(err)
 	}
 	aShared := find(aNodes, "hk-01")
-	if aShared.UploadBytes != 600 || aShared.DownloadBytes != 300 || aShared.RateState != "fresh" || aShared.UploadBytesPerSecond == nil || *aShared.UploadBytesPerSecond != 100 || aShared.DownloadBytesPerSecond == nil || *aShared.DownloadBytesPerSecond != 40 || aShared.AgentStartedAt == nil {
+	if aShared.UploadBytes != 600 || aShared.DownloadBytes != 300 || aShared.RateState != "fresh" || aShared.UploadBytesPerSecond == nil || *aShared.UploadBytesPerSecond != 100 || aShared.DownloadBytesPerSecond == nil || *aShared.DownloadBytesPerSecond != 40 || aShared.AgentStartedAt == nil || aShared.AgentHeartbeatAt == nil || aShared.ContactStatus != "online" {
 		t.Fatalf("tenant A shared aggregate: %+v", aShared)
 	}
 	bNodes, err := s.ListOperationsNodes(ctx, b, false, time.Minute, 1)

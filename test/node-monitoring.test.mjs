@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createAdaptivePoller, nodeMonitoringPresentation } from '../public/node-monitoring.js';
+import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation } from '../public/node-monitoring.js';
 
 test('node monitoring presents fresh traffic, resources and Agent runtime independently', () => {
   const now = new Date('2026-11-01T12:00:00Z');
   const view = nodeMonitoringPresentation({
     contactStatus: 'online',
-    dataPlaneStatus: 'applied',
+    dataPlaneState: 'in-sync',
     hasReports: true,
     rateState: 'fresh',
     uploadBytes: 1024,
@@ -27,6 +27,7 @@ test('node monitoring presents fresh traffic, resources and Agent runtime indepe
   }, now);
 
   assert.equal(view.contact.label, '在线');
+  assert.equal(view.dataPlane.state, 'in-sync');
   assert.equal(view.traffic.uploadRate, '1.00 Mbps');
   assert.equal(view.traffic.downloadRate, '2.00 Mbps');
   assert.equal(view.traffic.uploadTotal, '1.00 KiB');
@@ -58,6 +59,28 @@ test('node monitoring keeps no-report, insufficient, stale and unknown values ex
   assert.equal(stale.traffic.uploadTotal, '4 B');
   assert.equal(stale.resources.state, 'stale');
   assert.equal(stale.resources.cpu.label, '数据已过期');
+});
+
+test('offline Agent runtime stops at the last heartbeat', () => {
+  const view = nodeMonitoringPresentation({
+    contactStatus: 'offline',
+    agentStartedAt: '2026-11-01T09:00:00Z',
+    agentHeartbeatAt: '2026-11-01T10:30:00Z',
+  }, new Date('2026-11-01T12:00:00Z'));
+  assert.equal(view.contact.label, '离线');
+  assert.equal(view.agent.runtime, '1 小时');
+  assert.equal(view.agent.label, '最后上报运行时长');
+});
+
+test('operation node loader retrieves every bounded API page', async () => {
+  const calls = [];
+  const nodes = await loadAllOperationNodes(async path => {
+    calls.push(path);
+    const page = Number(new URL(path, 'https://console.example').searchParams.get('page'));
+    return { items: [{ id: `node-${page}` }], page, pageSize: 100, total: 201 };
+  }, '/api/operations/nodes?staleAfterSeconds=90');
+  assert.deepEqual(nodes.map(node => node.id), ['node-1', 'node-2', 'node-3']);
+  assert.deepEqual(calls.map(path => new URL(path, 'https://console.example').searchParams.get('page')), ['1', '2', '3']);
 });
 
 function fakeScheduler() {
@@ -152,4 +175,27 @@ test('adaptive poller never overlaps, recovers after rejection and stops cleanly
   poller.stop();
   await poller.refresh();
   assert.equal(runs, 3);
+});
+
+test('stopping an unresolved poll invalidates its commit before a new session starts', async () => {
+  const scheduler = fakeScheduler();
+  const documentTarget = fakeDocument();
+  const commits = [];
+  let resolveOld;
+  let runs = 0;
+  const poller = createAdaptivePoller({
+    documentTarget,
+    ...scheduler,
+    run: async cycle => {
+      runs += 1;
+      const value = runs === 1 ? await new Promise(resolve => { resolveOld = resolve; }) : 'new';
+      if (cycle.isCurrent()) commits.push(value);
+    },
+  });
+  const old = poller.start();
+  poller.stop();
+  await poller.start();
+  resolveOld('old');
+  await old;
+  assert.deepEqual(commits, ['new']);
 });

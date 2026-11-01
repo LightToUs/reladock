@@ -158,7 +158,7 @@ func TestEnterpriseWorkspaceExposesLiveNodeStatus(t *testing.T) {
 	for _, required := range []string{
 		`href="#node-status-section"`, `id="node-status-section"`, `id="node-status-rows"`, `id="node-status-message"`,
 		"节点状态", "实时速率", "累计流量", "Agent 运行", "连接跟踪", "nodeMonitoringPresentation", "createAdaptivePoller",
-		"/api/operations/nodes?staleAfterSeconds=90", "renderEnterpriseNodeMonitoring",
+		"/api/operations/nodes?staleAfterSeconds=90", "renderEnterpriseNodeMonitoring", "loadAllOperationNodes", "cycle.isCurrent()",
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("enterprise live node status missing %q", required)
@@ -298,7 +298,7 @@ func TestAdminNodeListExposesLiveMonitoringTargetsWithoutFullReload(t *testing.T
 	for _, required := range []string{
 		"实时速率", "累计流量", "Agent 运行", "动态资源", `id="admin-node-monitoring-message"`,
 		"data-monitoring", "patchAdminNodeMonitoring", "startAdminNodeMonitoring", "nodeMonitoringPresentation", "createAdaptivePoller",
-		"/api/admin/operations/nodes?staleAfterSeconds=90",
+		"/api/admin/operations/nodes?staleAfterSeconds=90", "loadAllOperationNodes", "cycle.isCurrent()",
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("admin live node monitoring missing %q", required)

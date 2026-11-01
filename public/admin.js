@@ -5,7 +5,7 @@ import { agentContactPresentation, certificatePresentation, configurationPresent
 import { bindNodeActionDialog, createNodeActionRunner, nodeActionDescriptor } from './node-action-dialog.js';
 import { bindNodeContentDialog, bindNodeDeliveryDialog, runDialogSession } from './node-content-dialog.js';
 import { bindNodeEditor } from './node-editor.js';
-import { createAdaptivePoller, nodeMonitoringPresentation } from './node-monitoring.js';
+import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation } from './node-monitoring.js';
 const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], monitoring: new Map(), certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '' };
 let adminNodeMonitoringPoller;
@@ -109,7 +109,7 @@ function patchAdminNodeMonitoring(items, { error = '', refreshedAt = new Date() 
     const view = nodeMonitoringPresentation(node, refreshedAt);
     monitoringFact(row.querySelector(`[data-monitoring="${node.id}:rate"]`), `↑ ${view.traffic.uploadRate}`, `↓ ${view.traffic.downloadRate}`);
     monitoringFact(row.querySelector(`[data-monitoring="${node.id}:traffic"]`), `↑ ${view.traffic.uploadTotal}`, `↓ ${view.traffic.downloadTotal}`);
-    monitoringFact(row.querySelector(`[data-monitoring="${node.id}:runtime"]`), view.agent.runtime, 'Agent 本次进程');
+    monitoringFact(row.querySelector(`[data-monitoring="${node.id}:runtime"]`), view.agent.runtime, view.agent.label);
     const resources = row.querySelector(`[data-monitoring="${node.id}:resources"]`); resources.replaceChildren(); resources.className = 'admin-node-resources';
     monitoringMetric(resources, 'CPU', view.resources.cpu); monitoringMetric(resources, 'RAM', view.resources.memory); monitoringMetric(resources, '存储', view.resources.disk); monitoringMetric(resources, '连接跟踪', view.resources.conntrack);
     monitoringFact(row.querySelector(`[data-monitoring="${node.id}:observed"]`), `流量 ${view.lastReportedAt}`, `资源 ${view.resources.observedAt}`);
@@ -118,9 +118,15 @@ function patchAdminNodeMonitoring(items, { error = '', refreshedAt = new Date() 
 }
 function startAdminNodeMonitoring() {
   if (adminNodeMonitoringPoller) return;
-  adminNodeMonitoringPoller = createAdaptivePoller({ run: async () => {
-    try { const result = await api('/api/admin/operations/nodes?staleAfterSeconds=90'); patchAdminNodeMonitoring(result.items || [], { refreshedAt: new Date() }); }
-    catch (error) { patchAdminNodeMonitoring([], { error: error.message }); throw error; }
+  adminNodeMonitoringPoller = createAdaptivePoller({ run: async cycle => {
+    try {
+      const items = await loadAllOperationNodes(api, '/api/admin/operations/nodes?staleAfterSeconds=90');
+      if (!cycle.isCurrent()) return;
+      patchAdminNodeMonitoring(items, { refreshedAt: new Date() });
+    } catch (error) {
+      if (!cycle.isCurrent()) return;
+      patchAdminNodeMonitoring([], { error: error.message }); throw error;
+    }
   } });
   adminNodeMonitoringPoller.start();
 }

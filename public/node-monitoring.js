@@ -28,8 +28,8 @@ function metric(value, state) {
 }
 
 function contactPresentation(status) {
-  if (status === 'online') return { label: '在线', tone: 'online' };
-  if (status === 'offline') return { label: '离线', tone: 'offline' };
+  if (status === 'online' || status === 'recent') return { label: '在线', tone: 'online' };
+  if (status === 'offline' || status === 'stale') return { label: '离线', tone: 'offline' };
   return { label: '尚未联系', tone: 'unknown' };
 }
 
@@ -63,6 +63,8 @@ function trafficPresentation(node) {
 
 export function nodeMonitoringPresentation(node = {}, nowInput = new Date()) {
   const now = validDate(nowInput) || new Date();
+  const online = node.contactStatus === 'online' || node.contactStatus === 'recent';
+  const runtimeEnd = online ? now : validDate(node.agentHeartbeatAt);
   const resourceObservedAt = validDate(node.resourceObservedAt);
   const resourceState = !resourceObservedAt
     ? 'unknown'
@@ -80,16 +82,37 @@ export function nodeMonitoringPresentation(node = {}, nowInput = new Date()) {
       conntrack: metric(node.conntrackPercent, resourceState),
     },
     agent: {
-      runtime: elapsedLabel(node.agentStartedAt, now),
+      runtime: runtimeEnd ? elapsedLabel(node.agentStartedAt, runtimeEnd) : '未知',
+      label: online ? 'Agent 运行时长' : '最后上报运行时长',
       startedAt: observedLabel(node.agentStartedAt),
       detail: 'Agent 本次进程运行时长，不是 VPS 开机时长。',
     },
     dataPlane: {
-      state: node.dataPlaneStatus || 'unknown',
+      state: node.dataPlaneState || node.dataPlaneStatus || 'unknown',
       detail: '配置一致性与 Agent 在线状态均不代表端到端转发健康。',
     },
     lastReportedAt: observedLabel(node.lastReportedAt),
   };
+}
+
+function pagePath(path, page) {
+  const url = new URL(path, 'https://reladock.invalid');
+  url.searchParams.set('page', String(page));
+  return `${url.pathname}${url.search}`;
+}
+
+export async function loadAllOperationNodes(api, path, maxPages = 1000) {
+  const first = await api(pagePath(path, 1));
+  const items = Array.isArray(first.items) ? [...first.items] : [];
+  const pageSize = Number.isInteger(first.pageSize) && first.pageSize > 0 ? first.pageSize : 100;
+  const total = Number.isFinite(first.total) && first.total >= 0 ? first.total : items.length;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (pages > maxPages) throw new Error('节点数量超过动态监控的安全分页上限');
+  for (let page = 2; page <= pages; page += 1) {
+    const result = await api(pagePath(path, page));
+    if (Array.isArray(result.items)) items.push(...result.items);
+  }
+  return items;
 }
 
 export function createAdaptivePoller({
@@ -104,6 +127,7 @@ export function createAdaptivePoller({
   let timer = null;
   let inFlight = null;
   let refreshWhenSettled = false;
+  let generation = 0;
 
   const clearScheduled = () => {
     if (timer !== null) clearTimer(timer);
@@ -125,9 +149,10 @@ export function createAdaptivePoller({
       return inFlight;
     }
     clearScheduled();
+    const requestGeneration = generation;
     let result;
     try {
-      result = run();
+      result = run({ isCurrent: () => running && generation === requestGeneration });
     } catch (error) {
       result = Promise.reject(error);
     }
@@ -135,7 +160,7 @@ export function createAdaptivePoller({
       .catch(() => undefined)
       .finally(() => {
         if (inFlight === request) inFlight = null;
-        if (!running) return;
+        if (!running || generation !== requestGeneration) return;
         if (refreshWhenSettled) {
           refreshWhenSettled = false;
           execute(false);
@@ -160,13 +185,16 @@ export function createAdaptivePoller({
     start() {
       if (running) return inFlight || Promise.resolve();
       running = true;
+      generation += 1;
       documentTarget?.addEventListener?.('visibilitychange', visibilityChanged);
       return execute(false);
     },
     stop() {
       if (!running) return;
       running = false;
+      generation += 1;
       refreshWhenSettled = false;
+      inFlight = null;
       clearScheduled();
       documentTarget?.removeEventListener?.('visibilitychange', visibilityChanged);
     },
