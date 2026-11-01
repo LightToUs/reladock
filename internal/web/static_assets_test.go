@@ -156,7 +156,7 @@ func TestEnterpriseWorkspaceExposesLiveNodeStatus(t *testing.T) {
 	}
 	combined := string(page) + string(app)
 	for _, required := range []string{
-		`href="#node-status-section"`, `id="node-status-section"`, `id="node-status-rows"`, `id="node-status-message"`,
+		`href="#/node-status"`, `id="node-status-section"`, `id="node-status-rows"`, `id="node-status-message"`,
 		"节点状态", "实时速率", "累计流量", "Agent 运行", "连接跟踪", "nodeMonitoringPresentation", "createAdaptivePoller",
 		"/api/operations/nodes?staleAfterSeconds=90", "renderEnterpriseNodeMonitoring", "loadAllOperationNodes", "cycle.isCurrent()",
 	} {
@@ -175,8 +175,35 @@ func TestEnterpriseWorkspaceKeepsRuleTableIDUnique(t *testing.T) {
 	if count := strings.Count(source, `id="rules"`); count != 1 {
 		t.Fatalf("rule table id must be unique, got %d occurrences", count)
 	}
-	if !strings.Contains(source, `href="#rules-section"`) || !strings.Contains(source, `id="rules-section"`) {
-		t.Fatal("rule navigation must target the dedicated rules section anchor")
+	if !strings.Contains(source, `href="#/rules"`) || !strings.Contains(source, `id="rules-section"`) {
+		t.Fatal("rule navigation must target the dedicated rules page route")
+	}
+}
+
+func TestEnterpriseWorkspaceUsesRoutedPagesAndCollapsibleSidebar(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := fs.ReadFile(assets.Files, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css, err := fs.ReadFile(assets.Files, "app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(app) + string(css)
+	for _, required := range []string{
+		`id="workspace-sidebar"`, `id="workspace-nav-collapse"`, `id="workspace-nav-mobile"`,
+		`data-view="overview"`, `data-view="rules"`, `data-view="team"`,
+		`data-pane="overview"`, `data-pane="rules"`, `data-pane="team"`,
+		`href="#/overview"`, `href="#/rules"`, `href="#/operations"`,
+		"bindConsoleNavigation", "sidebar-collapsed", "nav-open",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("enterprise routed navigation missing %q", required)
+		}
 	}
 }
 

@@ -7,7 +7,21 @@ import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation
 import { bindAccountTools,refreshAccountTools,clearCredential } from './account-tools.js';
 import { bindBusinessTools,refreshBusinessTools } from './business-tools.js';
 import { bindOperations } from './operations-tools.js';
+import { bindConsoleNavigation } from './console-navigation.js';
 const $ = selector => document.querySelector(selector);
+const workspaceNavigation = bindConsoleNavigation({
+  root: $('#console'), sidebar: $('#workspace-sidebar'), mobileToggle: $('#workspace-nav-mobile'), collapseToggle: $('#workspace-nav-collapse'),
+  title: $('#workspace-view-title'), description: $('#workspace-view-description'),
+  items: document.querySelectorAll('#workspace-navigation [data-view]'), panes: document.querySelectorAll('[data-pane]'),
+  defaultView: 'overview', storageKey: 'reladock.enterprise.sidebar.collapsed',
+  titles: { overview: '运行概览', rules: '转发规则', traffic: '流量与资源', 'node-status': '节点状态', delivery: '节点交付', billing: '套餐账务', team: '企业协作', operations: '告警工单' },
+  descriptions: {
+    overview: '查看当前企业的配置、交付与节点联系摘要。', rules: '创建并管理每条独立计量和限速的转发规则。',
+    traffic: '查看逐规则累计流量、近期速率和入口节点资源。', 'node-status': '查看本企业关联入口节点的最新联系与运行样本。',
+    delivery: '核对期望、校验与应用版本；这些状态不等于端到端健康。', billing: '管理逐规则套餐、钱包余额和不可变账本。',
+    team: '管理企业成员、邀请和企业范围 API Key。', operations: '查看控制面告警并与平台处理工单。',
+  },
+});
 let mode = 'login';
 let identity;
 const ruleDraft = {};
