@@ -424,10 +424,16 @@ func TestRuleTelemetryHistoryUsesSparseReceiveTimeBuckets(t *testing.T) {
 	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-history-epoch',3,160,230)`, rule.ID, who.TenantID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes,received_at) VALUES
-		($1,$2,'hk-01','telemetry-history-epoch',1,100,200,100,200,clock_timestamp()-interval '50 minutes'),
-		($1,$2,'hk-01','telemetry-history-epoch',2,150,225,50,25,clock_timestamp()-interval '10 minutes'),
-		($1,$2,'hk-01','telemetry-history-epoch',3,160,230,10,5,clock_timestamp()-interval '8 days')`, rule.ID, who.TenantID); err != nil {
+	if _, err = s.pool.Exec(ctx, `WITH clock AS (
+		SELECT clock_timestamp() AS observed_at,date_bin(interval '2 hours',clock_timestamp(),TIMESTAMPTZ '2000-01-01 00:00:00+00') AS boundary
+	), samples AS (
+		SELECT CASE WHEN observed_at-boundary<interval '40 minutes' THEN boundary-interval '20 minutes' ELSE observed_at-interval '25 minutes' END AS first_at,
+		       CASE WHEN observed_at-boundary<interval '40 minutes' THEN boundary-interval '5 minutes' ELSE observed_at-interval '5 minutes' END AS second_at
+		FROM clock
+	) INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes,received_at)
+		SELECT $1::uuid,$2::uuid,'hk-01','telemetry-history-epoch',1,100,200,100,200,first_at FROM samples
+		UNION ALL SELECT $1::uuid,$2::uuid,'hk-01','telemetry-history-epoch',2,150,225,50,25,second_at FROM samples
+		UNION ALL SELECT $1::uuid,$2::uuid,'hk-01','telemetry-history-epoch',3,160,230,10,5,clock_timestamp()-interval '8 days'`, rule.ID, who.TenantID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_totals(rule_id,tenant_id,node_id,active_epoch,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-history-epoch',160,230)`, rule.ID, who.TenantID); err != nil {
