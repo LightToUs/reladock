@@ -6,7 +6,7 @@ import (
 )
 
 func TestEmbeddedAdminModulesAreAvailable(t *testing.T) {
-	for _, name := range []string{"admin.js", "admin-navigation.js", "node-action-dialog.js", "node-bootstrap.js", "node-contact-status.js", "node-content-dialog.js", "node-editor.js", "operations-tools.js"} {
+	for _, name := range []string{"admin.js", "console-navigation.js", "node-action-dialog.js", "node-bootstrap.js", "node-contact-status.js", "node-content-dialog.js", "node-editor.js", "operations-tools.js"} {
 		if _, err := Files.ReadFile(name); err != nil {
 			t.Fatalf("embedded admin module %q is unavailable: %v", name, err)
 		}
@@ -14,7 +14,7 @@ func TestEmbeddedAdminModulesAreAvailable(t *testing.T) {
 }
 
 func TestEmbeddedEnterpriseRuleEditorModuleIsAvailable(t *testing.T) {
-	for _, name := range []string{"rule-editor.js", "workspace-summary.js", "telemetry.js"} {
+	for _, name := range []string{"rule-editor.js", "workspace-summary.js", "telemetry.js", "console-navigation.js"} {
 		if _, err := Files.ReadFile(name); err != nil {
 			t.Fatalf("embedded enterprise module %q is unavailable: %v", name, err)
 		}
