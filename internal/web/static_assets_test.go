@@ -316,3 +316,38 @@ func TestAdminNodeListExposesLiveMonitoringTargetsWithoutFullReload(t *testing.T
 		t.Fatal("monitoring poller must patch cells without rebuilding management controls")
 	}
 }
+
+func TestConsoleThemesUseBluePrimaryPalettes(t *testing.T) {
+	enterpriseCSS, err := fs.ReadFile(assets.Files, "app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminCSS, err := fs.ReadFile(assets.Files, "admin.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enterprisePage, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminPage, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(enterpriseCSS), "--accent: #3b82f6") || !strings.Contains(string(adminCSS), "--accent: #2563eb") {
+		t.Fatal("console primary tokens are not blue")
+	}
+	if !strings.Contains(string(enterprisePage), `name="theme-color" content="#07111f"`) || !strings.Contains(string(adminPage), `name="theme-color" content="#081a33"`) {
+		t.Fatal("console browser theme colors are not blue")
+	}
+	for _, oldPrimary := range []string{"#c7f75a", "#dbff8d", "#16815f", "#48c89e"} {
+		if strings.Contains(string(enterpriseCSS), oldPrimary) || strings.Contains(string(adminCSS), oldPrimary) {
+			t.Errorf("old green primary color remains: %s", oldPrimary)
+		}
+	}
+	for _, semantic := range []string{"--warning:", "--danger:"} {
+		if !strings.Contains(string(enterpriseCSS), semantic) || !strings.Contains(string(adminCSS), semantic) {
+			t.Errorf("alert semantic token missing: %s", semantic)
+		}
+	}
+}
