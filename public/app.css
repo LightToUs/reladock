@@ -114,6 +114,37 @@ button.danger { color: var(--danger); }
 .badge-paused { background: #2a302b; color: #b9c1b9; }
 .badge-idle { background: #172c3b; color: var(--info); }
 .status-detail { display: block; max-width: 170px; margin-bottom: 8px; color: #69736a; font-size: 10px; line-height: 1.5; }
+.telemetry-detail { display: block; max-width: 210px; margin-top: 5px; color: #69736a; font-size: 10px; line-height: 1.5; }
+.telemetry-controls { display: grid; max-width: 720px; grid-template-columns: 2fr 1fr; gap: 14px; margin-top: 20px; }
+.telemetry-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin-top: 22px; border: 1px solid var(--line); background: var(--line); }
+.telemetry-metrics article { min-width: 0; padding: 18px 20px; background: #101511; }
+.telemetry-metrics span { display: block; color: #858f85; font-size: 11px; }
+.telemetry-metrics strong { display: block; margin: 7px 0 4px; overflow-wrap: anywhere; color: var(--text); font: 500 clamp(22px, 2vw, 31px)/1.1 Georgia, "Times New Roman", serif; letter-spacing: -.025em; }
+.telemetry-metrics small { color: #667067; font-size: 10px; }
+.telemetry-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(330px, .65fr); gap: 16px; margin-top: 16px; }
+.trend-panel, .resource-panel { min-width: 0; margin: 0; padding: 20px; border: 1px solid var(--line); background: #101511; }
+.panel-heading, .resource-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.panel-heading h3 { margin-bottom: 4px; font-size: 16px; }
+.panel-heading p { margin-bottom: 0; font-size: 11px; }
+.telemetry-state { flex: 0 0 auto; padding: 4px 7px; border: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.telemetry-state-fresh { border-color: #536d20; color: var(--accent); }
+.telemetry-state-stale { border-color: #6e5428; color: var(--warning); }
+.traffic-trend { display: flex; height: 190px; margin-top: 18px; padding: 16px 12px 0; align-items: flex-end; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--line-strong); background: repeating-linear-gradient(to top, transparent 0, transparent 44px, rgb(255 255 255 / 4%) 45px); }
+.trend-bar { display: flex; min-width: 7px; height: 100%; flex: 1 0 7px; align-items: flex-end; }
+.trend-bar i { display: block; width: 100%; min-height: 3px; background: var(--accent); opacity: .72; transition: opacity 120ms ease; }
+.trend-bar:hover i { opacity: 1; }
+.trend-empty { display: grid; width: 100%; height: 100%; place-items: center; color: #667067; font-size: 12px; }
+.node-resource-cards { display: grid; gap: 10px; margin-top: 18px; }
+.resource-card { margin: 0; padding: 14px; border: 1px solid var(--line); background: var(--surface); }
+.resource-card.resource-pending { border-left: 2px solid var(--warning); }
+.resource-card.resource-offline { border-left: 2px solid var(--danger); }
+.resource-heading strong { color: #dce2d8; font-size: 13px; }
+.resource-heading .badge { margin: 0; }
+.resource-card dl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin: 12px 0; background: var(--line); }
+.resource-card dl div { padding: 8px; background: #101511; }
+.resource-card dt { color: #687269; font-size: 9px; }
+.resource-card dd { margin: 2px 0 0; color: #d4dad1; font-size: 13px; }
+.resource-card p, .telemetry-empty { margin-bottom: 0; }
 .error { min-height: 24px; margin: 12px 0 0; color: var(--warning); line-height: 1.6; white-space: pre-wrap; }
 #audit { font-size: 13px; }
 
@@ -147,11 +178,14 @@ footer { margin-top: 30px; padding-top: 18px; border-top: 2px solid var(--line);
   main { width: calc(100% - 220px); margin-left: 220px; padding-inline: 28px; }
   .command-deck { grid-template-columns: 1fr; gap: 20px; }
   .workspace-summary { grid-template-columns: repeat(2, 1fr); }
+  .telemetry-metrics { grid-template-columns: repeat(2, 1fr); }
+  .telemetry-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 860px) {
   aside { display: none; }
   main { width: 100%; margin: 0; padding: 30px 20px 52px; }
   .cards, form { grid-template-columns: 1fr; }
+  .telemetry-controls { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
   main { padding: 22px 14px 44px; }
@@ -166,6 +200,7 @@ footer { margin-top: 30px; padding-top: 18px; border-top: 2px solid var(--line);
   .route-track { width: 2px; height: 25px; margin-left: 4px; flex-direction: column; align-items: center; }
   .route-track::before { inset: 0 auto 0 50%; width: 2px; height: auto; }
   .workspace-summary { grid-template-columns: 1fr 1fr; }
+  .telemetry-metrics { grid-template-columns: 1fr 1fr; }
   .workspace-summary article { padding: 17px 15px; }
   .workspace-summary strong { font-size: 29px; }
   .notice { grid-template-columns: 1fr; gap: 5px; margin-bottom: 24px; }
@@ -177,4 +212,6 @@ footer { margin-top: 30px; padding-top: 18px; border-top: 2px solid var(--line);
   .dialog-actions { flex-direction: column-reverse; }
   .dialog-actions button { width: 100%; min-height: 46px; }
   .auth { margin: 20px auto; padding: 24px 20px; }
+  .traffic-trend { height: 160px; }
+  .resource-card dl { grid-template-columns: 1fr 1fr; }
 }

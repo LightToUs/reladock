@@ -20,6 +20,7 @@
   <nav aria-label="工作台导航">
     <a class="active" href="#overview">运行概览</a>
     <a href="#rules-section">转发规则</a>
+    <a href="#telemetry-section">流量与资源</a>
     <a href="#nodes-section">节点交付</a>
     <a href="#business">套餐账务</a>
     <a href="#team">企业协作</a>
@@ -49,7 +50,7 @@
 <section class="rule-management primary-section" id="rules-section">
   <div class="section-index">Relay rules</div>
   <div class="section-heading"><div><h2>转发规则 <span class="muted" id="rule-count"></span></h2><p class="hint muted">每条转发独立设置带宽并统计上下行流量。暂停保留端口；删除已下发规则后，端口继续隔离等待安全回收。</p></div><button id="rule-create" class="compact">创建规则</button></div>
-  <div class="scroll"><table><thead><tr><th>名称 / 节点</th><th>预留端口</th><th>传输</th><th>目标</th><th>带宽上限</th><th>流量</th><th>配置版本</th><th>状态</th><th>操作</th></tr></thead><tbody id="rules"></tbody></table></div><p id="rules-message" class="error" role="status"></p>
+  <div class="scroll"><table><thead><tr><th>名称 / 节点</th><th>预留端口</th><th>传输</th><th>目标</th><th>带宽上限</th><th>已使用流量</th><th>近期带宽</th><th>配置版本</th><th>状态</th><th>操作</th></tr></thead><tbody id="rules"></tbody></table></div><p id="rules-message" class="error" role="status"></p>
 </section>
 <dialog id="rule-dialog" class="editor-dialog" aria-labelledby="rule-dialog-title">
   <div class="dialog-heading"><div><h2 id="rule-dialog-title">创建中转规则</h2><p id="rule-dialog-description" class="muted"></p></div><button id="rule-dialog-close" class="icon-button" type="button" aria-label="关闭规则弹窗">×</button></div>
@@ -68,6 +69,25 @@
     <div class="dialog-actions"><button id="rule-dialog-cancel" class="secondary" type="button">取消</button><button id="rule-submit" type="submit">预留端口并保存</button></div>
   </form>
 </dialog>
+<section id="telemetry-section" class="telemetry-section">
+  <div class="section-index">Traffic &amp; capacity</div>
+  <div class="section-heading"><div><h2>流量与入口节点资源</h2><p class="hint muted">累计流量按每条转发独立统计。近期带宽按平台接收时间的报告差值估算，不是瞬时值、保证带宽或端到端健康。</p></div></div>
+  <div class="telemetry-controls">
+    <label>查看规则<select id="telemetry-rule" aria-label="选择流量趋势规则"></select></label>
+    <label>统计窗口<select id="telemetry-window" aria-label="选择流量趋势窗口"><option value="1h">最近 1 小时</option><option value="24h">最近 24 小时</option><option value="7d">最近 7 天</option></select></label>
+  </div>
+  <div class="telemetry-metrics" aria-live="polite">
+    <article><span>累计总流量</span><strong id="telemetry-total">—</strong><small id="telemetry-total-detail">等待流量报告</small></article>
+    <article><span>近期上行</span><strong id="telemetry-upload-rate">—</strong><small>平台接收时间估算</small></article>
+    <article><span>近期下行</span><strong id="telemetry-download-rate">—</strong><small>平台接收时间估算</small></article>
+    <article><span>带宽利用率</span><strong id="telemetry-utilization">—</strong><small>相对本规则带宽上限</small></article>
+  </div>
+  <div class="telemetry-grid">
+    <article class="trend-panel"><div class="panel-heading"><div><h3>已接收流量趋势</h3><p id="traffic-trend-message" class="muted">选择规则后加载。</p></div><span id="telemetry-rate-state" class="telemetry-state">等待数据</span></div><div id="traffic-trend" class="traffic-trend" role="img" aria-label="规则流量趋势"></div><p class="hint muted">按平台接收时间聚合；空档表示没有已接收报告，不推断为 0。</p></article>
+    <article class="resource-panel"><div class="panel-heading"><div><h3>关联入口节点</h3><p class="muted">仅显示当前企业规则关联节点的最新资源样本。</p></div></div><div id="node-resource-cards" class="node-resource-cards"></div></article>
+  </div>
+  <p id="telemetry-message" class="error" role="status"></p>
+</section>
 <section id="nodes-section"><div class="section-index">Delivery</div><h2>节点与配置交付</h2><p class="muted hint">最近联系、配置校验和应用确认均不代表端到端转发健康。节点登记、维护和证书由平台运维管理。</p><div class="scroll"><table><thead><tr><th>节点</th><th>地区</th><th>资源状态</th><th>期望 / 校验 / 应用版本</th><th>交付状态</th><th>最近联系</th></tr></thead><tbody id="nodes"></tbody></table></div><p id="refresh-message" class="muted hint" role="status"></p></section>
 <section><div class="section-index">Activity</div><h2>最近操作</h2><p class="muted hint">显示当前企业最近 50 条账户与规则操作。</p><div class="scroll"><table id="audit"><thead><tr><th>时间</th><th>操作</th><th>资源</th></tr></thead><tbody id="audit-rows"></tbody></table></div></section>
 <section id="member-tools"><div class="section-index" id="team">Team</div><h2>企业成员</h2><div class="scroll"><table><thead><tr><th>邮箱</th><th>角色</th><th>管理</th></tr></thead><tbody id="member-rows"></tbody></table></div><form id="invitation-form"><label>受邀邮箱<input name="email" type="email" required></label><label>角色<select name="role"><option value="viewer">只读成员</option><option value="admin">企业管理员</option></select></label><button>生成邀请（24 小时有效）</button></form><p class="hint muted">邀请令牌只显示一次，请通过可信渠道发给受邀人，由其在登录页接受。平台暂不自动发送邮件。</p><div class="scroll"><table><thead><tr><th>受邀邮箱</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="invitation-rows"></tbody></table></div></section>

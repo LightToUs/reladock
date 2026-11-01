@@ -14,7 +14,7 @@ func TestEmbeddedAdminModulesAreAvailable(t *testing.T) {
 }
 
 func TestEmbeddedEnterpriseRuleEditorModuleIsAvailable(t *testing.T) {
-	for _, name := range []string{"rule-editor.js", "workspace-summary.js"} {
+	for _, name := range []string{"rule-editor.js", "workspace-summary.js", "telemetry.js"} {
 		if _, err := Files.ReadFile(name); err != nil {
 			t.Fatalf("embedded enterprise module %q is unavailable: %v", name, err)
 		}

@@ -1,6 +1,8 @@
 import { submitRule, submitRuleUpdate } from './rule-submission.js';
 import { createRuleEditor } from './rule-editor.js';
 import { workspaceSummary, ruleStatusPresentation } from './workspace-summary.js';
+import { telemetryPresentation, trendBars, formatBytes } from './telemetry.js';
+import { resourcePresentation } from './node-contact-status.js';
 import { bindAccountTools,refreshAccountTools,clearCredential } from './account-tools.js';
 import { bindBusinessTools,refreshBusinessTools } from './business-tools.js';
 import { bindOperations } from './operations-tools.js';
@@ -8,6 +10,7 @@ const $ = selector => document.querySelector(selector);
 let mode = 'login';
 let identity;
 const ruleDraft = {};
+let telemetryByRule = new Map();
 const ruleEditor = createRuleEditor($('#rule-dialog'), $('#rule-form'), {
   title: $('#rule-dialog-title'), description: $('#rule-dialog-description'), submit: $('#rule-submit'),
   status: $('#rule-dialog-status'), allocation: $('#rule-allocation'),
@@ -55,8 +58,96 @@ $('#logout').addEventListener('click', async () => {
 function cell(row, value) { row.insertCell().textContent = value; }
 const actions = { 'account.register': '开通企业', 'account.login': '登录', 'account.logout': '退出登录', 'rule.create': '创建规则', 'rule.update': '编辑规则', 'rule.pause': '暂停配置', 'rule.resume': '恢复配置', 'rule.delete': '删除配置' };
 const deliveryStates = { queued: '等待领取', leased: '领取处理中', applying: '应用中 · 等待确认', applied: '已应用 · 健康未验证', validated: '校验通过 · 未应用', failed: '配置失败 / 待重试', superseded: '已被新版本替代' };
+
+function appendTelemetryDetail(target, primary, detail) {
+  target.textContent = primary;
+  const note = document.createElement('small'); note.className = 'telemetry-detail'; note.textContent = detail; target.append(note);
+}
+
+function renderNodeResources(nodes) {
+  const root = $('#node-resource-cards'); root.replaceChildren();
+  if (!nodes.length) {
+    const empty = document.createElement('p'); empty.className = 'muted telemetry-empty'; empty.textContent = '当前规则尚未关联可展示的入口节点资源。'; root.append(empty); return;
+  }
+  for (const node of nodes) {
+    const view = resourcePresentation(node);
+    const card = document.createElement('section'); card.className = `resource-card resource-${view.tone}`;
+    const heading = document.createElement('div'); heading.className = 'resource-heading';
+    const name = document.createElement('strong'); name.textContent = node.name;
+    const badge = document.createElement('span'); badge.className = `badge badge-${view.tone}`; badge.textContent = view.label;
+    heading.append(name, badge);
+    const metrics = document.createElement('dl');
+    for (const [label, value] of [['CPU', node.cpuPercent], ['内存', node.memoryPercent], ['磁盘', node.diskPercent], ['连接跟踪', node.conntrackPercent]]) {
+      const group = document.createElement('div'); const term = document.createElement('dt'); const fact = document.createElement('dd');
+      term.textContent = label; fact.textContent = Number.isInteger(value) ? `${value}%` : '未知'; group.append(term, fact); metrics.append(group);
+    }
+    const detail = document.createElement('p'); detail.className = 'hint muted'; detail.textContent = view.detail;
+    card.append(heading, metrics, detail); root.append(card);
+  }
+}
+
+function setTelemetrySummary(summary) {
+  const view = telemetryPresentation(summary);
+  $('#telemetry-total').textContent = view.total;
+  $('#telemetry-total-detail').textContent = summary?.hasReports ? `上行 ${view.upload} / 下行 ${view.download}` : '等待流量报告';
+  $('#telemetry-upload-rate').textContent = view.uploadRate;
+  $('#telemetry-download-rate').textContent = view.downloadRate;
+  $('#telemetry-utilization').textContent = view.utilization;
+  const state = $('#telemetry-rate-state'); state.className = `telemetry-state telemetry-state-${view.rateTone}`; state.textContent = view.rate;
+  state.title = view.rateDetail;
+}
+
+function renderTrafficTrend(series) {
+  const root = $('#traffic-trend'); root.replaceChildren();
+  const trend = trendBars(series.points);
+  $('#traffic-trend-message').textContent = trend.bars.length
+    ? `${trend.bars.length} 个已接收数据桶 · 每桶 ${series.bucketSeconds.toLocaleString()} 秒`
+    : '该窗口内没有已接收的流量报告；不推断为 0。';
+  if (!trend.bars.length) {
+    const empty = document.createElement('div'); empty.className = 'trend-empty'; empty.textContent = '暂无已接收数据'; root.append(empty); return;
+  }
+  for (const point of trend.bars) {
+    const bar = document.createElement('div'); bar.className = 'trend-bar';
+    const fill = document.createElement('i'); fill.style.height = `${Math.max(3, point.ratio * 100)}%`;
+    const timestamp = new Date(point.startedAt).toLocaleString();
+    bar.title = `${timestamp} · 总计 ${formatBytes(point.totalBytes)}（上行 ${formatBytes(point.uploadBytes)} / 下行 ${formatBytes(point.downloadBytes)}）`;
+    bar.setAttribute('aria-label', bar.title); bar.append(fill); root.append(bar);
+  }
+}
+
+async function refreshTelemetryHistory() {
+  const ruleID = $('#telemetry-rule').value; const window = $('#telemetry-window').value;
+  if (!ruleID) {
+    setTelemetrySummary(); renderTrafficTrend({ points: [], bucketSeconds: 0 }); return;
+  }
+  setTelemetrySummary(telemetryByRule.get(ruleID));
+  $('#telemetry-message').textContent = '';
+  try {
+    const series = await api(`/api/billing/telemetry?ruleId=${encodeURIComponent(ruleID)}&window=${encodeURIComponent(window)}`);
+    setTelemetrySummary(series.summary); renderTrafficTrend(series);
+  } catch (error) {
+    $('#telemetry-message').textContent = error.message;
+    $('#traffic-trend-message').textContent = '趋势数据加载失败，累计值仍保留。';
+  }
+}
+
+function renderTelemetryWorkspace(rules, telemetry, operationNodes) {
+  telemetryByRule = new Map(telemetry.map(item => [item.ruleId, item]));
+  const selector = $('#telemetry-rule'); const selected = selector.value; selector.replaceChildren();
+  for (const rule of rules) {
+    const option = document.createElement('option'); option.value = rule.id; option.textContent = `${rule.name} · ${rule.protocol.toUpperCase()} ${rule.listenPort}`; selector.append(option);
+  }
+  if (rules.some(rule => rule.id === selected)) selector.value = selected;
+  setTelemetrySummary(telemetryByRule.get(selector.value));
+  renderNodeResources(operationNodes);
+}
+
 async function refresh() {
-  const data = await api('/api/overview'); identity = data.account;
+  const [data, telemetry, operationNodes] = await Promise.all([
+    api('/api/overview'),
+    api('/api/billing/telemetry'),
+    api('/api/operations/nodes?staleAfterSeconds=90'),
+  ]); identity = data.account;
   $('#auth').hidden = true; $('#console').hidden = false; $('#company-name').textContent = identity.company; $('#account-email').textContent = identity.email;
   $('#platform-link').hidden = !identity.platformAdmin;
   const summary = workspaceSummary(data);
@@ -80,13 +171,14 @@ async function refresh() {
   if ($('#rule-dialog').open) $('#rule-submit').disabled = !editable || (!ruleEditor.current() && !selector.value);
   $('#refresh-message').textContent = `最近刷新：${new Date().toLocaleTimeString()}。应用确认不等于端到端健康。`;
   const root = $('#rules'); root.replaceChildren(); $('#rule-count').textContent = `(${data.rules.length})`;
-  if (!data.rules.length) { const c = root.insertRow().insertCell(); c.colSpan = 9; c.className = 'table-empty'; c.textContent = '暂无规则，请填写客户的目标服务器。'; }
+  if (!data.rules.length) { const c = root.insertRow().insertCell(); c.colSpan = 10; c.className = 'table-empty'; c.textContent = '暂无规则，请填写客户的目标服务器。'; }
   for (const rule of data.rules) {
     const row = root.insertRow(); const target = rule.targetHost.includes(':') ? `[${rule.targetHost}]:${rule.targetPort}` : `${rule.targetHost}:${rule.targetPort}`;
     for (const value of [`${rule.name} / ${rule.nodeId}`, rule.listenPort, rule.protocol.toUpperCase(), target,`${rule.bandwidthMbps} Mbps`]) cell(row, value);
-    cell(row,'未收到采集');cell(row,`期望 ${rule.desiredVersion} / 生效 ${rule.appliedVersion}`);
-    const usageCell=row.cells[5];
-    const usageButton=document.createElement('button');usageButton.className='secondary';usageButton.textContent='查询本规则';usageButton.addEventListener('click',async()=>{usageButton.disabled=true;try{const u=await api(`/api/billing/usage?ruleId=${encodeURIComponent(rule.id)}`);usageCell.textContent=u.hasReports?`上行 ${u.uploadBytes.toLocaleString()} B / 下行 ${u.downloadBytes.toLocaleString()} B`:'未收到采集报告';}catch(e){usageCell.textContent=e.message;}});usageCell.append(usageButton);
+    const telemetryView = telemetryPresentation(telemetry.find(item => item.ruleId === rule.id));
+    const usageCell = row.insertCell(); appendTelemetryDetail(usageCell, telemetryView.total, telemetryView.total === '尚未收到流量报告' ? '等待节点计量上报' : `上行 ${telemetryView.upload} / 下行 ${telemetryView.download}`);
+    const rateCell = row.insertCell(); appendTelemetryDetail(rateCell, telemetryView.rate, telemetryView.rateDetail);
+    cell(row,`期望 ${rule.desiredVersion} / 生效 ${rule.appliedVersion}`);
     const presentation = ruleStatusPresentation(rule);
     const statusCell = row.insertCell();
     const badge = document.createElement('span'); badge.className = `badge badge-${presentation.tone}`; badge.textContent = presentation.label; statusCell.append(badge);
@@ -110,6 +202,8 @@ async function refresh() {
       controls.append(actionButton('删除', rule.id, 'delete'));
     }
   }
+  renderTelemetryWorkspace(data.rules, telemetry, operationNodes.items || []);
+  await refreshTelemetryHistory();
   const audit = $('#audit-rows'); audit.replaceChildren();
   for (const entry of data.auditLogs) { const row = audit.insertRow(); cell(row, new Date(entry.createdAt).toLocaleString()); cell(row, actions[entry.action] || entry.action); cell(row, entry.resourceId); }
   try{await refreshAccountTools(api,identity);}catch(e){$('#account-tools-message').textContent=e.message;}
@@ -155,5 +249,7 @@ setMode('login');
 bindAccountTools(api,refresh);
 bindBusinessTools(api,refresh);
 bindOperations(api,{canWrite:()=>identity&&['owner','admin'].includes(identity.role)});
+$('#telemetry-rule').addEventListener('change', () => refreshTelemetryHistory());
+$('#telemetry-window').addEventListener('change', () => refreshTelemetryHistory());
 $('#refresh').addEventListener('click', async () => { $('#refresh').disabled = true; try { await refresh(); } catch (error) { $('#refresh-message').textContent = error.message; } finally { $('#refresh').disabled = false; } });
 refresh().catch(error => { showAuth(); if (error.status !== 401) $('#auth-message').textContent = error.message; });

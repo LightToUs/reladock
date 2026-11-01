@@ -82,17 +82,19 @@ func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 
 func TestEnterpriseRuleEditorModuleIsServedOverHTTP(t *testing.T) {
 	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001/rule-editor.js", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /rule-editor.js status=%d body=%q", rec.Code, rec.Body.String())
-	}
-	if contentType := rec.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/javascript") {
-		t.Fatalf("GET /rule-editor.js content-type=%q", contentType)
-	}
-	if rec.Body.Len() == 0 {
-		t.Fatal("GET /rule-editor.js returned an empty module")
+	for _, path := range []string{"/rule-editor.js", "/telemetry.js"} {
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001"+path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status=%d body=%q", path, rec.Code, rec.Body.String())
+		}
+		if contentType := rec.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/javascript") {
+			t.Fatalf("GET %s content-type=%q", path, contentType)
+		}
+		if rec.Body.Len() == 0 {
+			t.Fatalf("GET %s returned an empty module", path)
+		}
 	}
 }
 
@@ -113,6 +115,28 @@ func TestEnterpriseWorkspaceExposesOperationalSummaryAndRouteSignal(t *testing.T
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("enterprise workspace redesign contract missing %q", required)
+		}
+	}
+}
+
+func TestEnterpriseWorkspaceExposesTrafficAndNodeResourceTelemetry(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := fs.ReadFile(assets.Files, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(app)
+	for _, required := range []string{
+		`id="telemetry-section"`, `id="telemetry-rule"`, `id="telemetry-window"`,
+		`id="traffic-trend"`, `id="node-resource-cards"`, "telemetryPresentation",
+		"/api/billing/telemetry", "/api/operations/nodes?staleAfterSeconds=90",
+		"平台接收时间", "空档表示没有已接收报告，不推断为 0",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("enterprise telemetry presentation missing %q", required)
 		}
 	}
 }
