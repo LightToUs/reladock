@@ -284,3 +284,35 @@ func TestAdminSummaryUsesConciseSuspendedTenantLabel(t *testing.T) {
 		t.Fatal("admin summary still includes the redundant login suffix")
 	}
 }
+
+func TestAdminNodeListExposesLiveMonitoringTargetsWithoutFullReload(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(app)
+	for _, required := range []string{
+		"实时速率", "累计流量", "Agent 运行", "动态资源", `id="admin-node-monitoring-message"`,
+		"data-monitoring", "patchAdminNodeMonitoring", "startAdminNodeMonitoring", "nodeMonitoringPresentation", "createAdaptivePoller",
+		"/api/admin/operations/nodes?staleAfterSeconds=90",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("admin live node monitoring missing %q", required)
+		}
+	}
+	start := strings.Index(string(app), "function startAdminNodeMonitoring")
+	if start < 0 {
+		t.Fatal("cannot locate admin monitoring poller")
+	}
+	end := strings.Index(string(app)[start:], "\n}")
+	if end < 0 {
+		t.Fatal("cannot locate admin monitoring poller end")
+	}
+	if strings.Contains(string(app)[start:start+end], "reload(") {
+		t.Fatal("monitoring poller must patch cells without rebuilding management controls")
+	}
+}

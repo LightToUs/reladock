@@ -5,8 +5,10 @@ import { agentContactPresentation, certificatePresentation, configurationPresent
 import { bindNodeActionDialog, createNodeActionRunner, nodeActionDescriptor } from './node-action-dialog.js';
 import { bindNodeContentDialog, bindNodeDeliveryDialog, runDialogSession } from './node-content-dialog.js';
 import { bindNodeEditor } from './node-editor.js';
+import { createAdaptivePoller, nodeMonitoringPresentation } from './node-monitoring.js';
 const $ = selector => document.querySelector(selector);
-const state = { view: 'overview', nodes: [], certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '' };
+const state = { view: 'overview', nodes: [], monitoring: new Map(), certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '' };
+let adminNodeMonitoringPoller;
 const titles = { overview: '平台总览', nodes: '入口节点', tenants: '企业客户', rules: '全局规则', deliveries: '配置交付', plans:'规则套餐',operations:'告警工单',costs:'成本与经营差额',audit: '操作审计' };
 const deliveries = { queued: '等待领取', leased: '领取处理中', applying: '应用中 · 等待确认', applied: '已应用 · 健康未知', validated: '校验通过 · 未应用', failed: '配置失败', superseded: '已被新版本替代' };
 const upgradeStates = { queued: '等待 Agent 领取', claimed: '已领取', installing: '正在安装', verifying: '正在验证', succeeded: '升级成功', 'rolled-back': '已自动回滚', failed: '升级失败', cancelled: '已取消' };
@@ -14,7 +16,7 @@ const upgradeErrors = { 'download-unavailable': '发布包下载失败', 'archiv
 const actions = { 'node.add': '新增节点', 'node.edit': '编辑节点', 'node.withdraw-registration': '撤销节点登记', 'node.maintenance': '进入维护', 'node.enable': '恢复分配', 'node.draining': '进入安全排空', 'node.retired': '最终退役节点', 'node.enroll': '绑定 / 轮换证书', 'node.revoke-certificate': '撤销证书', 'node.agent-upgrade-request': '创建 Agent 升级', 'node.agent-upgrade-cancel': '取消 Agent 升级', 'node.agent-upgrade-claimed': 'Agent 领取升级', 'node.agent-upgrade-installing': 'Agent 安装升级', 'node.agent-upgrade-verifying': 'Agent 验证升级', 'node.agent-upgrade-succeeded': 'Agent 升级成功', 'node.agent-upgrade-rolled-back': 'Agent 已自动回滚', 'node.agent-upgrade-failed': 'Agent 升级失败', 'config.retry': '重新交付', 'tenant.access': '修改企业登录状态', 'platform.admin-access': '修改平台权限', 'rule.pause': '暂停规则', 'rule.resume': '恢复规则', 'rule.delete': '删除规则' };
 const costNav = document.createElement('button'); costNav.dataset.view = 'costs'; costNav.textContent = '成本与经营差额'; document.querySelector('.admin-nav nav').append(costNav);
 const notificationNav = document.createElement('button'); notificationNav.dataset.view = 'notifications'; notificationNav.textContent = '通知交付'; document.querySelector('.admin-nav nav').append(notificationNav); titles.notifications = '通知交付';
-function access(mode) { if(mode!=='admin')bootstrapUI.clear(); $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
+function access(mode) { if(mode!=='admin'){bootstrapUI.clear();adminNodeMonitoringPoller?.stop();adminNodeMonitoringPoller=undefined;} $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
 function message(text) { $('#admin-message').textContent = text; }
 async function api(path, body, key) {
   const options = { credentials: 'same-origin', headers: {} };
@@ -87,13 +89,49 @@ function openNodeAction(kind, node, onSuccess) {
     run: createNodeActionRunner({ kind, node, getNode: id => state.nodes.find(item => item.id === id), mutate, conflictMessage: () => $('#admin-message').textContent, onRefresh: refreshed => nodeActionDialog.update(refreshed), onSuccess }),
   });
 }
+function monitoringCell(row, nodeID, kind) {
+  const target = row.insertCell(); target.setAttribute('data-monitoring', `${nodeID}:${kind}`); target.textContent = '等待数据'; return target;
+}
+function monitoringFact(target, primary, detail) {
+  target.replaceChildren(); const value = document.createElement('strong'); value.textContent = primary; const note = document.createElement('span'); note.className = 'detail'; note.textContent = detail; target.append(value, note);
+}
+function monitoringMetric(target, label, metric) {
+  const item = document.createElement('div'); item.className = `admin-node-metric ${metric.value === null ? 'is-unknown' : ''}`;
+  const name = document.createElement('span'); name.textContent = label; const value = document.createElement('strong'); value.textContent = metric.label;
+  const track = document.createElement('i'); const fill = document.createElement('b'); if (metric.value !== null) fill.style.width = `${metric.value}%`; track.append(fill); item.append(name, value, track); target.append(item);
+}
+function patchAdminNodeMonitoring(items, { error = '', refreshedAt = new Date() } = {}) {
+  const messageTarget = $('#admin-node-monitoring-message');
+  if (error) { messageTarget.className = 'error hint'; messageTarget.textContent = `节点监控刷新失败：${error}。保留上次成功数据。`; return false; }
+  state.monitoring = new Map(items.map(node => [node.id, node]));
+  for (const node of items) {
+    const row = $(`#admin-nodes tr[data-node-id="${node.id}"]`); if (!row) continue;
+    const view = nodeMonitoringPresentation(node, refreshedAt);
+    monitoringFact(row.querySelector(`[data-monitoring="${node.id}:rate"]`), `↑ ${view.traffic.uploadRate}`, `↓ ${view.traffic.downloadRate}`);
+    monitoringFact(row.querySelector(`[data-monitoring="${node.id}:traffic"]`), `↑ ${view.traffic.uploadTotal}`, `↓ ${view.traffic.downloadTotal}`);
+    monitoringFact(row.querySelector(`[data-monitoring="${node.id}:runtime"]`), view.agent.runtime, 'Agent 本次进程');
+    const resources = row.querySelector(`[data-monitoring="${node.id}:resources"]`); resources.replaceChildren(); resources.className = 'admin-node-resources';
+    monitoringMetric(resources, 'CPU', view.resources.cpu); monitoringMetric(resources, 'RAM', view.resources.memory); monitoringMetric(resources, '存储', view.resources.disk); monitoringMetric(resources, '连接跟踪', view.resources.conntrack);
+    monitoringFact(row.querySelector(`[data-monitoring="${node.id}:observed"]`), `流量 ${view.lastReportedAt}`, `资源 ${view.resources.observedAt}`);
+  }
+  messageTarget.className = 'muted hint'; messageTarget.textContent = `最近刷新：${refreshedAt.toLocaleTimeString()}。动态数据不代表端到端健康。`; return true;
+}
+function startAdminNodeMonitoring() {
+  if (adminNodeMonitoringPoller) return;
+  adminNodeMonitoringPoller = createAdaptivePoller({ run: async () => {
+    try { const result = await api('/api/admin/operations/nodes?staleAfterSeconds=90'); patchAdminNodeMonitoring(result.items || [], { refreshedAt: new Date() }); }
+    catch (error) { patchAdminNodeMonitoring([], { error: error.message }); throw error; }
+  } });
+  adminNodeMonitoringPoller.start();
+}
 function renderNodes(nodes) {
   const root = $('#admin-nodes'); root.replaceChildren();
   for (const node of nodes) {
-    const row = root.insertRow(); cell(row, node.name, node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`);
+    const row = root.insertRow(); row.dataset.nodeId = node.id; cell(row, node.name, node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`);
     const resource = nodeResourcePresentation(node); cell(row, resource.label, resource.detail);
     const contact = agentContactPresentation(node.contactStatus); const agentDetail = `${contact.detail}${node.agentMode ? `；${node.agentMode}` : ''}`; const contactCell = cell(row, contact.label, agentDetail); contactCell.classList.add('agent-status', `agent-status-${contact.tone}`);
     const resourceStatus = resourcePresentation(node); const resourceCell = cell(row, resourceStatus.label, resourceStatus.detail); resourceCell.classList.add('agent-status', `agent-status-${resourceStatus.tone}`);
+    monitoringCell(row, node.id, 'rate'); monitoringCell(row, node.id, 'traffic'); monitoringCell(row, node.id, 'runtime'); monitoringCell(row, node.id, 'resources'); monitoringCell(row, node.id, 'observed');
     const upgrade = upgradePresentation(node); const upgradeCell = cell(row, upgrade.label, upgrade.detail); upgradeCell.classList.add('upgrade-status'); const configuration = configurationPresentation(node); cell(row, configuration.label, configuration.detail); cell(row, node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试耗尽 · 待处理' : deliveries[node.deliveryState] || '未知');
     const probe = probePresentation(node); const probeCell = cell(row, probe.label, probe.detail); probeCell.classList.add('agent-status', `agent-status-${probe.tone}`); const certificate = certificatePresentation(node); const certificateCell = cell(row, certificate.label, certificate.detail); certificateCell.classList.add('agent-status', `agent-status-${certificate.tone}`);
     const controls = row.insertCell(); controls.className = 'table-actions';
@@ -110,7 +148,8 @@ function renderNodes(nodes) {
     controls.append(button('安装 Agent',()=>bootstrapUI.open(node)));
     if (node.withdrawable) controls.append(button('撤销登记', () => openNodeAction('withdraw-registration', node), true));
   }
-  empty(root, 12, '暂无节点，请先登记入口资源。');
+  empty(root, 17, '暂无节点，请先登记入口资源。');
+  if (state.monitoring.size) patchAdminNodeMonitoring([...state.monitoring.values()]);
 }
 const nodeFormMessage = $('#node-form-message');
 const nodeActionDialog = bindNodeActionDialog({ dialog: $('#node-action-dialog'), title: $('#node-action-title'), description: $('#node-action-description'), status: $('#node-action-status'), confirmButton: $('#node-action-confirm'), cancelButton: $('#node-action-cancel') });
@@ -146,7 +185,7 @@ $('#delivery-node').addEventListener('change', () => loadDeliveries().catch(erro
 $('#rule-filters').addEventListener('submit', async event => { event.preventDefault(); state.nodeFilter = $('#rules-node').value; state.rulePage = 1; try { await reload(); } catch (error) { message(error.message); } });
 $('#rules-clear-tenant').addEventListener('click', async () => { state.tenantFilter = ''; state.tenantName = ''; state.rulePage = 1; try { await reload(); } catch (error) { message(error.message); } });
 for (const kind of ['tenants', 'rules']) for (const direction of ['prev', 'next']) $(`#${kind}-${direction}`).addEventListener('click', async () => { const key = kind === 'tenants' ? 'tenantPage' : 'rulePage'; state[key] += direction === 'next' ? 1 : -1; try { await reload(); } catch (error) { message(error.message); } });
-async function enter() { const who = await api('/api/auth/me'); if (!who.platformAdmin) { access('denied'); return; } $('#admin-email').textContent = who.email; access('admin'); await reload(); }
+async function enter() { const who = await api('/api/auth/me'); if (!who.platformAdmin) { access('denied'); return; } $('#admin-email').textContent = who.email; access('admin'); await reload(); startAdminNodeMonitoring(); }
 $('#admin-login-form').addEventListener('submit', async event => { event.preventDefault(); const submit = event.target.querySelector('button'); submit.disabled = true; try { await api('/api/auth/login', Object.fromEntries(new FormData(event.target))); event.target.reset(); $('#login-message').textContent = ''; await enter(); } catch (error) { $('#login-message').textContent = error.message; } finally { submit.disabled = false; } });
 async function logout() { try { await api('/api/auth/logout', {}); location.assign('/admin'); } catch (error) { message(error.message); } }
 $('#admin-logout').addEventListener('click', logout); $('#denied-logout').addEventListener('click', logout);

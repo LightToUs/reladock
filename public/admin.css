@@ -317,6 +317,7 @@ pre {
 }
 table { width: 100%; border-collapse: separate; border-spacing: 0; font-variant-numeric: tabular-nums; }
 .wide-table { min-width: 1680px; }
+.node-monitoring-table { min-width: 2460px; }
 th, td {
   padding: 13px 12px;
   border-bottom: 1px solid var(--table-line);
@@ -339,6 +340,12 @@ tbody tr:hover td { background: #f0f3ed; }
 .wide-table th:first-child { z-index: 3; }
 .wide-table th:first-child, .wide-table td:first-child { min-width: 150px; }
 .wide-table th:not(:first-child), .wide-table td:not(:first-child) { min-width: 118px; }
+.admin-node-resources { display: grid; grid-template-columns: repeat(2, minmax(95px, 1fr)); gap: 8px; min-width: 250px !important; }
+.admin-node-metric { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; align-items: center; font-size: 12px; }
+.admin-node-metric > span { color: var(--muted); }
+.admin-node-metric > i { grid-column: 1 / -1; height: 5px; overflow: hidden; border-radius: 999px; background: var(--field); }
+.admin-node-metric > i > b { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .25s ease; }
+.admin-node-metric.is-unknown > i > b { width: 0; }
 .detail {
   display: block;
   max-width: 32ch;
