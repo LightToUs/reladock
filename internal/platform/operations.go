@@ -17,6 +17,7 @@ type OperationNode struct {
 	Name                string     `json:"name"`
 	ContactStatus       string     `json:"contactStatus"`
 	LastSeenAt          *time.Time `json:"lastSeenAt"`
+	AgentStartedAt      *time.Time `json:"agentStartedAt"`
 	DesiredGeneration   int64      `json:"desiredGeneration"`
 	ValidatedGeneration int64      `json:"validatedGeneration"`
 	DeliveryState       string     `json:"deliveryState"`
@@ -30,6 +31,18 @@ type OperationNode struct {
 	ConntrackPercent    *int       `json:"conntrackPercent"`
 	ClockSkewSeconds    *int       `json:"clockSkewSeconds"`
 	DataPlaneState      string     `json:"dataPlaneState"`
+	NodeTraffic
+}
+type NodeTraffic struct {
+	UploadBytes            int64      `json:"uploadBytes"`
+	DownloadBytes          int64      `json:"downloadBytes"`
+	TotalBytes             int64      `json:"totalBytes"`
+	HasReports             bool       `json:"hasReports"`
+	LastReportedAt         *time.Time `json:"lastReportedAt"`
+	RateState              string     `json:"rateState"`
+	UploadBytesPerSecond   *int64     `json:"uploadBytesPerSecond"`
+	DownloadBytesPerSecond *int64     `json:"downloadBytesPerSecond"`
+	TotalBytesPerSecond    *int64     `json:"totalBytesPerSecond"`
 }
 type Incident struct {
 	ID          string     `json:"id"`
@@ -71,6 +84,100 @@ func operationsPage[T any](page int) (Page[T], error) {
 		return v, ErrInvalid
 	}
 	return v, nil
+}
+
+type nodeTrafficAccumulator struct {
+	NodeTraffic
+	freshUpload, freshDownload int64
+	fresh, stale               bool
+}
+
+func scopedNodeTraffic(ctx context.Context, tx pgx.Tx, tenantID string, admin bool) (map[string]NodeTraffic, error) {
+	rows, err := tx.Query(ctx, `SELECT r.node_id,r.id::text,r.bandwidth_mbps,
+	COALESCE(t.upload_bytes,0),COALESCE(t.download_bytes,0),t.rule_id IS NOT NULL,t.updated_at,
+	l.upload_delta_bytes,l.download_delta_bytes,l.received_at,p.received_at
+	FROM relay_rules r
+	LEFT JOIN billing_usage_totals t ON t.rule_id=r.id AND t.tenant_id=r.tenant_id
+	LEFT JOIN LATERAL (
+	 SELECT epoch,sequence,upload_delta_bytes,download_delta_bytes,received_at
+	 FROM billing_usage_reports
+	 WHERE rule_id=r.id AND tenant_id=r.tenant_id
+	 ORDER BY received_at DESC,epoch DESC,sequence DESC LIMIT 1
+	) l ON true
+	LEFT JOIN LATERAL (
+	 SELECT received_at
+	 FROM billing_usage_reports
+	 WHERE rule_id=r.id AND tenant_id=r.tenant_id AND epoch=l.epoch AND sequence<l.sequence
+	 ORDER BY sequence DESC LIMIT 1
+	) p ON true
+	WHERE r.status<>'deleted' AND ($1 OR r.tenant_id=$2)
+	ORDER BY r.node_id,r.created_at,r.id`, admin, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := map[string]*nodeTrafficAccumulator{}
+	now := time.Now().UTC()
+	for rows.Next() {
+		var nodeID string
+		rule := RuleTelemetry{RateState: "insufficient"}
+		var uploadDelta, downloadDelta *int64
+		var latest, previous *time.Time
+		if err = rows.Scan(&nodeID, &rule.RuleID, &rule.BandwidthMbps, &rule.UploadBytes, &rule.DownloadBytes, &rule.HasReports, &rule.LastReportedAt, &uploadDelta, &downloadDelta, &latest, &previous); err != nil {
+			return nil, err
+		}
+		rule.TotalBytes = telemetryRounded(float64(rule.UploadBytes) + float64(rule.DownloadBytes))
+		if latest != nil {
+			rule.LastReportedAt = latest
+		}
+		if latest != nil && previous != nil && uploadDelta != nil && downloadDelta != nil {
+			applyTelemetryRate(&rule, *latest, *previous, *uploadDelta, *downloadDelta, now)
+		} else if latest != nil && now.Sub(*latest) > telemetryFreshAfter {
+			rule.RateState = "stale"
+		}
+		value := values[nodeID]
+		if value == nil {
+			value = &nodeTrafficAccumulator{NodeTraffic: NodeTraffic{RateState: "none"}}
+			values[nodeID] = value
+		}
+		value.UploadBytes = telemetryRounded(float64(value.UploadBytes) + float64(rule.UploadBytes))
+		value.DownloadBytes = telemetryRounded(float64(value.DownloadBytes) + float64(rule.DownloadBytes))
+		value.TotalBytes = telemetryRounded(float64(value.UploadBytes) + float64(value.DownloadBytes))
+		value.HasReports = value.HasReports || rule.HasReports
+		if rule.LastReportedAt != nil && (value.LastReportedAt == nil || rule.LastReportedAt.After(*value.LastReportedAt)) {
+			observed := *rule.LastReportedAt
+			value.LastReportedAt = &observed
+		}
+		switch rule.RateState {
+		case "fresh":
+			value.fresh = true
+			value.freshUpload = telemetryRounded(float64(value.freshUpload) + float64(*rule.UploadBytesPerSecond))
+			value.freshDownload = telemetryRounded(float64(value.freshDownload) + float64(*rule.DownloadBytesPerSecond))
+		case "stale":
+			value.stale = true
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	result := make(map[string]NodeTraffic, len(values))
+	for nodeID, value := range values {
+		switch {
+		case value.fresh:
+			value.RateState = "fresh"
+			upload, download := value.freshUpload, value.freshDownload
+			total := telemetryRounded(float64(upload) + float64(download))
+			value.UploadBytesPerSecond, value.DownloadBytesPerSecond, value.TotalBytesPerSecond = &upload, &download, &total
+		case value.stale:
+			value.RateState = "stale"
+		case value.HasReports:
+			value.RateState = "insufficient"
+		default:
+			value.RateState = "none"
+		}
+		result[nodeID] = value.NodeTraffic
+	}
+	return result, nil
 }
 
 // Keys cannot enter platform operations even if their member has a platform
@@ -245,7 +352,7 @@ func (s *Store) ListOperationsNodes(ctx context.Context, who Identity, admin boo
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM nodes n`+where, admin, who.TenantID).Scan(&result.Total); err != nil {
 		return result, err
 	}
-	rows, err := tx.Query(ctx, `SELECT n.id,n.name,CASE WHEN n.status='maintenance' THEN 'maintenance' WHEN n.certificate_fingerprint IS NULL THEN 'unknown' WHEN n.last_seen_at IS NULL THEN 'never-seen' WHEN n.last_seen_at<clock_timestamp()-$3*interval '1 second' THEN 'stale' ELSE 'recent' END,n.last_seen_at,n.desired_generation,n.validated_generation,COALESCE(o.state,'unknown'),ARRAY(SELECT r.id::text FROM relay_rules r WHERE r.node_id=n.id AND r.status<>'deleted' AND ($1 OR r.tenant_id=$2) ORDER BY r.id LIMIT 100),
+	rows, err := tx.Query(ctx, `SELECT n.id,n.name,CASE WHEN n.status='maintenance' THEN 'maintenance' WHEN n.certificate_fingerprint IS NULL THEN 'unknown' WHEN n.last_seen_at IS NULL THEN 'never-seen' WHEN n.last_seen_at<clock_timestamp()-$3*interval '1 second' THEN 'stale' ELSE 'recent' END,n.last_seen_at,n.agent_started_at,n.desired_generation,n.validated_generation,COALESCE(o.state,'unknown'),ARRAY(SELECT r.id::text FROM relay_rules r WHERE r.node_id=n.id AND r.status<>'deleted' AND ($1 OR r.tenant_id=$2) ORDER BY r.id LIMIT 100),
 	CASE WHEN rs.node_id IS NULL THEN 'unknown' WHEN rs.received_at<clock_timestamp()-$5*interval '1 second' THEN 'stale' WHEN rs.dataplane_state='drifted' THEN 'drifted' WHEN COALESCE(rs.cpu_percent>=90,false) OR COALESCE(rs.memory_percent>=90,false) OR COALESCE(rs.disk_percent>=85,false) OR COALESCE(rs.conntrack_percent>=80,false) OR rs.clock_skew_seconds>120 THEN 'pressure' WHEN rs.cpu_percent IS NULL AND rs.memory_percent IS NULL AND rs.disk_percent IS NULL AND rs.conntrack_percent IS NULL THEN 'unknown' ELSE 'normal' END,
 	rs.received_at,rs.cpu_percent,rs.memory_percent,rs.disk_percent,rs.conntrack_percent,rs.clock_skew_seconds,COALESCE(rs.dataplane_state,'')
 	FROM nodes n
@@ -257,12 +364,25 @@ func (s *Store) ListOperationsNodes(ctx context.Context, who Identity, admin boo
 	defer rows.Close()
 	for rows.Next() {
 		v := OperationNode{DataPlaneStatus: "unknown", ResourceStatus: "unknown"}
-		if err = rows.Scan(&v.ID, &v.Name, &v.ContactStatus, &v.LastSeenAt, &v.DesiredGeneration, &v.ValidatedGeneration, &v.DeliveryState, &v.RuleIDs, &v.ResourceStatus, &v.ResourceObservedAt, &v.CPUPercent, &v.MemoryPercent, &v.DiskPercent, &v.ConntrackPercent, &v.ClockSkewSeconds, &v.DataPlaneState); err != nil {
+		if err = rows.Scan(&v.ID, &v.Name, &v.ContactStatus, &v.LastSeenAt, &v.AgentStartedAt, &v.DesiredGeneration, &v.ValidatedGeneration, &v.DeliveryState, &v.RuleIDs, &v.ResourceStatus, &v.ResourceObservedAt, &v.CPUPercent, &v.MemoryPercent, &v.DiskPercent, &v.ConntrackPercent, &v.ClockSkewSeconds, &v.DataPlaneState); err != nil {
 			return result, err
 		}
+		v.RateState = "none"
 		result.Items = append(result.Items, v)
 	}
-	return result, rows.Err()
+	if err = rows.Err(); err != nil {
+		return result, err
+	}
+	traffic, err := scopedNodeTraffic(ctx, tx, who.TenantID, admin)
+	if err != nil {
+		return result, err
+	}
+	for i := range result.Items {
+		if value, ok := traffic[result.Items[i].ID]; ok {
+			result.Items[i].NodeTraffic = value
+		}
+	}
+	return result, nil
 }
 
 func (s *Store) ListIncidents(ctx context.Context, who Identity, admin bool, page int) (Page[Incident], error) {

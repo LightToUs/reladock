@@ -297,6 +297,112 @@ func TestOperationsTenantVisibilityAndSupportIsolation(t *testing.T) {
 	}
 }
 
+func TestListOperationsNodesAggregatesTrafficByAuthorizationScope(t *testing.T) {
+	s := operationsStore(t)
+	ctx := context.Background()
+	a, _ := register(t, s, "node-traffic-a@example.com")
+	b, _ := register(t, s, "node-traffic-b@example.com")
+	admin, _ := register(t, s, "node-traffic-admin@example.com")
+	if err := s.SetPlatformAdmin(ctx, admin.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	admin.PlatformAdmin = true
+	for _, node := range []NodeInput{
+		{ID: "stale-01", Name: "Stale", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000},
+		{ID: "single-01", Name: "Single", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000},
+		{ID: "empty-01", Name: "Empty", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000},
+	} {
+		if err := s.AdminAddNode(ctx, admin, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create := func(who Identity, name, nodeID string) Rule {
+		input := ruleInput("tcp")
+		input.NodeID = nodeID
+		input.BandwidthMbps = 100
+		rule, err := s.CreateRule(ctx, who, name, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rule
+	}
+	afresh := create(a, "a-fresh-rule", "hk-01")
+	bfresh := create(b, "b-fresh-rule", "hk-01")
+	stale := create(a, "a-stale-rule", "stale-01")
+	single := create(a, "a-single-rule", "single-01")
+	_ = create(a, "a-empty-rule", "empty-01")
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET agent_started_at=clock_timestamp()-interval '1 hour' WHERE id='hk-01'`); err != nil {
+		t.Fatal(err)
+	}
+	insertReports := func(rule Rule, tenantID, epoch string, upload, download int64, latestAge string) {
+		if _, err := s.pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,$3,$4,2,$5,$6)`, rule.ID, tenantID, rule.NodeID, epoch, upload, download); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes,received_at) VALUES
+			($1,$2,$3,$4,1,100,100,100,100,clock_timestamp()-($7::interval)-interval '5 seconds'),
+			($1,$2,$3,$4,2,$5::bigint,$6::bigint,$5::bigint-100,$6::bigint-100,clock_timestamp()-($7::interval))`, rule.ID, tenantID, rule.NodeID, epoch, upload, download, latestAge); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.pool.Exec(ctx, `INSERT INTO billing_usage_totals(rule_id,tenant_id,node_id,active_epoch,upload_bytes,download_bytes) VALUES($1,$2,$3,$4,$5,$6)`, rule.ID, tenantID, rule.NodeID, epoch, upload, download); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertReports(afresh, a.TenantID, "a-fresh-epoch", 600, 300, "5 seconds")
+	insertReports(bfresh, b.TenantID, "b-fresh-epoch", 1100, 600, "5 seconds")
+	insertReports(stale, a.TenantID, "a-stale-epoch", 300, 200, "31 seconds")
+	if _, err := s.pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,$3,'a-single-epoch',1,9,7)`, single.ID, a.TenantID, single.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes) VALUES($1,$2,$3,'a-single-epoch',1,9,7,9,7)`, single.ID, a.TenantID, single.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO billing_usage_totals(rule_id,tenant_id,node_id,active_epoch,upload_bytes,download_bytes) VALUES($1,$2,$3,'a-single-epoch',9,7)`, single.ID, a.TenantID, single.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	find := func(page Page[OperationNode], id string) OperationNode {
+		for _, item := range page.Items {
+			if item.ID == id {
+				return item
+			}
+		}
+		t.Fatalf("node %s not found: %+v", id, page.Items)
+		return OperationNode{}
+	}
+	aNodes, err := s.ListOperationsNodes(ctx, a, false, time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aShared := find(aNodes, "hk-01")
+	if aShared.UploadBytes != 600 || aShared.DownloadBytes != 300 || aShared.RateState != "fresh" || aShared.UploadBytesPerSecond == nil || *aShared.UploadBytesPerSecond != 100 || aShared.DownloadBytesPerSecond == nil || *aShared.DownloadBytesPerSecond != 40 || aShared.AgentStartedAt == nil {
+		t.Fatalf("tenant A shared aggregate: %+v", aShared)
+	}
+	bNodes, err := s.ListOperationsNodes(ctx, b, false, time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bShared := find(bNodes, "hk-01")
+	if bShared.UploadBytes != 1100 || bShared.DownloadBytes != 600 || bShared.RateState != "fresh" || bShared.UploadBytesPerSecond == nil || *bShared.UploadBytesPerSecond != 200 || bShared.DownloadBytesPerSecond == nil || *bShared.DownloadBytesPerSecond != 100 {
+		t.Fatalf("tenant B shared aggregate: %+v", bShared)
+	}
+	adminNodes, err := s.ListOperationsNodes(ctx, admin, true, time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allShared := find(adminNodes, "hk-01")
+	if allShared.UploadBytes != 1700 || allShared.DownloadBytes != 900 || allShared.UploadBytesPerSecond == nil || *allShared.UploadBytesPerSecond != 300 || allShared.DownloadBytesPerSecond == nil || *allShared.DownloadBytesPerSecond != 140 {
+		t.Fatalf("admin shared aggregate: %+v", allShared)
+	}
+	if got := find(aNodes, "stale-01"); got.RateState != "stale" || !got.HasReports || got.TotalBytesPerSecond != nil {
+		t.Fatalf("stale aggregate: %+v", got)
+	}
+	if got := find(aNodes, "single-01"); got.RateState != "insufficient" || !got.HasReports || got.TotalBytes != 16 {
+		t.Fatalf("single aggregate: %+v", got)
+	}
+	if got := find(aNodes, "empty-01"); got.RateState != "none" || got.HasReports || got.TotalBytes != 0 {
+		t.Fatalf("empty aggregate: %+v", got)
+	}
+}
+
 func TestOperationsAuditFailuresRollbackIncidentAndTicket(t *testing.T) {
 	s := operationsStore(t)
 	ctx := context.Background()

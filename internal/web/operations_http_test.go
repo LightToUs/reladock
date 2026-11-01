@@ -141,6 +141,67 @@ func TestOperationsHTTPTicketLifecycleAndStrictBoundaries(t *testing.T) {
 	}
 }
 
+func TestOperationsHTTPNodeTrafficRespectsTenantAndAdminScope(t *testing.T) {
+	s, owner, pool := operationsHTTPServer(t)
+	ctx := context.Background()
+	other, _, err := s.store.Register(ctx, "Other traffic", "operations-traffic-other@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(who platform.Identity, key string) platform.Rule {
+		rule, createErr := s.store.CreateRule(ctx, who, key, platform.RuleInput{Name: key, Protocol: "tcp", TargetHost: "192.0.2.10", TargetPort: 443, BandwidthMbps: 100, NodeID: "hk-01"})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return rule
+	}
+	ownerRule := create(owner, "owner-traffic-rule")
+	otherRule := create(other, "other-traffic-rule")
+	insert := func(rule platform.Rule, tenantID, epoch string, upload, download int64) {
+		if _, insertErr := pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,$3,$4,2,$5,$6)`, rule.ID, tenantID, rule.NodeID, epoch, upload, download); insertErr != nil {
+			t.Fatal(insertErr)
+		}
+		if _, insertErr := pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes,received_at) VALUES
+			($1,$2,$3,$4,1,100,100,100,100,clock_timestamp()-interval '10 seconds'),
+			($1,$2,$3,$4,2,$5::bigint,$6::bigint,$5::bigint-100,$6::bigint-100,clock_timestamp()-interval '5 seconds')`, rule.ID, tenantID, rule.NodeID, epoch, upload, download); insertErr != nil {
+			t.Fatal(insertErr)
+		}
+		if _, insertErr := pool.Exec(ctx, `INSERT INTO billing_usage_totals(rule_id,tenant_id,node_id,active_epoch,upload_bytes,download_bytes) VALUES($1,$2,$3,$4,$5,$6)`, rule.ID, tenantID, rule.NodeID, epoch, upload, download); insertErr != nil {
+			t.Fatal(insertErr)
+		}
+	}
+	insert(ownerRule, owner.TenantID, "owner-http-epoch", 600, 300)
+	insert(otherRule, other.TenantID, "other-http-epoch", 1100, 600)
+	decode := func(w *httptest.ResponseRecorder) platform.OperationNode {
+		if w.Code != http.StatusOK {
+			t.Fatalf("nodes response: %d %s", w.Code, w.Body.String())
+		}
+		var page platform.Page[platform.OperationNode]
+		if err = json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		for _, node := range page.Items {
+			if node.ID == "hk-01" {
+				return node
+			}
+		}
+		t.Fatalf("hk-01 missing: %s", w.Body.String())
+		return platform.OperationNode{}
+	}
+	tenantNode := decode(operationsHTTP(s, owner, "GET", "/api/operations/nodes", ""))
+	if tenantNode.UploadBytes != 600 || tenantNode.DownloadBytes != 300 || tenantNode.RateState != "fresh" {
+		t.Fatalf("tenant traffic leaked or missing: %+v", tenantNode)
+	}
+	if err = s.store.SetPlatformAdmin(ctx, owner.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	owner.PlatformAdmin = true
+	adminNode := decode(operationsHTTP(s, owner, "GET", "/api/admin/operations/nodes", ""))
+	if adminNode.UploadBytes != 1700 || adminNode.DownloadBytes != 900 || adminNode.UploadBytesPerSecond == nil || *adminNode.UploadBytesPerSecond != 300 {
+		t.Fatalf("admin aggregate missing: %+v", adminNode)
+	}
+}
+
 func TestOperationsHTTPIntegratedAdminReplyAndBearerDenial(t *testing.T) {
 	s, owner, _ := operationsHTTPServer(t)
 	ctx := context.Background()
