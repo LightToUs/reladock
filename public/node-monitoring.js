@@ -66,7 +66,9 @@ export function nodeMonitoringPresentation(node = {}, nowInput = new Date()) {
   const online = node.contactStatus === 'online' || node.contactStatus === 'recent';
   const runtimeEnd = online ? now : validDate(node.agentHeartbeatAt);
   const resourceObservedAt = validDate(node.resourceObservedAt);
-  const resourceState = !resourceObservedAt
+  const resourceState = node.resourceStatus === 'stale'
+    ? 'stale'
+    : !resourceObservedAt
     ? 'unknown'
     : now - resourceObservedAt > 90_000 ? 'stale'
       : node.resourceStatus === 'pressure' || node.resourceStatus === 'drifted' ? node.resourceStatus : 'fresh';
@@ -128,6 +130,7 @@ export function createAdaptivePoller({
   let inFlight = null;
   let refreshWhenSettled = false;
   let generation = 0;
+  let activeController = null;
 
   const clearScheduled = () => {
     if (timer !== null) clearTimer(timer);
@@ -150,9 +153,11 @@ export function createAdaptivePoller({
     }
     clearScheduled();
     const requestGeneration = generation;
+    const controller = new AbortController();
+    activeController = controller;
     let result;
     try {
-      result = run({ isCurrent: () => running && generation === requestGeneration });
+      result = run({ isCurrent: () => running && generation === requestGeneration, signal: controller.signal });
     } catch (error) {
       result = Promise.reject(error);
     }
@@ -160,6 +165,7 @@ export function createAdaptivePoller({
       .catch(() => undefined)
       .finally(() => {
         if (inFlight === request) inFlight = null;
+        if (activeController === controller) activeController = null;
         if (!running || generation !== requestGeneration) return;
         if (refreshWhenSettled) {
           refreshWhenSettled = false;
@@ -187,14 +193,18 @@ export function createAdaptivePoller({
       running = true;
       generation += 1;
       documentTarget?.addEventListener?.('visibilitychange', visibilityChanged);
+      if (inFlight) {
+        const previous = inFlight;
+        return previous.then(() => running && !inFlight ? execute(false) : undefined);
+      }
       return execute(false);
     },
     stop() {
       if (!running) return;
       running = false;
       generation += 1;
+      activeController?.abort();
       refreshWhenSettled = false;
-      inFlight = null;
       clearScheduled();
       documentTarget?.removeEventListener?.('visibilitychange', visibilityChanged);
     },

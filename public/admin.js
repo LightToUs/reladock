@@ -18,8 +18,8 @@ const costNav = document.createElement('button'); costNav.dataset.view = 'costs'
 const notificationNav = document.createElement('button'); notificationNav.dataset.view = 'notifications'; notificationNav.textContent = '通知交付'; document.querySelector('.admin-nav nav').append(notificationNav); titles.notifications = '通知交付';
 function access(mode) { if(mode!=='admin'){bootstrapUI.clear();adminNodeMonitoringPoller?.stop();adminNodeMonitoringPoller=undefined;} $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
 function message(text) { $('#admin-message').textContent = text; }
-async function api(path, body, key) {
-  const options = { credentials: 'same-origin', headers: {} };
+async function api(path, body, key, signal) {
+  const options = { credentials: 'same-origin', headers: {}, signal };
   if (body !== undefined) { options.method = 'POST'; options.headers = { 'Content-Type': 'application/json', 'X-Requested-With': 'RelaDock' }; options.body = JSON.stringify(body); }
   if (key) options.headers['Idempotency-Key'] = key;
   const response = await fetch(path, options); const data = await response.json();
@@ -120,7 +120,7 @@ function startAdminNodeMonitoring() {
   if (adminNodeMonitoringPoller) return;
   adminNodeMonitoringPoller = createAdaptivePoller({ run: async cycle => {
     try {
-      const items = await loadAllOperationNodes(api, '/api/admin/operations/nodes?staleAfterSeconds=90');
+      const items = await loadAllOperationNodes(path => api(path, undefined, undefined, cycle.signal), '/api/admin/operations/nodes?staleAfterSeconds=90');
       if (!cycle.isCurrent()) return;
       patchAdminNodeMonitoring(items, { refreshedAt: new Date() });
     } catch (error) {

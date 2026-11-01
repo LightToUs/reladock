@@ -22,12 +22,12 @@ const ruleEditor = createRuleEditor($('#rule-dialog'), $('#rule-form'), {
 });
 $('#rule-dialog-close').addEventListener('click', ruleEditor.close);
 
-async function api(path, { method = 'GET', body, key } = {}) {
+async function api(path, { method = 'GET', body, key, signal } = {}) {
   const headers = {};
   if (method !== 'GET') headers['X-Requested-With'] = 'RelaDock';
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (key) headers['Idempotency-Key'] = key;
-  const response = await fetch(path, { method, headers, credentials: 'same-origin', body: body === undefined ? undefined : JSON.stringify(body) });
+  const response = await fetch(path, { method, headers, credentials: 'same-origin', signal, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await response.json();
   if (!response.ok) {
     if (response.status === 401) showAuth();
@@ -119,7 +119,7 @@ function startNodeMonitoring() {
   nodeMonitoringPoller = createAdaptivePoller({
     run: async cycle => {
       try {
-        const items = await loadAllOperationNodes(api, '/api/operations/nodes?staleAfterSeconds=90');
+        const items = await loadAllOperationNodes(path => api(path, { signal: cycle.signal }), '/api/operations/nodes?staleAfterSeconds=90');
         if (!cycle.isCurrent()) return;
         renderEnterpriseNodeMonitoring(items, { refreshedAt: new Date() });
       } catch (error) {

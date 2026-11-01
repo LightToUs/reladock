@@ -347,6 +347,7 @@ func (s *Store) ListOperationsNodes(ctx context.Context, who Identity, admin boo
 	if err != nil || !validStaleAfter(staleAfter) {
 		return result, ErrInvalid
 	}
+	result.PageSize = 1000
 	tx, err := s.operationsTx(ctx, who, admin, false)
 	if err != nil {
 		return result, err
@@ -361,12 +362,12 @@ func (s *Store) ListOperationsNodes(ctx context.Context, who Identity, admin boo
 	rs.received_at,rs.cpu_percent,rs.memory_percent,rs.disk_percent,rs.conntrack_percent,rs.clock_skew_seconds,COALESCE(rs.dataplane_state,'')
 	FROM nodes n
 	LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation
-	LEFT JOIN node_resource_latest rs ON rs.node_id=n.id`+where+` ORDER BY n.id LIMIT 100 OFFSET $4`, admin, who.TenantID, staleAfter.Seconds(), (page-1)*100, AgentHeartbeatStaleAfter.Seconds())
+	LEFT JOIN node_resource_latest rs ON rs.node_id=n.id`+where+` ORDER BY n.id LIMIT 1000 OFFSET $4`, admin, who.TenantID, staleAfter.Seconds(), (page-1)*result.PageSize, AgentHeartbeatStaleAfter.Seconds())
 	if err != nil {
 		return result, err
 	}
 	defer rows.Close()
-	nodeIDs := make([]string, 0, 100)
+	nodeIDs := make([]string, 0, result.PageSize)
 	for rows.Next() {
 		v := OperationNode{DataPlaneStatus: "unknown", ResourceStatus: "unknown"}
 		if err = rows.Scan(&v.ID, &v.Name, &v.ContactStatus, &v.LastSeenAt, &v.AgentStartedAt, &v.AgentHeartbeatAt, &v.DesiredGeneration, &v.ValidatedGeneration, &v.DeliveryState, &v.RuleIDs, &v.ResourceStatus, &v.ResourceObservedAt, &v.CPUPercent, &v.MemoryPercent, &v.DiskPercent, &v.ConntrackPercent, &v.ClockSkewSeconds, &v.DataPlaneState); err != nil {

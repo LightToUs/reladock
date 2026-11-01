@@ -372,6 +372,9 @@ func TestListOperationsNodesAggregatesTrafficByAuthorizationScope(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if aNodes.PageSize != 1000 {
+		t.Fatalf("node monitoring page size: %d", aNodes.PageSize)
+	}
 	aShared := find(aNodes, "hk-01")
 	if aShared.UploadBytes != 600 || aShared.DownloadBytes != 300 || aShared.RateState != "fresh" || aShared.UploadBytesPerSecond == nil || *aShared.UploadBytesPerSecond != 100 || aShared.DownloadBytesPerSecond == nil || *aShared.DownloadBytesPerSecond != 40 || aShared.AgentStartedAt == nil || aShared.AgentHeartbeatAt == nil || aShared.ContactStatus != "online" {
 		t.Fatalf("tenant A shared aggregate: %+v", aShared)

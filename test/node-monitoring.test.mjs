@@ -59,6 +59,12 @@ test('node monitoring keeps no-report, insufficient, stale and unknown values ex
   assert.equal(stale.traffic.uploadTotal, '4 B');
   assert.equal(stale.resources.state, 'stale');
   assert.equal(stale.resources.cpu.label, '数据已过期');
+
+  const serverStale = nodeMonitoringPresentation({
+    resourceStatus: 'stale', resourceObservedAt: '2026-11-01T11:59:59Z', cpuPercent: 20,
+  }, now);
+  assert.equal(serverStale.resources.state, 'stale');
+  assert.equal(serverStale.resources.cpu.label, '数据已过期');
 });
 
 test('offline Agent runtime stops at the last heartbeat', () => {
@@ -182,20 +188,24 @@ test('stopping an unresolved poll invalidates its commit before a new session st
   const documentTarget = fakeDocument();
   const commits = [];
   let resolveOld;
+  let oldSignal;
   let runs = 0;
   const poller = createAdaptivePoller({
     documentTarget,
     ...scheduler,
     run: async cycle => {
       runs += 1;
+      if (runs === 1) oldSignal = cycle.signal;
       const value = runs === 1 ? await new Promise(resolve => { resolveOld = resolve; }) : 'new';
       if (cycle.isCurrent()) commits.push(value);
     },
   });
   const old = poller.start();
   poller.stop();
-  await poller.start();
+  assert.equal(oldSignal.aborted, true);
+  const restarted = poller.start();
+  assert.equal(runs, 1);
   resolveOld('old');
-  await old;
+  await Promise.all([old, restarted]);
   assert.deepEqual(commits, ['new']);
 });
