@@ -194,6 +194,8 @@ type RuleTelemetrySeries struct {
 	Points        []UsagePoint  `json:"points"`
 }
 
+type telemetryHistorySnapshotHookKey struct{}
+
 // ReportUsage atomically records a cumulative report and its deltas. It does not
 // infer prices, quota, payment, health, deployment or charge a wallet. Soft-deleted
 // rules still accept buffered reports from their owning node. First report in a
@@ -369,10 +371,18 @@ func billingBytePair(up, down int64) bool { return up >= 0 && down >= 0 && up <=
 // can widen scope. Viewers may read. Locks keep suspension/reassignment from
 // crossing an already-authorized query. The outer HTTP layer verifies sessions.
 func (s *Store) billingReadTx(ctx context.Context, who Identity) (pgx.Tx, error) {
+	return s.billingReadTxWithOptions(ctx, who, pgx.TxOptions{})
+}
+
+func (s *Store) billingSnapshotReadTx(ctx context.Context, who Identity) (pgx.Tx, error) {
+	return s.billingReadTxWithOptions(ctx, who, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+}
+
+func (s *Store) billingReadTxWithOptions(ctx context.Context, who Identity, options pgx.TxOptions) (pgx.Tx, error) {
 	if !billingUUID.MatchString(who.MemberID) || !billingUUID.MatchString(who.TenantID) {
 		return nil, ErrUnauthorized
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.pool.BeginTx(ctx, options)
 	if err != nil {
 		return nil, err
 	}
@@ -587,7 +597,7 @@ func (s *Store) RuleTelemetryHistory(ctx context.Context, who Identity, ruleID, 
 		return result, ErrInvalid
 	}
 	result.BucketSeconds = selected.bucket
-	tx, err := s.billingReadTx(ctx, who)
+	tx, err := s.billingSnapshotReadTx(ctx, who)
 	if err != nil {
 		return result, err
 	}
@@ -600,6 +610,11 @@ func (s *Store) RuleTelemetryHistory(ctx context.Context, who Identity, ruleID, 
 		return result, ErrNotFound
 	}
 	result.Summary = items[0]
+	// Package-local test synchronization point for proving the two statements
+	// remain on one database snapshot while a report commits concurrently.
+	if hook, ok := ctx.Value(telemetryHistorySnapshotHookKey{}).(func()); ok {
+		hook()
+	}
 	rows, err := tx.Query(ctx, `SELECT date_bin(make_interval(secs => $3),received_at,TIMESTAMPTZ '2000-01-01 00:00:00+00'),
 	SUM(upload_delta_bytes)::bigint,SUM(download_delta_bytes)::bigint
 	FROM billing_usage_reports

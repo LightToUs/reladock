@@ -58,7 +58,7 @@ export function telemetryPresentation(summary = {}) {
   };
 }
 
-export function trendBars(points = []) {
+export function trendBars(points = [], bucketSeconds = 0) {
   const safe = Array.isArray(points) ? points.map(point => ({
     startedAt: point.startedAt,
     uploadBytes: finiteNonNegative(Number(point.uploadBytes)),
@@ -66,8 +66,58 @@ export function trendBars(points = []) {
     totalBytes: finiteNonNegative(Number(point.totalBytes)),
   })) : [];
   const maxBytes = safe.reduce((maximum, point) => Math.max(maximum, point.totalBytes), 0);
+  const bucketMilliseconds = Number(bucketSeconds) * 1000;
+  const firstTime = safe.length ? new Date(safe[0].startedAt).valueOf() : 0;
+  let lastSlot = -1;
+  const bars = safe.map((point, index) => {
+    const pointTime = new Date(point.startedAt).valueOf();
+    const calculated = bucketMilliseconds > 0 && Number.isFinite(pointTime) && Number.isFinite(firstTime)
+      ? Math.max(0, Math.round((pointTime - firstTime) / bucketMilliseconds))
+      : index;
+    const slot = Math.max(lastSlot + 1, calculated);
+    lastSlot = slot;
+    return { ...point, ratio: maxBytes > 0 ? point.totalBytes / maxBytes : 0, slot };
+  });
   return {
     maxBytes,
-    bars: safe.map(point => ({ ...point, ratio: maxBytes > 0 ? point.totalBytes / maxBytes : 0 })),
+    slotCount: lastSlot + 1,
+    bars,
+  };
+}
+
+export function createLatestRequestGate() {
+  let current = 0;
+  return {
+    next() { current += 1; return current; },
+    isCurrent(token) { return token === current; },
+  };
+}
+
+export function telemetryInteractionState(available, ruleID) {
+  const historyAllowed = available === true && typeof ruleID === 'string' && ruleID.length > 0;
+  return { controlsDisabled: !historyAllowed, historyAllowed };
+}
+
+export async function loadWorkspaceData(api) {
+  const overviewRequest = api('/api/overview');
+  const optionalRequest = Promise.allSettled([
+    api('/api/billing/telemetry'),
+    api('/api/operations/nodes?staleAfterSeconds=90'),
+  ]);
+  const overview = await overviewRequest;
+  const [telemetryResult, nodesResult] = await optionalRequest;
+  for (const result of [telemetryResult, nodesResult]) {
+    if (result.status === 'rejected' && result.reason?.status === 401) throw result.reason;
+  }
+  const errors = [];
+  if (telemetryResult.status === 'rejected') errors.push({ path: '/api/billing/telemetry', error: telemetryResult.reason });
+  if (nodesResult.status === 'rejected') errors.push({ path: '/api/operations/nodes', error: nodesResult.reason });
+  return {
+    overview,
+    telemetry: telemetryResult.status === 'fulfilled' ? telemetryResult.value : [],
+    operationNodes: nodesResult.status === 'fulfilled' ? (nodesResult.value.items || []) : [],
+    telemetryAvailable: telemetryResult.status === 'fulfilled',
+    resourcesAvailable: nodesResult.status === 'fulfilled',
+    errors,
   };
 }

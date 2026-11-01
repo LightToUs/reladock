@@ -464,6 +464,77 @@ func TestRuleTelemetryHistoryUsesSparseReceiveTimeBuckets(t *testing.T) {
 	}
 }
 
+func TestRuleTelemetryHistoryKeepsSummaryAndPointsInOneSnapshot(t *testing.T) {
+	s := billingTestStore(t)
+	ctx := context.Background()
+	who, _ := register(t, s, "telemetry-snapshot@example.com")
+	rule, err := s.CreateRule(ctx, who, "telemetry-snapshot", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','snapshot-epoch',1,10,10)`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes) VALUES($1,$2,'hk-01','snapshot-epoch',1,10,10,10,10)`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_totals(rule_id,tenant_id,node_id,active_epoch,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','snapshot-epoch',10,10)`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	afterSummary := make(chan struct{})
+	continueHistory := make(chan struct{})
+	historyCtx := context.WithValue(ctx, telemetryHistorySnapshotHookKey{}, func() {
+		close(afterSummary)
+		<-continueHistory
+	})
+	type historyResult struct {
+		series RuleTelemetrySeries
+		err    error
+	}
+	result := make(chan historyResult, 1)
+	go func() {
+		series, historyErr := s.RuleTelemetryHistory(historyCtx, who, rule.ID, "1h")
+		result <- historyResult{series: series, err: historyErr}
+	}()
+	select {
+	case <-afterSummary:
+	case <-time.After(5 * time.Second):
+		t.Fatal("history did not reach the snapshot boundary")
+	}
+	writeTx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = writeTx.Exec(ctx, `UPDATE billing_usage_epochs SET last_sequence=2,upload_bytes=15,download_bytes=15 WHERE rule_id=$1 AND epoch='snapshot-epoch'`, rule.ID); err == nil {
+		_, err = writeTx.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes) VALUES($1,$2,'hk-01','snapshot-epoch',2,15,15,5,5)`, rule.ID, who.TenantID)
+	}
+	if err == nil {
+		_, err = writeTx.Exec(ctx, `UPDATE billing_usage_totals SET upload_bytes=15,download_bytes=15,updated_at=clock_timestamp() WHERE rule_id=$1`, rule.ID)
+	}
+	if err == nil {
+		err = writeTx.Commit(ctx)
+	} else {
+		writeTx.Rollback(ctx)
+	}
+	if err != nil {
+		close(continueHistory)
+		t.Fatal(err)
+	}
+	close(continueHistory)
+	got := <-result
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	var pointTotal int64
+	for _, point := range got.series.Points {
+		pointTotal += point.TotalBytes
+	}
+	if got.series.Summary.TotalBytes != pointTotal || pointTotal != 20 {
+		t.Fatalf("mixed history snapshot: summary=%d points=%d series=%+v", got.series.Summary.TotalBytes, pointTotal, got.series)
+	}
+}
+
 func TestBillingUsageBoundsAndAtomicRollback(t *testing.T) {
 	s := billingTestStore(t)
 	ctx := context.Background()

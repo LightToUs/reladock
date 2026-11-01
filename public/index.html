@@ -14,6 +14,10 @@
   <p id="auth-message" class="error" role="status"></p><p class="muted hint">企业账户用于管理中转服务；客户自行管理 VPN 用户、协议密钥与订阅。</p>
   <details><summary>接受企业邀请</summary><form id="accept-invitation"><label>邀请令牌<input name="token" required autocomplete="off"></label><label>受邀邮箱<input name="email" type="email" required autocomplete="username"></label><label>设置密码<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"></label><button>接受邀请并登录</button></form><p id="accept-message" class="error" role="status"></p></details>
 </section>
+<section class="auth" id="startup-error" hidden>
+  <div class="tag">RelaDock · 企业网络中转</div><h1>工作台暂不可用</h1><p class="muted">登录状态尚未判定，当前没有切换为退出登录。</p>
+  <p id="startup-error-message" class="error" role="status"></p><button id="startup-retry">重新加载工作台</button>
+</section>
 <div id="console" hidden>
 <aside>
   <div class="brand"><span class="brand-mark" aria-hidden="true">R</span><div><h2>RelaDock</h2><p>Relay operations</p></div></div>

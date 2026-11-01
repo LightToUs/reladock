@@ -128,10 +128,14 @@ func TestEnterpriseWorkspaceExposesTrafficAndNodeResourceTelemetry(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	combined := string(page) + string(app)
+	telemetry, err := fs.ReadFile(assets.Files, "telemetry.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(app) + string(telemetry)
 	for _, required := range []string{
 		`id="telemetry-section"`, `id="telemetry-rule"`, `id="telemetry-window"`,
-		`id="traffic-trend"`, `id="node-resource-cards"`, "telemetryPresentation",
+		`id="traffic-trend"`, `id="node-resource-cards"`, `id="startup-error"`, "telemetryPresentation",
 		"/api/billing/telemetry", "/api/operations/nodes?staleAfterSeconds=90",
 		"平台接收时间", "空档表示没有已接收报告，不推断为 0",
 	} {

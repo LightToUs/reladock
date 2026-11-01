@@ -1,7 +1,7 @@
 import { submitRule, submitRuleUpdate } from './rule-submission.js';
 import { createRuleEditor } from './rule-editor.js';
 import { workspaceSummary, ruleStatusPresentation } from './workspace-summary.js';
-import { telemetryPresentation, trendBars, formatBytes } from './telemetry.js';
+import { createLatestRequestGate, loadWorkspaceData, telemetryInteractionState, telemetryPresentation, trendBars, formatBytes } from './telemetry.js';
 import { resourcePresentation } from './node-contact-status.js';
 import { bindAccountTools,refreshAccountTools,clearCredential } from './account-tools.js';
 import { bindBusinessTools,refreshBusinessTools } from './business-tools.js';
@@ -11,6 +11,8 @@ let mode = 'login';
 let identity;
 const ruleDraft = {};
 let telemetryByRule = new Map();
+let telemetrySummariesAvailable = false;
+const telemetryHistoryGate = createLatestRequestGate();
 const ruleEditor = createRuleEditor($('#rule-dialog'), $('#rule-form'), {
   title: $('#rule-dialog-title'), description: $('#rule-dialog-description'), submit: $('#rule-submit'),
   status: $('#rule-dialog-status'), allocation: $('#rule-allocation'),
@@ -31,7 +33,8 @@ async function api(path, { method = 'GET', body, key } = {}) {
   }
   return data;
 }
-function showAuth() { clearCredential();identity = undefined; ruleDraft.pending = undefined; ruleEditor.close(); $('#auth').hidden = false; $('#console').hidden = true; for (const id of ['rules-message','refresh-message','account-tools-message','rule-dialog-status']) $(`#${id}`).textContent = ''; }
+function showAuth() { clearCredential();identity = undefined; ruleDraft.pending = undefined; ruleEditor.close(); $('#startup-error').hidden = true; $('#auth').hidden = false; $('#console').hidden = true; for (const id of ['rules-message','refresh-message','account-tools-message','rule-dialog-status']) $(`#${id}`).textContent = ''; }
+function showStartupFailure(error) { $('#auth').hidden = true; $('#console').hidden = true; $('#startup-error').hidden = false; $('#startup-error-message').textContent = error.message; }
 function setMode(value) {
   mode = value;
   $('#company-field').hidden = value !== 'register'; $('#company-field input').required = value === 'register';
@@ -64,8 +67,11 @@ function appendTelemetryDetail(target, primary, detail) {
   const note = document.createElement('small'); note.className = 'telemetry-detail'; note.textContent = detail; target.append(note);
 }
 
-function renderNodeResources(nodes) {
+function renderNodeResources(nodes, available = true) {
   const root = $('#node-resource-cards'); root.replaceChildren();
+  if (!available) {
+    const unavailable = document.createElement('p'); unavailable.className = 'muted telemetry-empty'; unavailable.textContent = '节点资源遥测暂不可用，关联状态与资源占用均为未知。'; root.append(unavailable); return;
+  }
   if (!nodes.length) {
     const empty = document.createElement('p'); empty.className = 'muted telemetry-empty'; empty.textContent = '当前规则尚未关联可展示的入口节点资源。'; root.append(empty); return;
   }
@@ -97,9 +103,16 @@ function setTelemetrySummary(summary) {
   state.title = view.rateDetail;
 }
 
+function setTelemetryUnavailable() {
+  $('#telemetry-total').textContent = '遥测不可用'; $('#telemetry-total-detail').textContent = '本次加载失败，累计流量未知';
+  $('#telemetry-upload-rate').textContent = '未知'; $('#telemetry-download-rate').textContent = '未知'; $('#telemetry-utilization').textContent = '未知';
+  const state = $('#telemetry-rate-state'); state.className = 'telemetry-state telemetry-state-stale'; state.textContent = '遥测不可用'; state.title = '本次加载失败，不表示没有流量。';
+}
+
 function renderTrafficTrend(series) {
   const root = $('#traffic-trend'); root.replaceChildren();
-  const trend = trendBars(series.points);
+  const trend = trendBars(series.points, series.bucketSeconds);
+  root.style.gridTemplateColumns = `repeat(${Math.max(1, trend.slotCount)}, minmax(7px, 1fr))`;
   $('#traffic-trend-message').textContent = trend.bars.length
     ? `${trend.bars.length} 个已接收数据桶 · 每桶 ${series.bucketSeconds.toLocaleString()} 秒`
     : '该窗口内没有已接收的流量报告；不推断为 0。';
@@ -108,6 +121,7 @@ function renderTrafficTrend(series) {
   }
   for (const point of trend.bars) {
     const bar = document.createElement('div'); bar.className = 'trend-bar';
+    bar.style.gridColumn = String(point.slot + 1);
     const fill = document.createElement('i'); fill.style.height = `${Math.max(3, point.ratio * 100)}%`;
     const timestamp = new Date(point.startedAt).toLocaleString();
     bar.title = `${timestamp} · 总计 ${formatBytes(point.totalBytes)}（上行 ${formatBytes(point.uploadBytes)} / 下行 ${formatBytes(point.downloadBytes)}）`;
@@ -115,40 +129,54 @@ function renderTrafficTrend(series) {
   }
 }
 
+function renderTrafficUnavailable() {
+  const root = $('#traffic-trend'); root.replaceChildren(); root.style.gridTemplateColumns = '1fr';
+  const unavailable = document.createElement('div'); unavailable.className = 'trend-empty'; unavailable.textContent = '流量遥测暂不可用'; root.append(unavailable);
+  $('#traffic-trend-message').textContent = '本次加载失败，无法判断该窗口是否有报告；不推断为 0。';
+}
+
 async function refreshTelemetryHistory() {
   const ruleID = $('#telemetry-rule').value; const window = $('#telemetry-window').value;
-  if (!ruleID) {
+  const requestToken = telemetryHistoryGate.next();
+  const interaction = telemetryInteractionState(telemetrySummariesAvailable, ruleID);
+  if (!interaction.historyAllowed) {
+    if (!telemetrySummariesAvailable) { setTelemetryUnavailable(); renderTrafficUnavailable(); return; }
     setTelemetrySummary(); renderTrafficTrend({ points: [], bucketSeconds: 0 }); return;
   }
   setTelemetrySummary(telemetryByRule.get(ruleID));
   $('#telemetry-message').textContent = '';
   try {
     const series = await api(`/api/billing/telemetry?ruleId=${encodeURIComponent(ruleID)}&window=${encodeURIComponent(window)}`);
+    if (!telemetryHistoryGate.isCurrent(requestToken) || $('#telemetry-rule').value !== ruleID || $('#telemetry-window').value !== window) return;
     setTelemetrySummary(series.summary); renderTrafficTrend(series);
   } catch (error) {
+    if (!telemetryHistoryGate.isCurrent(requestToken)) return;
     $('#telemetry-message').textContent = error.message;
     $('#traffic-trend-message').textContent = '趋势数据加载失败，累计值仍保留。';
   }
 }
 
-function renderTelemetryWorkspace(rules, telemetry, operationNodes) {
+function renderTelemetryWorkspace(rules, telemetry, operationNodes, { telemetryAvailable, resourcesAvailable }) {
+  telemetrySummariesAvailable = telemetryAvailable;
   telemetryByRule = new Map(telemetry.map(item => [item.ruleId, item]));
   const selector = $('#telemetry-rule'); const selected = selector.value; selector.replaceChildren();
   for (const rule of rules) {
     const option = document.createElement('option'); option.value = rule.id; option.textContent = `${rule.name} · ${rule.protocol.toUpperCase()} ${rule.listenPort}`; selector.append(option);
   }
   if (rules.some(rule => rule.id === selected)) selector.value = selected;
-  setTelemetrySummary(telemetryByRule.get(selector.value));
-  renderNodeResources(operationNodes);
+  const interaction = telemetryInteractionState(telemetryAvailable, selector.value);
+  selector.disabled = interaction.controlsDisabled;
+  $('#telemetry-window').disabled = interaction.controlsDisabled;
+  if (telemetryAvailable) setTelemetrySummary(telemetryByRule.get(selector.value));
+  else setTelemetryUnavailable();
+  renderNodeResources(operationNodes, resourcesAvailable);
 }
 
 async function refresh() {
-  const [data, telemetry, operationNodes] = await Promise.all([
-    api('/api/overview'),
-    api('/api/billing/telemetry'),
-    api('/api/operations/nodes?staleAfterSeconds=90'),
-  ]); identity = data.account;
-  $('#auth').hidden = true; $('#console').hidden = false; $('#company-name').textContent = identity.company; $('#account-email').textContent = identity.email;
+  const workspace = await loadWorkspaceData(api);
+  const data = workspace.overview; const telemetry = workspace.telemetry;
+  identity = data.account;
+  $('#startup-error').hidden = true; $('#auth').hidden = true; $('#console').hidden = false; $('#company-name').textContent = identity.company; $('#account-email').textContent = identity.email;
   $('#platform-link').hidden = !identity.platformAdmin;
   const summary = workspaceSummary(data);
   $('#summary-rule-total').textContent = summary.totalRules.toLocaleString();
@@ -175,8 +203,11 @@ async function refresh() {
   for (const rule of data.rules) {
     const row = root.insertRow(); const target = rule.targetHost.includes(':') ? `[${rule.targetHost}]:${rule.targetPort}` : `${rule.targetHost}:${rule.targetPort}`;
     for (const value of [`${rule.name} / ${rule.nodeId}`, rule.listenPort, rule.protocol.toUpperCase(), target,`${rule.bandwidthMbps} Mbps`]) cell(row, value);
-    const telemetryView = telemetryPresentation(telemetry.find(item => item.ruleId === rule.id));
-    const usageCell = row.insertCell(); appendTelemetryDetail(usageCell, telemetryView.total, telemetryView.total === '尚未收到流量报告' ? '等待节点计量上报' : `上行 ${telemetryView.upload} / 下行 ${telemetryView.download}`);
+    const telemetryView = workspace.telemetryAvailable
+      ? telemetryPresentation(telemetry.find(item => item.ruleId === rule.id))
+      : { total: '遥测不可用', upload: '未知', download: '未知', rate: '未知', rateDetail: '本次加载失败，不表示没有流量。' };
+    const usageDetail = !workspace.telemetryAvailable ? telemetryView.rateDetail : telemetryView.total === '尚未收到流量报告' ? '等待节点计量上报' : `上行 ${telemetryView.upload} / 下行 ${telemetryView.download}`;
+    const usageCell = row.insertCell(); appendTelemetryDetail(usageCell, telemetryView.total, usageDetail);
     const rateCell = row.insertCell(); appendTelemetryDetail(rateCell, telemetryView.rate, telemetryView.rateDetail);
     cell(row,`期望 ${rule.desiredVersion} / 生效 ${rule.appliedVersion}`);
     const presentation = ruleStatusPresentation(rule);
@@ -202,8 +233,11 @@ async function refresh() {
       controls.append(actionButton('删除', rule.id, 'delete'));
     }
   }
-  renderTelemetryWorkspace(data.rules, telemetry, operationNodes.items || []);
-  await refreshTelemetryHistory();
+  renderTelemetryWorkspace(data.rules, telemetry, workspace.operationNodes, workspace);
+  const telemetryUnavailable = workspace.errors.some(item => item.path === '/api/billing/telemetry');
+  $('#telemetry-message').textContent = workspace.errors.map(item => `${item.path.includes('nodes') ? '节点资源' : '流量遥测'}暂不可用：${item.error.message}`).join('；');
+  if (telemetryUnavailable) renderTrafficUnavailable();
+  else await refreshTelemetryHistory();
   const audit = $('#audit-rows'); audit.replaceChildren();
   for (const entry of data.auditLogs) { const row = audit.insertRow(); cell(row, new Date(entry.createdAt).toLocaleString()); cell(row, actions[entry.action] || entry.action); cell(row, entry.resourceId); }
   try{await refreshAccountTools(api,identity);}catch(e){$('#account-tools-message').textContent=e.message;}
@@ -251,5 +285,10 @@ bindBusinessTools(api,refresh);
 bindOperations(api,{canWrite:()=>identity&&['owner','admin'].includes(identity.role)});
 $('#telemetry-rule').addEventListener('change', () => refreshTelemetryHistory());
 $('#telemetry-window').addEventListener('change', () => refreshTelemetryHistory());
+$('#startup-retry').addEventListener('click', () => location.reload());
 $('#refresh').addEventListener('click', async () => { $('#refresh').disabled = true; try { await refresh(); } catch (error) { $('#refresh-message').textContent = error.message; } finally { $('#refresh').disabled = false; } });
-refresh().catch(error => { showAuth(); if (error.status !== 401) $('#auth-message').textContent = error.message; });
+refresh().catch(error => {
+  if (error.status === 401) showAuth();
+  else if (!identity) showStartupFailure(error);
+  else $('#refresh-message').textContent = error.message;
+});
