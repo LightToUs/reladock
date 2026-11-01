@@ -315,7 +315,7 @@ func TestAdminConsoleUsesRoutedPagesAndCollapsibleSidebar(t *testing.T) {
 	for _, required := range []string{
 		`id="admin-sidebar-collapse"`, `id="admin-nav-toggle"`, `id="admin-view-description"`,
 		`data-view="overview"`, `href="#/overview"`, `href="#/nodes"`, `href="#/audit"`,
-		"bindConsoleNavigation", "sidebar-collapsed", "nav-open", "adminNavigation.select",
+		"bindConsoleNavigation", "sidebar-collapsed", "#admin-shell.nav-open .admin-nav nav", "adminNavigation.select",
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("admin routed navigation missing %q", required)

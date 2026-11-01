@@ -47,7 +47,8 @@ function fixture(hash = '#/rules', stored = {}) {
   };
   const root = new FakeElement(); const sidebar = new FakeElement(); const mobileToggle = new FakeElement();
   const collapseToggle = new FakeElement(); const title = new FakeElement(); const description = new FakeElement();
-  const items = ['overview', 'rules', 'team'].map(view => new FakeElement({ view }));
+  const labels = { overview: '运行概览', rules: '转发规则', team: '企业协作' };
+  const items = ['overview', 'rules', 'team'].map(view => { const item = new FakeElement({ view }); item.textContent = labels[view]; return item; });
   const panes = ['overview', 'rules', 'team'].map(pane => new FakeElement({ pane }));
   const storage = new FakeStorage(stored); const selected = [];
   const binding = bindConsoleNavigation?.({
@@ -68,6 +69,7 @@ test('direct hash opening shows only its pane and keeps title and menu aligned',
   assert.equal(view.panes[2].hidden, true);
   assert.equal(view.items[1].classList.contains('selected'), true);
   assert.equal(view.items[1].getAttribute('aria-current'), 'page');
+  assert.equal(view.items[1].getAttribute('aria-label'), '转发规则');
   assert.equal(view.title.textContent, '转发规则');
   assert.equal(view.description.textContent, '规则说明');
   assert.deepEqual(view.selected, ['rules']);
@@ -99,6 +101,7 @@ test('mobile drawer closes after selection or Escape and restores useful focus',
   view.mobileToggle.dispatchEvent(new Event('click'));
   assert.equal(view.root.classList.contains('nav-open'), true);
   assert.equal(view.mobileToggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(view.items[0].focused, 1);
   view.items[1].dispatchEvent(new Event('click'));
   assert.equal(view.root.classList.contains('nav-open'), false);
   assert.equal(view.title.focused, 1);

@@ -433,19 +433,19 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
     padding: 12px 16px;
     overflow: visible;
   }
-  .admin-nav.nav-open { position: relative; }
+  #admin-shell.nav-open .admin-nav { position: relative; }
   .admin-brand { align-items: center; justify-content: space-between; margin: 0; }
   .admin-brand h2 { font-size: 1.35rem; }
   .admin-brand p { margin: 0; font-size: 13px; }
   .admin-nav-toggle { display: block; min-height: 40px; padding: 7px 12px; background: var(--nav-surface); color: var(--nav-ink); }
   .admin-sidebar-collapse { display: none; }
   .admin-nav nav { display: none; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; max-height: 62svh; margin-top: 12px; overflow-y: auto; }
-  .admin-nav.nav-open nav { display: grid; }
+  #admin-shell.nav-open .admin-nav nav { display: grid; }
   .admin-nav nav [data-view] { min-height: 42px; padding: 8px 12px 8px 17px; white-space: nowrap; }
   .admin-nav nav [data-view]::before { position: absolute; inset: 9px auto 9px 0; width: 4px; height: auto; content: ""; }
   .admin-nav nav [data-view]:hover { transform: none; }
   .admin-nav .workspace-link { display: none; }
-  .admin-nav.nav-open .workspace-link { display: flex; min-height: 42px; margin-top: 8px; padding: 9px 12px; background: var(--nav-surface); }
+  #admin-shell.nav-open .admin-nav .workspace-link { display: flex; min-height: 42px; margin-top: 8px; padding: 9px 12px; background: var(--nav-surface); }
   .admin-main { width: 100%; margin-left: 0; padding: 28px var(--margin) 38px; }
   #admin-shell.sidebar-collapsed .admin-nav { width: 100%; padding: 12px 16px; }
   #admin-shell.sidebar-collapsed .admin-main { width: 100%; margin-left: 0; }

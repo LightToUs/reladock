@@ -32,6 +32,12 @@ export function bindConsoleNavigation({
   const views = new Set(pagePanes.map(pane => pane.dataset.pane));
   const itemListeners = new Map();
   let currentView = '';
+  for (const item of menuItems) {
+    if (!item.getAttribute('aria-label')) {
+      const label = item.textContent?.trim();
+      if (label) item.setAttribute('aria-label', label);
+    }
+  }
 
   function focusTitle() {
     if (!title) return;
@@ -43,6 +49,7 @@ export function bindConsoleNavigation({
   function setMobileOpen(open) {
     root.classList.toggle('nav-open', open);
     mobileToggle?.setAttribute('aria-expanded', String(open));
+    if (open) (menuItems.find(item => item.dataset.view === currentView) || menuItems[0])?.focus();
   }
 
   function closeMobile({ focus = 'none' } = {}) {
