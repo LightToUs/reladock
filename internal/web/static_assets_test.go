@@ -82,7 +82,7 @@ func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 
 func TestEnterpriseRuleEditorModuleIsServedOverHTTP(t *testing.T) {
 	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
-	for _, path := range []string{"/rule-editor.js", "/telemetry.js"} {
+	for _, path := range []string{"/rule-editor.js", "/telemetry.js", "/node-monitoring.js"} {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001"+path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
