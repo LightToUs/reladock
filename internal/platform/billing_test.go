@@ -279,6 +279,191 @@ func TestBillingUsageReplayEpochOwnershipAndRuleIsolation(t *testing.T) {
 	}
 }
 
+func TestRuleTelemetrySummariesAreTenantScopedAndTruthful(t *testing.T) {
+	s := billingTestStore(t)
+	ctx := context.Background()
+	who, _ := register(t, s, "telemetry@example.com")
+	other, _ := register(t, s, "telemetry-other@example.com")
+	input := ruleInput("tcp")
+	input.BandwidthMbps = 100
+	rule, err := s.CreateRule(ctx, who, "telemetry-rule", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := s.CreateRule(ctx, who, "telemetry-empty", ruleInput("udp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-epoch',2,625100,312700)`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes,received_at) VALUES
+		($1,$2,'hk-01','telemetry-epoch',1,100,200,100,200,statement_timestamp()-interval '10 seconds'),
+		($1,$2,'hk-01','telemetry-epoch',2,625100,312700,625000,312500,statement_timestamp()-interval '5 seconds')`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_totals(rule_id,tenant_id,node_id,active_epoch,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-epoch',625100,312700)`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := s.RuleTelemetry(ctx, who)
+	if err != nil || len(items) != 2 {
+		t.Fatalf("telemetry items: %+v %v", items, err)
+	}
+	byID := map[string]RuleTelemetry{}
+	for _, item := range items {
+		byID[item.RuleID] = item
+	}
+	got := byID[rule.ID]
+	if !got.HasReports || got.UploadBytes != 625100 || got.DownloadBytes != 312700 || got.TotalBytes != 937800 || got.RateState != "fresh" {
+		t.Fatalf("fresh totals: %+v", got)
+	}
+	if got.UploadBytesPerSecond == nil || *got.UploadBytesPerSecond != 125000 || got.DownloadBytesPerSecond == nil || *got.DownloadBytesPerSecond != 62500 || got.TotalBytesPerSecond == nil || *got.TotalBytesPerSecond != 187500 {
+		t.Fatalf("fresh rates: %+v", got)
+	}
+	if got.UtilizationBasisPoints == nil || *got.UtilizationBasisPoints != 150 || got.RateWindowSeconds == nil || *got.RateWindowSeconds != 5 {
+		t.Fatalf("fresh utilization: %+v", got)
+	}
+	if value := byID[empty.ID]; value.HasReports || value.RateState != "insufficient" || value.TotalBytesPerSecond != nil || value.UtilizationBasisPoints != nil {
+		t.Fatalf("empty telemetry invented data: %+v", value)
+	}
+	if foreign, err := s.RuleTelemetry(ctx, other); err != nil || len(foreign) != 0 {
+		t.Fatalf("foreign telemetry leaked: %+v %v", foreign, err)
+	}
+
+	staleRule, err := s.CreateRule(ctx, who, "telemetry-stale", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-stale-epoch',2,2,2)`, staleRule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes,received_at) VALUES
+		($1,$2,'hk-01','telemetry-stale-epoch',1,1,1,1,1,statement_timestamp()-interval '36 seconds'),
+		($1,$2,'hk-01','telemetry-stale-epoch',2,2,2,1,1,statement_timestamp()-interval '31 seconds')`, staleRule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_totals(rule_id,tenant_id,node_id,active_epoch,upload_bytes,download_bytes,updated_at) VALUES($1,$2,'hk-01','telemetry-stale-epoch',2,2,clock_timestamp()-interval '31 seconds')`, staleRule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	items, err = s.RuleTelemetry(ctx, who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID = map[string]RuleTelemetry{}
+	for _, item := range items {
+		byID[item.RuleID] = item
+	}
+	if stale := byID[staleRule.ID]; stale.RateState != "stale" || stale.TotalBytesPerSecond != nil || stale.UtilizationBasisPoints != nil {
+		t.Fatalf("stale telemetry presented as current: %+v", stale)
+	}
+
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-new-epoch',1,1,2)`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes) VALUES($1,$2,'hk-01','telemetry-new-epoch',1,1,2,1,2)`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE billing_usage_totals SET active_epoch='telemetry-new-epoch',upload_bytes=upload_bytes+1,download_bytes=download_bytes+2,updated_at=clock_timestamp() WHERE rule_id=$1`, rule.ID); err != nil {
+		t.Fatal(err)
+	}
+	items, err = s.RuleTelemetry(ctx, who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.RuleID == rule.ID && (item.RateState != "insufficient" || item.TotalBytesPerSecond != nil) {
+			t.Fatalf("cross-epoch rate invented: %+v", item)
+		}
+	}
+}
+
+func TestRuleTelemetryRateArithmeticDoesNotOverflow(t *testing.T) {
+	s := billingTestStore(t)
+	ctx := context.Background()
+	who, _ := register(t, s, "telemetry-overflow@example.com")
+	input := ruleInput("tcp")
+	input.BandwidthMbps = 1
+	rule, err := s.CreateRule(ctx, who, "telemetry-overflow", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-max',2,$3,0)`, rule.ID, who.TenantID, int64(math.MaxInt64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes,received_at) VALUES
+		($1,$2,'hk-01','telemetry-max',1,0,0,0,0,statement_timestamp()-interval '2 seconds'),
+		($1,$2,'hk-01','telemetry-max',2,$3,0,$3,0,statement_timestamp()-interval '1 second')`, rule.ID, who.TenantID, int64(math.MaxInt64)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_totals(rule_id,tenant_id,node_id,active_epoch,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-max',$3,0)`, rule.ID, who.TenantID, int64(math.MaxInt64)); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.RuleTelemetry(ctx, who)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("overflow telemetry: %+v %v", items, err)
+	}
+	got := items[0]
+	if got.TotalBytesPerSecond == nil || got.UtilizationBasisPoints == nil {
+		t.Fatalf("overflow was not safely saturated: %+v", got)
+	}
+	if *got.TotalBytesPerSecond != math.MaxInt64 || *got.UtilizationBasisPoints <= 0 || *got.UtilizationBasisPoints > math.MaxInt64 {
+		t.Fatalf("overflow values: rate=%d utilization=%d", *got.TotalBytesPerSecond, *got.UtilizationBasisPoints)
+	}
+}
+
+func TestRuleTelemetryHistoryUsesSparseReceiveTimeBuckets(t *testing.T) {
+	s := billingTestStore(t)
+	ctx := context.Background()
+	who, _ := register(t, s, "telemetry-history@example.com")
+	other, _ := register(t, s, "telemetry-history-other@example.com")
+	rule, err := s.CreateRule(ctx, who, "telemetry-history", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_epochs(rule_id,tenant_id,node_id,epoch,last_sequence,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-history-epoch',3,160,230)`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_reports(rule_id,tenant_id,node_id,epoch,sequence,upload_bytes,download_bytes,upload_delta_bytes,download_delta_bytes,received_at) VALUES
+		($1,$2,'hk-01','telemetry-history-epoch',1,100,200,100,200,clock_timestamp()-interval '50 minutes'),
+		($1,$2,'hk-01','telemetry-history-epoch',2,150,225,50,25,clock_timestamp()-interval '10 minutes'),
+		($1,$2,'hk-01','telemetry-history-epoch',3,160,230,10,5,clock_timestamp()-interval '8 days')`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO billing_usage_totals(rule_id,tenant_id,node_id,active_epoch,upload_bytes,download_bytes) VALUES($1,$2,'hk-01','telemetry-history-epoch',160,230)`, rule.ID, who.TenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	series, err := s.RuleTelemetryHistory(ctx, who, rule.ID, "1h")
+	if err != nil || series.Window != "1h" || series.BucketSeconds != 60 || len(series.Points) != 2 {
+		t.Fatalf("1h series: %+v %v", series, err)
+	}
+	var upload, download int64
+	for _, point := range series.Points {
+		upload += point.UploadBytes
+		download += point.DownloadBytes
+	}
+	if upload != 150 || download != 225 {
+		t.Fatalf("bucket deltas changed: %+v", series.Points)
+	}
+	for _, tc := range []struct {
+		window string
+		bucket int64
+		points int
+	}{{"24h", 900, 2}, {"7d", 7200, 1}} {
+		value, e := s.RuleTelemetryHistory(ctx, who, rule.ID, tc.window)
+		if e != nil || value.BucketSeconds != tc.bucket || len(value.Points) != tc.points {
+			t.Fatalf("%s series: %+v %v", tc.window, value, e)
+		}
+	}
+	if _, err = s.RuleTelemetryHistory(ctx, other, rule.ID, "1h"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign history: %v", err)
+	}
+	if _, err = s.RuleTelemetryHistory(ctx, who, rule.ID, "30d"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("bad window: %v", err)
+	}
+}
+
 func TestBillingUsageBoundsAndAtomicRollback(t *testing.T) {
 	s := billingTestStore(t)
 	ctx := context.Background()

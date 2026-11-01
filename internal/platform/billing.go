@@ -164,6 +164,36 @@ type RuleUsage struct {
 	LastReportedAt *time.Time `json:"lastReportedAt"`
 }
 
+type RuleTelemetry struct {
+	RuleID                 string     `json:"ruleId"`
+	BandwidthMbps          int        `json:"bandwidthMbps"`
+	UploadBytes            int64      `json:"uploadBytes"`
+	DownloadBytes          int64      `json:"downloadBytes"`
+	TotalBytes             int64      `json:"totalBytes"`
+	HasReports             bool       `json:"hasReports"`
+	LastReportedAt         *time.Time `json:"lastReportedAt"`
+	RateState              string     `json:"rateState"`
+	UploadBytesPerSecond   *int64     `json:"uploadBytesPerSecond"`
+	DownloadBytesPerSecond *int64     `json:"downloadBytesPerSecond"`
+	TotalBytesPerSecond    *int64     `json:"totalBytesPerSecond"`
+	UtilizationBasisPoints *int64     `json:"utilizationBasisPoints"`
+	RateWindowSeconds      *int64     `json:"rateWindowSeconds"`
+}
+
+type UsagePoint struct {
+	StartedAt     time.Time `json:"startedAt"`
+	UploadBytes   int64     `json:"uploadBytes"`
+	DownloadBytes int64     `json:"downloadBytes"`
+	TotalBytes    int64     `json:"totalBytes"`
+}
+
+type RuleTelemetrySeries struct {
+	Summary       RuleTelemetry `json:"summary"`
+	Window        string        `json:"window"`
+	BucketSeconds int64         `json:"bucketSeconds"`
+	Points        []UsagePoint  `json:"points"`
+}
+
 // ReportUsage atomically records a cumulative report and its deltas. It does not
 // infer prices, quota, payment, health, deployment or charge a wallet. Soft-deleted
 // rules still accept buffered reports from their owning node. First report in a
@@ -439,4 +469,153 @@ func (s *Store) RuleUsage(ctx context.Context, who Identity, ruleID string) (Rul
 	}
 	result.TotalBytes = result.UploadBytes + result.DownloadBytes
 	return result, nil
+}
+
+const telemetryFreshAfter = 30 * time.Second
+
+type telemetryWindow struct {
+	duration time.Duration
+	bucket   int64
+}
+
+var telemetryWindows = map[string]telemetryWindow{
+	"1h":  {duration: time.Hour, bucket: 60},
+	"24h": {duration: 24 * time.Hour, bucket: 15 * 60},
+	"7d":  {duration: 7 * 24 * time.Hour, bucket: 2 * 60 * 60},
+}
+
+func telemetryRounded(value float64) int64 {
+	if value >= float64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	if value <= 0 {
+		return 0
+	}
+	return int64(math.Round(value))
+}
+
+func applyTelemetryRate(value *RuleTelemetry, latest, previous time.Time, uploadDelta, downloadDelta int64, now time.Time) {
+	value.RateState = "insufficient"
+	age := now.Sub(latest)
+	if age > telemetryFreshAfter {
+		value.RateState = "stale"
+		return
+	}
+	interval := latest.Sub(previous)
+	if age < 0 || interval < time.Second || interval > time.Minute {
+		return
+	}
+	seconds := interval.Seconds()
+	upload := telemetryRounded(float64(uploadDelta) / seconds)
+	download := telemetryRounded(float64(downloadDelta) / seconds)
+	total := telemetryRounded(float64(uploadDelta+downloadDelta) / seconds)
+	window := int64(math.Round(seconds))
+	utilization := telemetryRounded(float64(total) * 8 * 10000 / (float64(value.BandwidthMbps) * 1_000_000))
+	value.RateState = "fresh"
+	value.UploadBytesPerSecond = &upload
+	value.DownloadBytesPerSecond = &download
+	value.TotalBytesPerSecond = &total
+	value.UtilizationBasisPoints = &utilization
+	value.RateWindowSeconds = &window
+}
+
+func ruleTelemetryRows(ctx context.Context, tx pgx.Tx, tenantID, ruleID string) ([]RuleTelemetry, error) {
+	rows, err := tx.Query(ctx, `SELECT r.id::text,r.bandwidth_mbps,
+	COALESCE(t.upload_bytes,0),COALESCE(t.download_bytes,0),t.rule_id IS NOT NULL,t.updated_at,
+	l.upload_delta_bytes,l.download_delta_bytes,l.received_at,p.received_at
+	FROM relay_rules r
+	LEFT JOIN billing_usage_totals t ON t.rule_id=r.id AND t.tenant_id=r.tenant_id
+	LEFT JOIN LATERAL (
+	 SELECT epoch,sequence,upload_delta_bytes,download_delta_bytes,received_at
+	 FROM billing_usage_reports
+	 WHERE rule_id=r.id AND tenant_id=r.tenant_id
+	 ORDER BY received_at DESC,epoch DESC,sequence DESC LIMIT 1
+	) l ON true
+	LEFT JOIN LATERAL (
+	 SELECT received_at
+	 FROM billing_usage_reports
+	 WHERE rule_id=r.id AND tenant_id=r.tenant_id AND epoch=l.epoch AND sequence<l.sequence
+	 ORDER BY sequence DESC LIMIT 1
+	) p ON true
+	WHERE r.tenant_id=$1 AND r.status<>'deleted' AND ($2='' OR r.id::text=$2)
+	ORDER BY r.created_at,r.id`, tenantID, ruleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []RuleTelemetry{}
+	now := time.Now().UTC()
+	for rows.Next() {
+		value := RuleTelemetry{RateState: "insufficient"}
+		var uploadDelta, downloadDelta *int64
+		var latest, previous *time.Time
+		if err = rows.Scan(&value.RuleID, &value.BandwidthMbps, &value.UploadBytes, &value.DownloadBytes, &value.HasReports, &value.LastReportedAt, &uploadDelta, &downloadDelta, &latest, &previous); err != nil {
+			return nil, err
+		}
+		value.TotalBytes = value.UploadBytes + value.DownloadBytes
+		if latest != nil {
+			value.LastReportedAt = latest
+		}
+		if latest != nil && previous != nil && uploadDelta != nil && downloadDelta != nil {
+			applyTelemetryRate(&value, *latest, *previous, *uploadDelta, *downloadDelta, now)
+		} else if latest != nil && now.Sub(*latest) > telemetryFreshAfter {
+			value.RateState = "stale"
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
+}
+
+// RuleTelemetry returns only this tenant's undeleted rules. Recent rates are
+// bounded receive-time estimates for display, never billing or health facts.
+func (s *Store) RuleTelemetry(ctx context.Context, who Identity) ([]RuleTelemetry, error) {
+	tx, err := s.billingReadTx(ctx, who)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	return ruleTelemetryRows(ctx, tx, who.TenantID, "")
+}
+
+// RuleTelemetryHistory aggregates immutable accepted deltas by platform receive
+// time. Empty buckets are intentionally absent: no report is not evidence of zero
+// traffic or a healthy data plane.
+func (s *Store) RuleTelemetryHistory(ctx context.Context, who Identity, ruleID, window string) (RuleTelemetrySeries, error) {
+	result := RuleTelemetrySeries{Window: window, Points: []UsagePoint{}}
+	selected, ok := telemetryWindows[window]
+	if !ok || !billingUUID.MatchString(ruleID) {
+		return result, ErrInvalid
+	}
+	result.BucketSeconds = selected.bucket
+	tx, err := s.billingReadTx(ctx, who)
+	if err != nil {
+		return result, err
+	}
+	defer tx.Rollback(ctx)
+	items, err := ruleTelemetryRows(ctx, tx, who.TenantID, ruleID)
+	if err != nil {
+		return result, err
+	}
+	if len(items) == 0 {
+		return result, ErrNotFound
+	}
+	result.Summary = items[0]
+	rows, err := tx.Query(ctx, `SELECT date_bin(make_interval(secs => $3),received_at,TIMESTAMPTZ '2000-01-01 00:00:00+00'),
+	SUM(upload_delta_bytes)::bigint,SUM(download_delta_bytes)::bigint
+	FROM billing_usage_reports
+	WHERE tenant_id=$1 AND rule_id=$2 AND received_at>=$4
+	GROUP BY 1 ORDER BY 1`, who.TenantID, ruleID, selected.bucket, time.Now().UTC().Add(-selected.duration))
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var point UsagePoint
+		if err = rows.Scan(&point.StartedAt, &point.UploadBytes, &point.DownloadBytes); err != nil {
+			return result, err
+		}
+		point.TotalBytes = point.UploadBytes + point.DownloadBytes
+		result.Points = append(result.Points, point)
+	}
+	return result, rows.Err()
 }
