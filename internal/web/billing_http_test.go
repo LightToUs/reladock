@@ -110,7 +110,7 @@ func TestBillingHTTPReadOnlyTenantScopeAndUnconnectedPayments(t *testing.T) {
 		}
 		return w
 	}
-	for _, path := range []string{"/api/billing", "/api/billing/wallet", "/api/billing/ledger", "/api/billing/usage?ruleId=" + rule.ID} {
+	for _, path := range []string{"/api/billing", "/api/billing/wallet", "/api/billing/ledger", "/api/billing/usage?ruleId=" + rule.ID, "/api/billing/telemetry", "/api/billing/telemetry?ruleId=" + rule.ID + "&window=1h"} {
 		if w := call("GET", path, a); w.Code != 200 {
 			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
 		}
@@ -128,8 +128,24 @@ func TestBillingHTTPReadOnlyTenantScopeAndUnconnectedPayments(t *testing.T) {
 	if err = json.Unmarshal(w.Body.Bytes(), &usage); err != nil || usage.TotalBytes != 18 || !usage.HasReports {
 		t.Fatalf("usage: %s", w.Body.String())
 	}
+	w = call("GET", "/api/billing/telemetry", a)
+	var telemetry []platform.RuleTelemetry
+	if err = json.Unmarshal(w.Body.Bytes(), &telemetry); err != nil || len(telemetry) != 1 || telemetry[0].RuleID != rule.ID || telemetry[0].TotalBytes != 18 || telemetry[0].RateState != "insufficient" {
+		t.Fatalf("telemetry: %s", w.Body.String())
+	}
+	w = call("GET", "/api/billing/telemetry?ruleId="+rule.ID+"&window=1h", a)
+	var history platform.RuleTelemetrySeries
+	if err = json.Unmarshal(w.Body.Bytes(), &history); err != nil || history.Summary.RuleID != rule.ID || history.Window != "1h" || history.BucketSeconds != 60 || len(history.Points) != 1 || history.Points[0].TotalBytes != 18 {
+		t.Fatalf("telemetry history: %s", w.Body.String())
+	}
 	if w = call("GET", "/api/billing/usage?ruleId="+rule.ID, b); w.Code != 404 {
 		t.Fatalf("foreign usage: %d", w.Code)
+	}
+	if w = call("GET", "/api/billing/telemetry?ruleId="+rule.ID+"&window=1h", b); w.Code != 404 {
+		t.Fatalf("foreign telemetry history: %d", w.Code)
+	}
+	if w = call("GET", "/api/billing/telemetry", b); w.Code != 200 || w.Body.String() != "[]\n" {
+		t.Fatalf("foreign telemetry summary: %d %s", w.Code, w.Body.String())
 	}
 	if w = call("GET", "/api/billing/ledger?ruleId="+rule.ID, b); w.Code != 404 {
 		t.Fatalf("foreign ledger: %d", w.Code)
@@ -138,18 +154,18 @@ func TestBillingHTTPReadOnlyTenantScopeAndUnconnectedPayments(t *testing.T) {
 	if strings.Contains(w.Body.String(), "123") || !strings.Contains(w.Body.String(), `"initialized":false`) {
 		t.Fatalf("foreign wallet: %s", w.Body.String())
 	}
-	for _, path := range []string{"/api/billing", "/api/billing/wallet", "/api/billing/ledger", "/api/billing/usage?ruleId=" + rule.ID} {
+	for _, path := range []string{"/api/billing", "/api/billing/wallet", "/api/billing/ledger", "/api/billing/usage?ruleId=" + rule.ID, "/api/billing/telemetry", "/api/billing/telemetry?ruleId=" + rule.ID + "&window=1h"} {
 		if w = call("GET", path, platform.Identity{}); w.Code != 401 {
 			t.Fatalf("anonymous %s: %d", path, w.Code)
 		}
 	}
-	for _, path := range []string{"/api/billing/wallet", "/api/billing/ledger", "/api/billing/topup", "/api/billing/usage", "/api/billing/payments"} {
+	for _, path := range []string{"/api/billing/wallet", "/api/billing/ledger", "/api/billing/topup", "/api/billing/usage", "/api/billing/telemetry", "/api/billing/payments"} {
 		w = call("POST", path, a)
 		if w.Code != 405 && w.Code != 404 {
 			t.Fatalf("write exposed: %s %d", path, w.Code)
 		}
 	}
-	for _, path := range []string{"/api/billing/usage", "/api/billing/usage?ruleId=bad", "/api/billing/ledger?before=-1", "/api/billing/ledger?before=9223372036854775808", "/api/billing/wallet?tenantId=" + b.TenantID, "/api/billing/usage?ruleId=" + rule.ID + "&ruleId=" + rule.ID} {
+	for _, path := range []string{"/api/billing/usage", "/api/billing/usage?ruleId=bad", "/api/billing/telemetry?ruleId=" + rule.ID, "/api/billing/telemetry?window=1h", "/api/billing/telemetry?ruleId=" + rule.ID + "&window=30d", "/api/billing/telemetry?ruleId=" + rule.ID + "&window=1h&window=24h", "/api/billing/ledger?before=-1", "/api/billing/ledger?before=9223372036854775808", "/api/billing/wallet?tenantId=" + b.TenantID, "/api/billing/usage?ruleId=" + rule.ID + "&ruleId=" + rule.ID} {
 		if w = call("GET", path, a); w.Code != 400 {
 			t.Fatalf("bad query accepted: %s %d", path, w.Code)
 		}
