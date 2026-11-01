@@ -3,6 +3,7 @@ import { createRuleEditor } from './rule-editor.js';
 import { workspaceSummary, ruleStatusPresentation } from './workspace-summary.js';
 import { createLatestRequestGate, loadWorkspaceData, telemetryInteractionState, telemetryPresentation, trendBars, formatBytes } from './telemetry.js';
 import { resourcePresentation } from './node-contact-status.js';
+import { createAdaptivePoller, nodeMonitoringPresentation } from './node-monitoring.js';
 import { bindAccountTools,refreshAccountTools,clearCredential } from './account-tools.js';
 import { bindBusinessTools,refreshBusinessTools } from './business-tools.js';
 import { bindOperations } from './operations-tools.js';
@@ -12,6 +13,7 @@ let identity;
 const ruleDraft = {};
 let telemetryByRule = new Map();
 let telemetrySummariesAvailable = false;
+let nodeMonitoringPoller;
 const telemetryHistoryGate = createLatestRequestGate();
 const ruleEditor = createRuleEditor($('#rule-dialog'), $('#rule-form'), {
   title: $('#rule-dialog-title'), description: $('#rule-dialog-description'), submit: $('#rule-submit'),
@@ -33,7 +35,7 @@ async function api(path, { method = 'GET', body, key } = {}) {
   }
   return data;
 }
-function showAuth() { clearCredential();identity = undefined; ruleDraft.pending = undefined; ruleEditor.close(); $('#startup-error').hidden = true; $('#auth').hidden = false; $('#console').hidden = true; for (const id of ['rules-message','refresh-message','account-tools-message','rule-dialog-status']) $(`#${id}`).textContent = ''; }
+function showAuth() { clearCredential();identity = undefined; nodeMonitoringPoller?.stop(); nodeMonitoringPoller = undefined; ruleDraft.pending = undefined; ruleEditor.close(); $('#startup-error').hidden = true; $('#auth').hidden = false; $('#console').hidden = true; for (const id of ['rules-message','refresh-message','account-tools-message','rule-dialog-status']) $(`#${id}`).textContent = ''; }
 function showStartupFailure(error) { $('#auth').hidden = true; $('#console').hidden = true; $('#startup-error').hidden = false; $('#startup-error-message').textContent = error.message; }
 function setMode(value) {
   mode = value;
@@ -65,6 +67,67 @@ const deliveryStates = { queued: '等待领取', leased: '领取处理中', appl
 function appendTelemetryDetail(target, primary, detail) {
   target.textContent = primary;
   const note = document.createElement('small'); note.className = 'telemetry-detail'; note.textContent = detail; target.append(note);
+}
+
+function appendNodeMetric(target, label, metric) {
+  const item = document.createElement('div'); item.className = `node-metric ${metric.value === null ? 'is-unknown' : ''}`;
+  const heading = document.createElement('span'); heading.textContent = label;
+  const value = document.createElement('strong'); value.textContent = metric.label;
+  const track = document.createElement('i'); const fill = document.createElement('b');
+  if (metric.value !== null) fill.style.width = `${metric.value}%`;
+  track.append(fill); item.append(heading, value, track); target.append(item);
+}
+
+function appendNodeFact(target, primary, detail) {
+  const value = document.createElement('strong'); value.textContent = primary;
+  const note = document.createElement('small'); note.textContent = detail;
+  target.append(value, note);
+}
+
+function renderEnterpriseNodeMonitoring(items, { error = '', refreshedAt = new Date() } = {}) {
+  const message = $('#node-status-message');
+  if (error) {
+    message.className = 'error hint';
+    message.textContent = `节点状态刷新失败：${error}。保留上次成功数据。`;
+    return false;
+  }
+  const root = $('#node-status-rows'); root.replaceChildren();
+  if (!items.length) {
+    const empty = root.insertRow().insertCell(); empty.colSpan = 7; empty.className = 'table-empty'; empty.textContent = '当前企业尚无关联入口节点。';
+  }
+  for (const node of items) {
+    const view = nodeMonitoringPresentation(node, refreshedAt);
+    const row = root.insertRow(); row.dataset.nodeId = node.id;
+    const identityCell = row.insertCell(); appendNodeFact(identityCell, node.name, node.id);
+    const stateCell = row.insertCell();
+    const badge = document.createElement('span'); badge.className = `badge badge-${view.contact.tone}`; badge.textContent = view.contact.label;
+    const plane = document.createElement('small'); plane.textContent = `配置：${view.dataPlane.state}`; plane.title = view.dataPlane.detail; stateCell.append(badge, plane);
+    const rateCell = row.insertCell(); appendNodeFact(rateCell, `↑ ${view.traffic.uploadRate}`, `↓ ${view.traffic.downloadRate}`); rateCell.title = view.traffic.detail;
+    const trafficCell = row.insertCell(); appendNodeFact(trafficCell, `↑ ${view.traffic.uploadTotal}`, `↓ ${view.traffic.downloadTotal}`);
+    const runtimeCell = row.insertCell(); appendNodeFact(runtimeCell, view.agent.runtime, 'Agent 本次进程'); runtimeCell.title = view.agent.detail;
+    const resourceCell = row.insertCell(); resourceCell.className = 'node-resource-metrics';
+    appendNodeMetric(resourceCell, 'CPU', view.resources.cpu); appendNodeMetric(resourceCell, 'RAM', view.resources.memory); appendNodeMetric(resourceCell, '存储', view.resources.disk); appendNodeMetric(resourceCell, '连接跟踪', view.resources.conntrack);
+    const observedCell = row.insertCell(); appendNodeFact(observedCell, `流量 ${view.lastReportedAt}`, `资源 ${view.resources.observedAt}`);
+  }
+  message.className = 'muted hint';
+  message.textContent = `最近刷新：${refreshedAt.toLocaleTimeString()}。失败时保留上次成功值。`;
+  return true;
+}
+
+function startNodeMonitoring() {
+  if (nodeMonitoringPoller) return;
+  nodeMonitoringPoller = createAdaptivePoller({
+    run: async () => {
+      try {
+        const result = await api('/api/operations/nodes?staleAfterSeconds=90');
+        renderEnterpriseNodeMonitoring(result.items || [], { refreshedAt: new Date() });
+      } catch (error) {
+        renderEnterpriseNodeMonitoring([], { error: error.message });
+        throw error;
+      }
+    },
+  });
+  nodeMonitoringPoller.start();
 }
 
 function renderNodeResources(nodes, available = true) {
@@ -234,6 +297,8 @@ async function refresh() {
     }
   }
   renderTelemetryWorkspace(data.rules, telemetry, workspace.operationNodes, workspace);
+  renderEnterpriseNodeMonitoring(workspace.operationNodes, { refreshedAt: new Date() });
+  startNodeMonitoring();
   const telemetryUnavailable = workspace.errors.some(item => item.path === '/api/billing/telemetry');
   $('#telemetry-message').textContent = workspace.errors.map(item => `${item.path.includes('nodes') ? '节点资源' : '流量遥测'}暂不可用：${item.error.message}`).join('；');
   if (telemetryUnavailable) renderTrafficUnavailable();

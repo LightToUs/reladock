@@ -145,6 +145,27 @@ func TestEnterpriseWorkspaceExposesTrafficAndNodeResourceTelemetry(t *testing.T)
 	}
 }
 
+func TestEnterpriseWorkspaceExposesLiveNodeStatus(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := fs.ReadFile(assets.Files, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(app)
+	for _, required := range []string{
+		`href="#node-status-section"`, `id="node-status-section"`, `id="node-status-rows"`, `id="node-status-message"`,
+		"节点状态", "实时速率", "累计流量", "Agent 运行", "连接跟踪", "nodeMonitoringPresentation", "createAdaptivePoller",
+		"/api/operations/nodes?staleAfterSeconds=90", "renderEnterpriseNodeMonitoring",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("enterprise live node status missing %q", required)
+		}
+	}
+}
+
 func TestEnterpriseWorkspaceKeepsRuleTableIDUnique(t *testing.T) {
 	page, err := fs.ReadFile(assets.Files, "index.html")
 	if err != nil {

@@ -25,6 +25,7 @@
     <a class="active" href="#overview">运行概览</a>
     <a href="#rules-section">转发规则</a>
     <a href="#telemetry-section">流量与资源</a>
+    <a href="#node-status-section">节点状态</a>
     <a href="#nodes-section">节点交付</a>
     <a href="#business">套餐账务</a>
     <a href="#team">企业协作</a>
@@ -91,6 +92,12 @@
     <article class="resource-panel"><div class="panel-heading"><div><h3>关联入口节点</h3><p class="muted">仅显示当前企业规则关联节点的最新资源样本。</p></div></div><div id="node-resource-cards" class="node-resource-cards"></div></article>
   </div>
   <p id="telemetry-message" class="error" role="status"></p>
+</section>
+<section id="node-status-section" class="node-status-section">
+  <div class="section-index">Live nodes</div>
+  <div class="section-heading"><div><h2>节点状态</h2><p class="hint muted">仅显示当前企业转发规则关联的入口节点。在线、配置一致和资源正常均不代表端到端转发健康。</p></div></div>
+  <div class="scroll"><table class="node-status-table"><thead><tr><th>入口节点</th><th>联系 / 配置</th><th>实时速率</th><th>累计流量</th><th>Agent 运行</th><th>CPU / RAM / 存储 / 连接跟踪</th><th>样本时间</th></tr></thead><tbody id="node-status-rows"></tbody></table></div>
+  <p id="node-status-message" class="muted hint" role="status" aria-live="polite">等待节点数据。</p>
 </section>
 <section id="nodes-section"><div class="section-index">Delivery</div><h2>节点与配置交付</h2><p class="muted hint">最近联系、配置校验和应用确认均不代表端到端转发健康。节点登记、维护和证书由平台运维管理。</p><div class="scroll"><table><thead><tr><th>节点</th><th>地区</th><th>资源状态</th><th>期望 / 校验 / 应用版本</th><th>交付状态</th><th>最近联系</th></tr></thead><tbody id="nodes"></tbody></table></div><p id="refresh-message" class="muted hint" role="status"></p></section>
 <section><div class="section-index">Activity</div><h2>最近操作</h2><p class="muted hint">显示当前企业最近 50 条账户与规则操作。</p><div class="scroll"><table id="audit"><thead><tr><th>时间</th><th>操作</th><th>资源</th></tr></thead><tbody id="audit-rows"></tbody></table></div></section>
