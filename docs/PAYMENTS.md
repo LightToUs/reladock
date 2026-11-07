@@ -1,9 +1,12 @@
 # Optional Stripe payment connector
 
 Status: optional integration verified with deterministic provider substitutes and
-real local PostgreSQL tests. No Stripe merchant account, live payment, production
-domain, public webhook, or deployment has been activated. Configuration enables
-the connector; it does not prove merchant onboarding or payment acceptance.
+real local PostgreSQL tests. On 2026-11-06 the production control service was
+explicitly connected to the Stripe sandbox with a test secret key and a public
+test webhook at `https://console.reladock.com/api/payments/stripe/webhook`.
+No live key, live payment, signed end-to-end checkout/webhook credit, or real
+money movement has been activated or accepted. Configuration enables the test
+connector; it does not prove live merchant onboarding or payment acceptance.
 Browser success/cancel redirects never credit a wallet.
 
 ## Parent integration contract
@@ -55,20 +58,46 @@ owns migration registration, server/options/main changes, status/UI integration.
    Parent UI should retain truthful pending/needs-review status and never infer
    wallet credit from the redirect or the checkout response.
 
+The enterprise package flow may present this connector as an alternative funding
+method after package confirmation, but it remains a wallet top-up. The checkout
+amount must equal the selected immutable package price, retries for the same
+selection must keep one tenant-scoped idempotency key across redirect/reload and
+selection changes, and the UI must require a verified webhook credit before the
+customer can complete the existing balance purchase. Browser pending state must
+not cross a logout or tenant boundary, and stale responses after leaving checkout
+must not redirect. Redirect success never creates a subscription period.
+
 Environment variables (no defaults, no supplied credentials):
 
 | Variable | Requirement |
 | --- | --- |
 | `STRIPE_SECRET_KEY` | Server-only `sk_test_` or `sk_live_` credential |
 | `STRIPE_WEBHOOK_SECRET` | Matching endpoint `whsec_` signing secret |
-| `STRIPE_SUCCESS_URL` | Server-configured absolute HTTPS return URL |
-| `STRIPE_CANCEL_URL` | Server-configured absolute HTTPS cancel URL |
+| `STRIPE_SUCCESS_URL` | Server-configured absolute HTTPS return URL; URL fragments are rejected |
+| `STRIPE_CANCEL_URL` | Server-configured absolute HTTPS cancel URL; URL fragments are rejected |
 
 Test and live webhooks must use their matching endpoint secret. Signed events
 whose `livemode` differs from the provider key are rejected with 400. Connect
 events with nonempty `event.account` are rejected with 400; this connector has no
 Connect support. The server never accepts a Stripe API host or redirect URL from
 the customer. Keys are not returned to the browser and no publishable key is used.
+
+### Local development webhook tunnel
+
+The current local development endpoint is
+`https://stripe-dev.figcra.ai/api/payments/stripe/webhook`. Cloudflare Tunnel runs
+on the Hong Kong control server rather than the developer Mac because the Mac's
+Pokin VPN blocks direct tunnel egress on port 7844. A persistent SSH reverse
+forward maps the server loopback port `127.0.0.1:13002` to the local control
+service at `127.0.0.1:3001`. The tunnel ingress matches only the exact webhook
+path and returns 404 for every other path; the remote forward is not publicly
+bound. Local and production Stripe endpoints use different `whsec_` secrets.
+
+This arrangement is for sandbox development only. A 400 response to an unsigned
+request proves that the connector is enabled and rejecting a forged signature;
+it does not prove that a signed Stripe event was delivered or credited. Keep the
+local app and SSH launch agent running, and do not interpret the redirect page,
+tunnel connectivity, or an unsigned probe as wallet credit or package activation.
 
 ## Checkout and order behavior
 

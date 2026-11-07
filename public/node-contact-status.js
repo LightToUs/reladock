@@ -15,6 +15,7 @@ export function certificatePresentation(node, now = new Date()) {
   if (expires && !Number.isNaN(expires.valueOf()) && expires <= now && node.rotationState === 'error') return { label: '已过期 · 轮换失败', tone: 'offline', detail: `${expiryDetail}；错误代码 ${node.rotationErrorCode || 'unknown'}` };
   if (node.rotationState === 'error') return { label: '轮换失败', tone: 'offline', detail: `${expiryDetail}；错误代码 ${node.rotationErrorCode || 'unknown'}` };
   if (node.rotationState === 'pending') return { label: '轮换中', tone: 'pending', detail: `${expiryDetail}；等待激活确认` };
+  if (node.certificateRotationRequested) return { label: '等待证书更换', tone: 'pending', detail: `${expiryDetail}；更换请求已提交，等待 Agent 激活新证书` };
   if (!expires || Number.isNaN(expires.valueOf())) return { label: '已绑定 · 有效期未知', tone: 'unknown', detail: expiryDetail };
   if (expires <= now) return { label: '已过期', tone: 'offline', detail: expiryDetail };
   if (expires.valueOf() - now.valueOf() <= 7 * 86400000) return { label: '即将到期', tone: 'pending', detail: expiryDetail };

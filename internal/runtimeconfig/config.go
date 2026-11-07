@@ -16,10 +16,17 @@ type Config struct {
 	AgentAddress, AgentTLSDir          string
 	MetricsAddress                     string
 	Bootstrap                          BootstrapConfig
+	ManagedPKIDir                      string
 }
 
 func Load(get func(string) string) (Config, error) {
+	var managedErr error
+	get, managedErr = managedEnrollmentEnv(get)
+	if managedErr != nil {
+		return Config{}, managedErr
+	}
 	c := Config{Address: get("LISTEN_ADDRESS"), Origin: get("PUBLIC_ORIGIN"), CertFile: get("TLS_CERT_FILE"), KeyFile: get("TLS_KEY_FILE"), AgentAddress: get("AGENT_LISTEN_ADDRESS"), AgentTLSDir: get("AGENT_TLS_DIR"), MetricsAddress: get("METRICS_LISTEN_ADDRESS")}
+	c.ManagedPKIDir = get("NODE_MANAGED_PKI_DIR")
 	allowUnentitled, err := LoadDevelopmentEntitlementBypass(get)
 	if err != nil {
 		return c, err

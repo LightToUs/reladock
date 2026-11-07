@@ -30,7 +30,406 @@ func subscriptionTestStore(t *testing.T) *Store {
 }
 
 func configuredPlan() PlanInput {
-	return PlanInput{Code: "small-rule", Version: 1, Name: "Configured rule plan", PriceCents: 50, QuotaBytes: 100, BandwidthMbps: 100, PeriodSeconds: 3600}
+	return PlanInput{Code: "small-rule", Version: 1, Name: "Configured rule plan", PriceCents: 50, QuotaBytes: 100, BandwidthMbps: 100, PeriodSeconds: 3600, ResourceMode: ResourceModeShared}
+}
+
+func TestAdminCreatePlanAcceptsNumericCodeAndAssignsVersion(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	offering := publishedOffering(t, s, admin, "auto-numeric-version", "hk-01")
+	input := configuredPlan()
+	input.OfferingID = offering.ID
+	input.Code = "001"
+	input.Version = 0
+	input.PriceCents = 10000
+
+	created, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Code != "001" || created.Version != 1 || created.PriceCents != 10000 {
+		t.Fatalf("created plan = %+v", created)
+	}
+}
+
+func TestAdminCreatePlanNormalizesCodeBeforeAutomaticVersioning(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	offering := publishedOffering(t, s, admin, "auto-normalized-version", "hk-01")
+	input := configuredPlan()
+	input.OfferingID = offering.ID
+	input.Code = "  Plan-001  "
+	input.Version = 0
+
+	created, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Code != "plan-001" || created.Version != 1 {
+		t.Fatalf("created plan = %+v", created)
+	}
+}
+
+func TestAdminCreatePlanAutoVersionReplaysLatestAndIncrementsChangedPrice(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	offering := publishedOffering(t, s, admin, "auto-version-replay", "hk-01")
+	input := configuredPlan()
+	input.OfferingID = offering.ID
+	input.Code = "auto-version"
+	input.Version = 0
+
+	first, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil || replay.ID != first.ID || replay.Version != 1 {
+		t.Fatalf("replay = %+v, first = %+v, err = %v", replay, first, err)
+	}
+	input.PriceCents++
+	second, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil || second.ID == first.ID || second.Version != 2 {
+		t.Fatalf("second = %+v, first = %+v, err = %v", second, first, err)
+	}
+}
+
+func TestAdminCreatePlanSerializesConcurrentAutomaticVersions(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	offering := publishedOffering(t, s, admin, "auto-version-concurrent", "hk-01")
+	base := configuredPlan()
+	base.OfferingID = offering.ID
+	base.Code = "concurrent-version"
+	base.Version = 0
+
+	start := make(chan struct{})
+	results := make(chan PlanPriceVersion, 2)
+	errors := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, price := range []int64{100, 200} {
+		wg.Add(1)
+		go func(price int64) {
+			defer wg.Done()
+			<-start
+			input := base
+			input.PriceCents = price
+			plan, err := s.AdminCreatePlan(ctx, admin, input)
+			if err != nil {
+				errors <- err
+				return
+			}
+			results <- plan
+		}(price)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errors)
+	for err := range errors {
+		t.Fatal(err)
+	}
+	versions := map[int64]bool{}
+	for plan := range results {
+		versions[plan.Version] = true
+	}
+	if len(versions) != 2 || !versions[1] || !versions[2] {
+		t.Fatalf("automatic versions = %v, want 1 and 2", versions)
+	}
+}
+
+func TestAdminCreatePlanWaitsForAutomaticVersionCodeLock(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	admin, _ := adminIdentity(t, s)
+	offering := publishedOffering(t, s, admin, "auto-version-lock", "hk-01")
+	input := configuredPlan()
+	input.OfferingID = offering.ID
+	input.Code = "locked-version"
+	input.Version = 0
+
+	control, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Rollback(context.Background())
+	if _, err = control.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "plan-version:"+input.Code); err != nil {
+		t.Fatal(err)
+	}
+	name := "auto-plan-lock-" + newID()
+	blockedStore := namedTestStore(t, s, name)
+	done := make(chan struct {
+		plan PlanPriceVersion
+		err  error
+	}, 1)
+	go func() {
+		plan, createErr := blockedStore.AdminCreatePlan(ctx, admin, input)
+		done <- struct {
+			plan PlanPriceVersion
+			err  error
+		}{plan: plan, err: createErr}
+	}()
+	waitTestLock(t, s, ctx, name)
+	if err = control.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-done:
+		if result.err != nil || result.plan.Version != 1 {
+			t.Fatalf("plan = %+v, err = %v", result.plan, result.err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
+func TestAdminCreatePlanAutomaticVersionAuditFailureRollsBack(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	offering := publishedOffering(t, s, admin, "auto-version-audit", "hk-01")
+	input := configuredPlan()
+	input.OfferingID = offering.ID
+	input.Code = "audit-version"
+	input.Version = 0
+	if _, err := s.pool.Exec(ctx, `CREATE FUNCTION reject_plan_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='plan.create' THEN RAISE EXCEPTION 'reject plan audit'; END IF; RETURN NEW; END; $$; CREATE TRIGGER reject_plan_audit BEFORE INSERT ON platform_audit_logs FOR EACH ROW EXECUTE FUNCTION reject_plan_audit()`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AdminCreatePlan(ctx, admin, input); err == nil {
+		t.Fatal("automatic plan creation succeeded without audit")
+	}
+	var count int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM plan_price_versions WHERE code=$1", input.Code).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("rolled back plan count = %d, err = %v", count, err)
+	}
+	if _, err := s.pool.Exec(ctx, "DROP TRIGGER reject_plan_audit ON platform_audit_logs; DROP FUNCTION reject_plan_audit()"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil || created.Version != 1 {
+		t.Fatalf("plan after audit recovery = %+v, err = %v", created, err)
+	}
+}
+
+func publishedOffering(t *testing.T, s *Store, admin Identity, code, nodeID string) LineOffering {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := s.pool.Exec(ctx, "UPDATE nodes SET status='ready' WHERE id=$1", nodeID); err != nil {
+		t.Fatal(err)
+	}
+	offering, err := s.AdminCreateOffering(ctx, admin, LineOfferingInput{Code: code, Name: code, NodeID: nodeID, SourceMarket: "Source", DestinationMarket: "Destination"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	offering, err = s.AdminSetOfferingState(ctx, admin, offering.ID, OfferingStateInput{ExpectedRevision: offering.Revision, State: OfferingStatePublished})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return offering
+}
+
+func TestPurchasePlanAllowsUnprovisionedNodeWithoutClaimingReady(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	owner, _ := register(t, s, "unprovisioned-sale@example.com")
+	offering, err := s.AdminCreateOffering(ctx, admin, LineOfferingInput{Code: "unprovisioned-sale", Name: "Unprovisioned sale", NodeID: "hk-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE line_offerings SET state='published' WHERE id=$1", offering.ID); err != nil {
+		t.Fatal(err)
+	}
+	input := configuredPlan()
+	input.Code = "unprovisioned-sale"
+	input.OfferingID = offering.ID
+	plan, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := s.CreateRule(ctx, owner, "unprovisioned-sale-rule", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: owner.TenantID, Key: "unprovisioned-sale-funds", AmountCents: 100, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	period, err := s.PurchasePlan(ctx, owner, "unprovisioned-sale-purchase", PurchasePlanInput{RuleID: rule.ID, PriceVersionID: plan.ID})
+	if err != nil || period.Status != "active" || period.EndsAt.Sub(period.StartsAt) != time.Hour {
+		t.Fatalf("purchase period=%+v err=%v", period, err)
+	}
+	var nodeStatus string
+	if err = s.pool.QueryRow(ctx, "SELECT status FROM nodes WHERE id='hk-01'").Scan(&nodeStatus); err != nil || nodeStatus != "unprovisioned" {
+		t.Fatalf("node status=%q err=%v", nodeStatus, err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE nodes SET status='maintenance' WHERE id='hk-01'"); err != nil {
+		t.Fatal(err)
+	}
+	replay, err := s.PurchasePlan(ctx, owner, "unprovisioned-sale-purchase", PurchasePlanInput{RuleID: rule.ID, PriceVersionID: plan.ID})
+	if err != nil || replay.ID != period.ID {
+		t.Fatalf("idempotent replay after maintenance=%+v err=%v", replay, err)
+	}
+	var balance int64
+	if err = s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", owner.TenantID).Scan(&balance); err != nil || balance != 50 {
+		t.Fatalf("balance=%d err=%v", balance, err)
+	}
+}
+
+func TestPlanCatalogAndPurchaseRejectUnavailableNodeStatuses(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	owner, _ := register(t, s, "unavailable-node-sale@example.com")
+	offering, err := s.AdminCreateOffering(ctx, admin, LineOfferingInput{Code: "unavailable-node-sale", Name: "Unavailable node sale", NodeID: "hk-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	offering, err = s.AdminSetOfferingState(ctx, admin, offering.ID, OfferingStateInput{ExpectedRevision: offering.Revision, State: OfferingStatePublished})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := configuredPlan()
+	input.Code = "unavailable-node-sale"
+	input.OfferingID = offering.ID
+	plan, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := s.CreateRule(ctx, owner, "unavailable-node-sale-rule", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: owner.TenantID, Key: "unavailable-node-sale-funds", AmountCents: 500, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"maintenance", "draining", "retired"} {
+		t.Run(status, func(t *testing.T) {
+			if _, updateErr := s.pool.Exec(ctx, "UPDATE nodes SET status=$1 WHERE id='hk-01'", status); updateErr != nil {
+				t.Fatal(updateErr)
+			}
+			catalog, listErr := s.ListPlans(ctx, owner, rule.ID, 1)
+			if listErr != nil || catalog.Total != 0 || len(catalog.Items) != 0 {
+				t.Fatalf("catalog for %s node=%+v err=%v", status, catalog, listErr)
+			}
+			if _, purchaseErr := s.PurchasePlan(ctx, owner, "unavailable-node-"+status, PurchasePlanInput{RuleID: rule.ID, PriceVersionID: plan.ID}); !errors.Is(purchaseErr, ErrNodeNotAllocatable) {
+				t.Fatalf("purchase for %s node: %v", status, purchaseErr)
+			}
+			var balance, periods int64
+			if queryErr := s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", owner.TenantID).Scan(&balance); queryErr != nil {
+				t.Fatal(queryErr)
+			}
+			if queryErr := s.pool.QueryRow(ctx, "SELECT count(*) FROM rule_subscriptions WHERE tenant_id=$1", owner.TenantID).Scan(&periods); queryErr != nil {
+				t.Fatal(queryErr)
+			}
+			if balance != 500 || periods != 0 {
+				t.Fatalf("%s failed purchase mutated balance=%d periods=%d", status, balance, periods)
+			}
+		})
+	}
+}
+
+func TestPlanOfferingBindsCatalogAndPurchaseToExactNode(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	owner, _ := register(t, s, "offering-catalog@example.com")
+	if err := s.AdminAddNode(ctx, admin, NodeInput{ID: "sg-catalog", Name: "Singapore", Region: "Singapore", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeShared}); err != nil {
+		t.Fatal(err)
+	}
+	hkOffering := publishedOffering(t, s, admin, "hk-catalog", "hk-01")
+	sgOffering := publishedOffering(t, s, admin, "sg-catalog", "sg-catalog")
+	hkRule, err := s.CreateRule(ctx, owner, "offering-hk-rule", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sgInput := ruleInput("udp")
+	sgInput.NodeID = "sg-catalog"
+	if _, err = s.CreateRule(ctx, owner, "offering-sg-rule", sgInput); err != nil {
+		t.Fatal(err)
+	}
+
+	hkInput := configuredPlan()
+	hkInput.Code = "hk-bound"
+	hkInput.OfferingID = hkOffering.ID
+	hkPlan, err := s.AdminCreatePlan(ctx, admin, hkInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hkPlan.Offering == nil || hkPlan.Offering.ID != hkOffering.ID || hkPlan.Offering.NodeID != "hk-01" || hkPlan.ResourceMode != ResourceModeShared {
+		t.Fatalf("bound plan: %+v", hkPlan)
+	}
+	sgPlanInput := configuredPlan()
+	sgPlanInput.Code = "sg-bound"
+	sgPlanInput.OfferingID = sgOffering.ID
+	sgPlan, err := s.AdminCreatePlan(ctx, admin, sgPlanInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdminCreatePlan(ctx, admin, configuredPlan()); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unbound plan accepted: %v", err)
+	}
+
+	hkPlans, err := s.ListPlans(ctx, owner, hkRule.ID, 1)
+	if err != nil || hkPlans.Total != 1 || len(hkPlans.Items) != 1 || hkPlans.Items[0].ID != hkPlan.ID {
+		t.Fatalf("Hong Kong catalog: %+v %v", hkPlans, err)
+	}
+	if _, err = s.pool.Exec(ctx, `INSERT INTO plan_price_versions(id,code,version,name,price_cents,quota_bytes,bandwidth_mbps,period_seconds,resource_mode) VALUES($1,'legacy-unbound',1,'Legacy',1,1,1,60,'shared')`, newID()); err != nil {
+		t.Fatal(err)
+	}
+	adminPlans, err := s.AdminPlans(ctx, admin, 1)
+	if err != nil || adminPlans.Total != 3 {
+		t.Fatalf("admin plans: %+v %v", adminPlans, err)
+	}
+	legacyFound := false
+	for _, plan := range adminPlans.Items {
+		if plan.Code == "legacy-unbound" {
+			legacyFound = plan.Offering == nil
+		}
+	}
+	if !legacyFound {
+		t.Fatal("legacy unbound plan was not retained for administrators")
+	}
+
+	if _, err = s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: owner.TenantID, Key: "offering-wallet-fund", AmountCents: 500, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	var balanceBefore, ledgerBefore, periodsBefore, outboxBefore int64
+	if err = s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", owner.TenantID).Scan(&balanceBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT count(*) FROM billing_ledger WHERE tenant_id=$1", owner.TenantID).Scan(&ledgerBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT count(*) FROM rule_subscriptions WHERE tenant_id=$1", owner.TenantID).Scan(&periodsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT count(*) FROM config_outbox").Scan(&outboxBefore); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PurchasePlan(ctx, owner, "wrong-node-plan", PurchasePlanInput{RuleID: hkRule.ID, PriceVersionID: sgPlan.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("other-node plan purchase: %v", err)
+	}
+	var balanceAfter, ledgerAfter, periodsAfter, outboxAfter int64
+	if err = s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", owner.TenantID).Scan(&balanceAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT count(*) FROM billing_ledger WHERE tenant_id=$1", owner.TenantID).Scan(&ledgerAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT count(*) FROM rule_subscriptions WHERE tenant_id=$1", owner.TenantID).Scan(&periodsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT count(*) FROM config_outbox").Scan(&outboxAfter); err != nil {
+		t.Fatal(err)
+	}
+	if balanceAfter != balanceBefore || ledgerAfter != ledgerBefore || periodsAfter != periodsBefore || outboxAfter != outboxBefore {
+		t.Fatalf("failed purchase mutated state balance %d/%d ledger %d/%d periods %d/%d outbox %d/%d", balanceBefore, balanceAfter, ledgerBefore, ledgerAfter, periodsBefore, periodsAfter, outboxBefore, outboxAfter)
+	}
 }
 
 func subscriptionFixture(t *testing.T) (*Store, Identity, Identity, Rule, PlanPriceVersion) {
@@ -42,11 +441,141 @@ func subscriptionFixture(t *testing.T) (*Store, Identity, Identity, Rule, PlanPr
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := s.AdminCreatePlan(context.Background(), admin, configuredPlan())
+	offering := publishedOffering(t, s, admin, "fixture-hk", "hk-01")
+	input := configuredPlan()
+	input.OfferingID = offering.ID
+	plan, err := s.AdminCreatePlan(context.Background(), admin, input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s, admin, customer, rule, plan
+}
+
+func TestPurchasePlanCanCreateUnboundEntitlementForLaterRuleCreation(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	owner, _ := register(t, s, "package-first@example.com")
+	offering := publishedOffering(t, s, admin, "package-first-line", "hk-01")
+	input := configuredPlan()
+	input.OfferingID = offering.ID
+	plan, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: owner.TenantID, Key: "package-first-funds", AmountCents: 500, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	period, err := s.PurchasePlan(ctx, owner, "package-first-purchase", PurchasePlanInput{PriceVersionID: plan.ID})
+	if err != nil || period.RuleID != "" {
+		t.Fatalf("unbound purchase = %+v err=%v", period, err)
+	}
+	rule, err := s.CreateRule(ctx, owner, "package-first-rule", RuleInput{
+		Name: "套餐先行规则", Protocol: "tcp", TargetHost: "192.0.2.10", TargetPort: 443,
+		BandwidthMbps: plan.BandwidthMbps, NodeID: offering.NodeID, SubscriptionID: period.ID,
+	})
+	if err != nil {
+		t.Fatalf("create from package: %v", err)
+	}
+	if rule.NodeID != offering.NodeID || rule.BandwidthMbps != plan.BandwidthMbps {
+		t.Fatalf("rule did not inherit package: %+v", rule)
+	}
+	bound, err := s.RuleSubscriptions(ctx, owner, rule.ID, 0)
+	if err != nil || len(bound) != 1 || bound[0].ID != period.ID || bound[0].RuleID != rule.ID {
+		t.Fatalf("bound periods = %+v err=%v", bound, err)
+	}
+	ruleB, err := s.CreateRule(ctx, owner, "package-first-rule-b", RuleInput{
+		Name: "套餐共享规则", Protocol: "tcp", TargetHost: "192.0.2.11", TargetPort: 443,
+		BandwidthMbps: plan.BandwidthMbps, NodeID: offering.NodeID, SubscriptionID: period.ID,
+	})
+	if err != nil {
+		t.Fatalf("create second rule from shared package: %v", err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE subscription_usage SET upload_bytes=60 WHERE subscription_id=$1 AND rule_id=$2", period.ID, rule.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE subscription_usage SET upload_bytes=50 WHERE subscription_id=$1 AND rule_id=$2", period.ID, ruleB.ID); err != nil {
+		t.Fatal(err)
+	}
+	shared, err := s.RuleSubscriptions(ctx, owner, ruleB.ID, 0)
+	if err != nil || len(shared) != 1 || shared[0].UsedBytes != 110 || shared[0].RemainingBytes != 0 || shared[0].Status != "quota-exhausted" {
+		t.Fatalf("shared package aggregate = %+v err=%v", shared, err)
+	}
+}
+
+func TestPurchaseWaitsForConcurrentOfferingPauseBeforeWalletDebit(t *testing.T) {
+	s, _, owner, rule, plan := subscriptionFixture(t)
+	ctx := context.Background()
+	if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: owner.TenantID, Key: "pause-race-funds", AmountCents: 500, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, "UPDATE line_offerings SET state='paused',revision=revision+1 WHERE id=$1", plan.OfferingID); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, purchaseErr := s.PurchasePlan(ctx, owner, "pause-race-purchase", PurchasePlanInput{RuleID: rule.ID, PriceVersionID: plan.ID})
+		result <- purchaseErr
+	}()
+	select {
+	case purchaseErr := <-result:
+		t.Fatalf("purchase did not wait for offering state lock: %v", purchaseErr)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if purchaseErr := <-result; !errors.Is(purchaseErr, ErrConflict) {
+		t.Fatalf("purchase after pause: %v", purchaseErr)
+	}
+	var balance int64
+	if err = s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", owner.TenantID).Scan(&balance); err != nil || balance != 500 {
+		t.Fatalf("balance=%d err=%v", balance, err)
+	}
+}
+
+func TestPurchaseWaitsForConcurrentNodeMaintenanceBeforeWalletDebit(t *testing.T) {
+	s, _, owner, rule, plan := subscriptionFixture(t)
+	ctx := context.Background()
+	if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: owner.TenantID, Key: "maintenance-race-funds", AmountCents: 500, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err = lockNode(ctx, tx, rule.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, "UPDATE nodes SET status='maintenance' WHERE id=$1", rule.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, purchaseErr := s.PurchasePlan(ctx, owner, "maintenance-race-purchase", PurchasePlanInput{RuleID: rule.ID, PriceVersionID: plan.ID})
+		result <- purchaseErr
+	}()
+	select {
+	case purchaseErr := <-result:
+		t.Fatalf("purchase did not wait for node lock: %v", purchaseErr)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if purchaseErr := <-result; !errors.Is(purchaseErr, ErrNodeNotAllocatable) {
+		t.Fatalf("purchase after maintenance: %v", purchaseErr)
+	}
+	var balance int64
+	if err = s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", owner.TenantID).Scan(&balance); err != nil || balance != 500 {
+		t.Fatalf("balance=%d err=%v", balance, err)
+	}
 }
 
 func TestSubscriptionsConfiguredPlanPermissionsAndImmutability(t *testing.T) {
@@ -56,20 +585,22 @@ func TestSubscriptionsConfiguredPlanPermissionsAndImmutability(t *testing.T) {
 	if _, err := s.AdminCreatePlan(ctx, owner, configuredPlan()); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("owner created plan: %v", err)
 	}
-	plans, err := s.ListPlans(ctx, owner, 1)
-	if err != nil || plans.Total != 0 {
-		t.Fatalf("default plans: %+v %v", plans, err)
+	if catalog, err := s.ListPlans(ctx, owner, "", 1); err != nil || catalog.Total != 0 {
+		t.Fatalf("catalog without rule: %+v %v", catalog, err)
 	}
 	admin, _ := adminIdentity(t, s)
-	first, err := s.AdminCreatePlan(ctx, admin, configuredPlan())
+	offering := publishedOffering(t, s, admin, "configured-plans", "hk-01")
+	input := configuredPlan()
+	input.OfferingID = offering.ID
+	first, err := s.AdminCreatePlan(ctx, admin, input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.AdminCreatePlan(ctx, admin, configuredPlan())
+	second, err := s.AdminCreatePlan(ctx, admin, input)
 	if err != nil || first.ID != second.ID {
 		t.Fatalf("create replay: %+v %v", second, err)
 	}
-	changed := configuredPlan()
+	changed := input
 	changed.PriceCents++
 	if _, err = s.AdminCreatePlan(ctx, admin, changed); !errors.Is(err, ErrConflict) {
 		t.Fatalf("changed version accepted: %v", err)
@@ -78,7 +609,7 @@ func TestSubscriptionsConfiguredPlanPermissionsAndImmutability(t *testing.T) {
 	if _, err = s.AdminCreatePlan(ctx, admin, changed); err != nil {
 		t.Fatal(err)
 	}
-	plans, err = s.AdminPlans(ctx, admin, 1)
+	plans, err := s.AdminPlans(ctx, admin, 1)
 	if err != nil || plans.Total != 2 {
 		t.Fatalf("plan versions: %+v %v", plans, err)
 	}
@@ -89,12 +620,145 @@ func TestSubscriptionsConfiguredPlanPermissionsAndImmutability(t *testing.T) {
 	}
 	for _, bad := range []PlanInput{
 		{Code: "invalid"},
-		{Code: "bad", Version: 1, Name: "bad", PriceCents: 1, QuotaBytes: 0, BandwidthMbps: 1, PeriodSeconds: 1},
-		{Code: "bad", Version: 1, Name: "bad", PriceCents: 1, QuotaBytes: 1, BandwidthMbps: 1, PeriodSeconds: 0},
+		{OfferingID: offering.ID, Code: "bad", Version: 1, Name: "bad", PriceCents: 1, QuotaBytes: 0, BandwidthMbps: 1, PeriodSeconds: 1},
+		{OfferingID: offering.ID, Code: "bad", Version: 1, Name: "bad", PriceCents: 1, QuotaBytes: 1, BandwidthMbps: 1, PeriodSeconds: 0},
 	} {
 		if _, err = s.AdminCreatePlan(ctx, admin, bad); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("invalid plan: %v", err)
 		}
+	}
+}
+
+func TestPlanResourceModeValidationReplayAndImmutability(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	offering := publishedOffering(t, s, admin, "mode-shared", "hk-01")
+	input := configuredPlan()
+	input.OfferingID = offering.ID
+	input.ResourceMode = ""
+	created, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil || created.ResourceMode != ResourceModeShared {
+		t.Fatalf("derived shared mode: %+v %v", created, err)
+	}
+	replay := input
+	replay.Code = "mode-replay"
+	created, err = s.AdminCreatePlan(ctx, admin, replay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay.ResourceMode = ResourceModeDedicatedTenant
+	if _, err = s.AdminCreatePlan(ctx, admin, replay); !errors.Is(err, ErrConflict) {
+		t.Fatalf("mode-changing replay: %v", err)
+	}
+	if _, err = s.pool.Exec(ctx, "UPDATE plan_price_versions SET resource_mode='dedicated-rule' WHERE id=$1", created.ID); err == nil {
+		t.Fatal("immutable plan resource mode was updated")
+	}
+	plans, err := s.AdminPlans(ctx, admin, 1)
+	if err != nil || plans.Total != 2 {
+		t.Fatalf("admin catalog: %+v %v", plans, err)
+	}
+	for _, plan := range plans.Items {
+		if plan.ResourceMode == "" {
+			t.Fatalf("catalog omitted mode: %+v", plan)
+		}
+	}
+}
+
+func TestPlanCatalogForRuleFiltersAndAuthorizes(t *testing.T) {
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	owner, _ := register(t, s, "catalog-owner@example.com")
+	other, _ := register(t, s, "catalog-other@example.com")
+	sharedRule, err := s.CreateRule(ctx, owner, "catalog-shared-rule", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := NodeInput{ID: "catalog-tenant", Name: "Catalog tenant", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeDedicatedTenant, DedicatedTenantID: owner.TenantID}
+	if err = s.AdminAddNode(ctx, admin, node); err != nil {
+		t.Fatal(err)
+	}
+	dedicatedInput := ruleInput("udp")
+	dedicatedInput.NodeID = node.ID
+	dedicatedRule, err := s.CreateRule(ctx, owner, "catalog-dedicated-rule", dedicatedInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedOffering := publishedOffering(t, s, admin, "catalog-shared", "hk-01")
+	dedicatedOffering := publishedOffering(t, s, admin, "catalog-tenant", node.ID)
+	for _, item := range []struct {
+		code       string
+		offeringID string
+	}{{"catalog-shared-plan", sharedOffering.ID}, {"catalog-tenant-plan", dedicatedOffering.ID}} {
+		input := configuredPlan()
+		input.Code = item.code
+		input.OfferingID = item.offeringID
+		input.ResourceMode = ""
+		if _, err = s.AdminCreatePlan(ctx, admin, input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shared, err := s.ListPlans(ctx, owner, sharedRule.ID, 1)
+	if err != nil || shared.Total != 1 || shared.Items[0].ResourceMode != ResourceModeShared {
+		t.Fatalf("shared catalog: %+v %v", shared, err)
+	}
+	dedicated, err := s.ListPlans(ctx, owner, dedicatedRule.ID, 1)
+	if err != nil || dedicated.Total != 1 || dedicated.Items[0].ResourceMode != ResourceModeDedicatedTenant {
+		t.Fatalf("dedicated catalog: %+v %v", dedicated, err)
+	}
+	if _, err = s.ListPlans(ctx, other, dedicatedRule.ID, 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign rule catalog: %v", err)
+	}
+}
+
+func TestPurchasePlanResourceModeMismatchIsAtomic(t *testing.T) {
+	s, admin, who, rule, _ := subscriptionFixture(t)
+	ctx := context.Background()
+	if err := s.AdminAddNode(ctx, admin, NodeInput{ID: "forged-dedicated", Name: "Dedicated", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeDedicatedRule, DedicatedTenantID: who.TenantID}); err != nil {
+		t.Fatal(err)
+	}
+	offering := publishedOffering(t, s, admin, "forged-dedicated", "forged-dedicated")
+	input := configuredPlan()
+	input.Code = "forged-dedicated-plan"
+	input.OfferingID = offering.ID
+	input.ResourceMode = ""
+	plan, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: who.TenantID, Key: "mode-mismatch-funds", AmountCents: 500, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	var balance, ledgerCount, subscriptionCount, desiredVersion, generation int64
+	var status string
+	if err = s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", who.TenantID).Scan(&balance); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT count(*) FROM billing_ledger WHERE tenant_id=$1 AND kind='subscription-debit'", who.TenantID).Scan(&ledgerCount); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT count(*) FROM rule_subscriptions WHERE rule_id=$1", rule.ID).Scan(&subscriptionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT status,desired_version FROM relay_rules WHERE id=$1", rule.ID).Scan(&status, &desiredVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT desired_generation FROM nodes WHERE id=$1", rule.NodeID).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PurchasePlan(ctx, who, "mode-mismatch-buy", PurchasePlanInput{RuleID: rule.ID, PriceVersionID: plan.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("mismatched purchase: %v", err)
+	}
+	var afterBalance, afterLedger, afterSubscriptions, afterVersion, afterGeneration int64
+	var afterStatus string
+	s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", who.TenantID).Scan(&afterBalance)
+	s.pool.QueryRow(ctx, "SELECT count(*) FROM billing_ledger WHERE tenant_id=$1 AND kind='subscription-debit'", who.TenantID).Scan(&afterLedger)
+	s.pool.QueryRow(ctx, "SELECT count(*) FROM rule_subscriptions WHERE rule_id=$1", rule.ID).Scan(&afterSubscriptions)
+	s.pool.QueryRow(ctx, "SELECT status,desired_version FROM relay_rules WHERE id=$1", rule.ID).Scan(&afterStatus, &afterVersion)
+	s.pool.QueryRow(ctx, "SELECT desired_generation FROM nodes WHERE id=$1", rule.NodeID).Scan(&afterGeneration)
+	if afterBalance != balance || afterLedger != ledgerCount || afterSubscriptions != subscriptionCount || afterStatus != status || afterVersion != desiredVersion || afterGeneration != generation {
+		t.Fatalf("mismatch mutated state balance=%d/%d ledger=%d/%d subscriptions=%d/%d rule=%s:%d/%s:%d generation=%d/%d", balance, afterBalance, ledgerCount, afterLedger, subscriptionCount, afterSubscriptions, status, desiredVersion, afterStatus, afterVersion, generation, afterGeneration)
 	}
 }
 
@@ -177,12 +841,58 @@ func TestSubscriptionsInsufficientIsolationCapacityAndOutboxRollback(t *testing.
 	s, _, who, rule, plan := subscriptionFixture(t)
 	ctx := context.Background()
 	input := PurchasePlanInput{RuleID: rule.ID, PriceVersionID: plan.ID}
-	if _, err := s.PurchasePlan(ctx, who, "insufficient-funds", input); !errors.Is(err, ErrConflict) {
+	if _, err := s.PurchasePlan(ctx, who, "insufficient-funds", input); !errors.Is(err, ErrInsufficientBalance) || err.Error() != "钱包余额不足，请先充值或联系平台管理员" {
 		t.Fatalf("insufficient: %v", err)
 	}
 	var count int
 	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM rule_subscriptions").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed purchase persisted: %d %v", count, err)
+	}
+	if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: who.TenantID, Key: "low-balance-funds", AmountCents: 10, Reason: "correction", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	var balanceBefore, ledgerBefore, subscriptionsBefore, outboxBefore int64
+	var ruleStatusBefore string
+	if err := s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", who.TenantID).Scan(&balanceBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM billing_ledger WHERE tenant_id=$1", who.TenantID).Scan(&ledgerBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM rule_subscriptions WHERE tenant_id=$1", who.TenantID).Scan(&subscriptionsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT status FROM relay_rules WHERE id=$1", rule.ID).Scan(&ruleStatusBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM config_outbox").Scan(&outboxBefore); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PurchasePlan(ctx, who, "low-balance-purchase", input); !errors.Is(err, ErrInsufficientBalance) || err.Error() != "钱包余额不足，请先充值或联系平台管理员" {
+		t.Fatalf("low balance: %v", err)
+	}
+	var balanceAfter, ledgerAfter, subscriptionsAfter, outboxAfter int64
+	var ruleStatusAfter string
+	if err := s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", who.TenantID).Scan(&balanceAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM billing_ledger WHERE tenant_id=$1", who.TenantID).Scan(&ledgerAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM rule_subscriptions WHERE tenant_id=$1", who.TenantID).Scan(&subscriptionsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT status FROM relay_rules WHERE id=$1", rule.ID).Scan(&ruleStatusAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM config_outbox").Scan(&outboxAfter); err != nil {
+		t.Fatal(err)
+	}
+	if balanceAfter != balanceBefore || ledgerAfter != ledgerBefore || subscriptionsAfter != subscriptionsBefore || ruleStatusAfter != ruleStatusBefore || outboxAfter != outboxBefore {
+		t.Fatalf("low-balance purchase mutated state balance=%d/%d ledger=%d/%d subscriptions=%d/%d rule=%s/%s outbox=%d/%d", balanceBefore, balanceAfter, ledgerBefore, ledgerAfter, subscriptionsBefore, subscriptionsAfter, ruleStatusBefore, ruleStatusAfter, outboxBefore, outboxAfter)
+	}
+	if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: who.TenantID, Key: "low-balance-clear", AmountCents: -10, Reason: "test cleanup", Operator: "test"}); err != nil {
+		t.Fatal(err)
 	}
 	other, _ := register(t, s, "foreign-subscription@example.com")
 	if _, err := s.PurchasePlan(ctx, other, "foreign-purchase", input); !errors.Is(err, ErrNotFound) {
@@ -257,7 +967,8 @@ func TestSubscriptionsQuotaRenewalKeepsHistoryAndOtherRuleIndependent(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.PurchasePlan(ctx, who, "quota-purchase-2", PurchasePlanInput{RuleID: r2.ID, PriceVersionID: plan.ID}); err != nil {
+	p2, err := s.PurchasePlan(ctx, who, "quota-purchase-2", PurchasePlanInput{RuleID: r2.ID, PriceVersionID: plan.ID})
+	if err != nil {
 		t.Fatal(err)
 	}
 	report := UsageReport{RuleID: r1.ID, SubscriptionID: p1.ID, Epoch: "quota-epoch", Sequence: 1, UploadBytes: 70, DownloadBytes: 40}
@@ -278,6 +989,7 @@ func TestSubscriptionsQuotaRenewalKeepsHistoryAndOtherRuleIndependent(t *testing
 		t.Fatalf("quota: %+v %v", periods, err)
 	}
 	newInput := configuredPlan()
+	newInput.OfferingID = plan.OfferingID
 	newInput.Version = 2
 	newInput.BandwidthMbps = 200
 	newPlan, err := s.AdminCreatePlan(ctx, admin, newInput)
@@ -310,6 +1022,10 @@ func TestSubscriptionsQuotaRenewalKeepsHistoryAndOtherRuleIndependent(t *testing
 	periods, err = s.RuleSubscriptions(ctx, who, r1.ID, 0)
 	if err != nil || periods[0].UsedBytes != 5 || periods[1].UsedBytes != 115 {
 		t.Fatalf("new epoch attribution: %+v %v", periods, err)
+	}
+	otherPeriods, err := s.RuleSubscriptions(ctx, who, r2.ID, 0)
+	if err != nil || len(otherPeriods) != 1 || otherPeriods[0].ID != p2.ID || otherPeriods[0].UsedBytes != 0 || otherPeriods[0].RemainingBytes != plan.QuotaBytes || otherPeriods[0].Status != "active" {
+		t.Fatalf("other rule entitlement changed: %+v %v", otherPeriods, err)
 	}
 }
 
@@ -365,9 +1081,10 @@ func TestSubscriptionsResumeGuardReadsLatestPeriod(t *testing.T) {
 }
 
 func TestSubscriptionsExpiryWorkerRechecksAndPauses(t *testing.T) {
-	s, admin, who, rule, _ := subscriptionFixture(t)
+	s, admin, who, rule, existingPlan := subscriptionFixture(t)
 	ctx := context.Background()
 	input := configuredPlan()
+	input.OfferingID = existingPlan.OfferingID
 	input.Code = "short-period"
 	input.PeriodSeconds = 3600
 	plan, err := s.AdminCreatePlan(ctx, admin, input)

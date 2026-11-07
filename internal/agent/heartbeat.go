@@ -27,14 +27,33 @@ func (c *Client) ReportHeartbeat(ctx context.Context, heartbeat platform.AgentHe
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if heartbeat.CertificateRotationSupported {
+		req.Header.Set("X-RelaDock-Certificate-Rotation", "1")
+	}
 	response, err := c.do(req)
 	if err != nil {
 		return errors.New("heartbeat connection failed")
 	}
 	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 8192))
 	if response.StatusCode != http.StatusOK {
 		return errors.New("heartbeat rejected")
+	}
+	var reply struct {
+		OK                            bool   `json:"ok"`
+		CertificateRenewalFingerprint string `json:"certificateRenewalFingerprint"`
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 8193))
+	if err != nil || len(raw) > 8192 {
+		return errors.New("invalid heartbeat response")
+	}
+	if err = json.Unmarshal(raw, &reply); err != nil || !reply.OK {
+		return errors.New("invalid heartbeat response")
+	}
+	if reply.CertificateRenewalFingerprint != "" && !renewalFingerprintPattern.MatchString(reply.CertificateRenewalFingerprint) {
+		return errors.New("invalid certificate renewal request")
+	}
+	if c.Credentials != nil {
+		return c.Credentials.RequestRotation(reply.CertificateRenewalFingerprint)
 	}
 	return nil
 }

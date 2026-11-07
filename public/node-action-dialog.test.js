@@ -3,6 +3,17 @@ import test from 'node:test';
 
 import { bindNodeActionDialog, createNodeActionRunner, nodeActionDescriptor } from './node-action-dialog.js';
 
+test('certificate rotation requires capable enrolled agent and reports a request, not completion', () => {
+  const node = {id: 'hk-01', name: '香港', revision: 8, certificateFingerprint: 'abc', certificateRotationSupported: true};
+  const action = nodeActionDescriptor('rotate-certificate', node);
+  assert.equal(action.path, '/api/admin/nodes/hk-01/rotate-certificate');
+  assert.deepEqual(action.body, {revision: 8});
+  assert.match(action.successText, /等待/);
+  assert.equal(nodeActionDescriptor('rotate-certificate', {...node, certificateRotationSupported: false}), null);
+  assert.equal(nodeActionDescriptor('rotate-certificate', {...node, certificateFingerprint: ''}), null);
+  assert.equal(nodeActionDescriptor('rotate-certificate', {...node, certificateRotationRequested: true}), null);
+});
+
 class Control extends EventTarget {
   constructor() {
     super();
@@ -80,24 +91,26 @@ test('successful confirmation closes the dialog', async () => {
 });
 
 test('every node-row state change has a dialog action descriptor', () => {
-  const node = { id: 'hk-02', name: '香港入口 02', revision: 7, withdrawable: true };
+  const node = { id: 'hk-02', name: '香港入口 02', revision: 7, visibilityRevision: 3, withdrawable: true };
   const expected = {
-    maintenance: ['/api/admin/nodes/hk-02/maintenance', '进入维护'],
-    enable: ['/api/admin/nodes/hk-02/enable', '恢复分配'],
-    retry: ['/api/admin/nodes/hk-02/retry', '重试配置交付'],
-    upgrade: ['/api/admin/nodes/hk-02/upgrade', '升级 Agent'],
-    'upgrade-cancel': ['/api/admin/nodes/hk-02/upgrade-cancel', '取消 Agent 升级'],
-    'start-draining': ['/api/admin/nodes/hk-02/start-draining', '进入安全排空'],
-    'finalize-retirement': ['/api/admin/nodes/hk-02/finalize-retirement', '最终退役节点'],
-    'withdraw-registration': ['/api/admin/nodes/hk-02/withdraw-registration', '撤销节点登记'],
-    'revoke-certificate': ['/api/admin/nodes/hk-02/revoke-certificate', '撤销节点证书'],
+    maintenance: ['/api/admin/nodes/hk-02/maintenance', '进入维护', { revision: 7 }],
+    enable: ['/api/admin/nodes/hk-02/enable', '恢复分配', { revision: 7 }],
+    retry: ['/api/admin/nodes/hk-02/retry', '重试配置交付', { revision: 7 }],
+    upgrade: ['/api/admin/nodes/hk-02/upgrade', '升级 Agent', { revision: 7 }],
+    'upgrade-cancel': ['/api/admin/nodes/hk-02/upgrade-cancel', '取消 Agent 升级', { revision: 7 }],
+    'start-draining': ['/api/admin/nodes/hk-02/start-draining', '进入安全排空', { revision: 7 }],
+    'finalize-retirement': ['/api/admin/nodes/hk-02/finalize-retirement', '最终退役节点', { revision: 7 }],
+    'withdraw-registration': ['/api/admin/nodes/hk-02/withdraw-registration', '撤销节点登记', { revision: 7 }],
+    'revoke-certificate': ['/api/admin/nodes/hk-02/revoke-certificate', '撤销节点证书', { revision: 7 }],
+    hide: ['/api/admin/nodes/hk-02/visibility', '隐藏节点', { visibilityRevision: 3, hidden: true }],
+    unhide: ['/api/admin/nodes/hk-02/visibility', '恢复显示', { visibilityRevision: 3, hidden: false }],
   };
 
-  for (const [kind, [path, title]] of Object.entries(expected)) {
+  for (const [kind, [path, title, body]] of Object.entries(expected)) {
     const action = nodeActionDescriptor(kind, node);
     assert.equal(action.path, path, kind);
     assert.equal(action.title, `${title} · 香港入口 02`, kind);
-    assert.deepEqual(action.body, { revision: 7 }, kind);
+    assert.deepEqual(action.body, body, kind);
     assert.ok(action.description.length > 12, kind);
     assert.ok(action.confirmLabel.length > 1, kind);
   }

@@ -78,6 +78,10 @@ func failure(w http.ResponseWriter, err error) {
 		status = 409
 	case errors.Is(err, platform.ErrCapacity):
 		status = 409
+	case errors.Is(err, platform.ErrNodeNotAllocatable):
+		status = 409
+	case errors.Is(err, platform.ErrInsufficientBalance):
+		status = 409
 	}
 	message := err.Error()
 	if status == 500 {
@@ -202,7 +206,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin.js" || r.URL.Path == "/console-navigation.js" || r.URL.Path == "/admin.css" || r.URL.Path == "/app.js" || r.URL.Path == "/app.css" || r.URL.Path == "/workspace-summary.js" || r.URL.Path == "/telemetry.js" || r.URL.Path == "/node-monitoring.js" || r.URL.Path == "/rule-submission.js" || r.URL.Path == "/rule-editor.js" || r.URL.Path == "/account-tools.js" || r.URL.Path == "/business-tools.js" || r.URL.Path == "/operations-tools.js" || r.URL.Path == "/node-action-dialog.js" || r.URL.Path == "/node-contact-status.js" || r.URL.Path == "/node-content-dialog.js" || r.URL.Path == "/node-editor.js" || r.URL.Path == "/node-withdrawal.js" {
+	if r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin.js" || r.URL.Path == "/auth-session.js" || r.URL.Path == "/account-menu.js" || r.URL.Path == "/console-navigation.js" || r.URL.Path == "/admin.css" || r.URL.Path == "/app.js" || r.URL.Path == "/app.css" || r.URL.Path == "/workspace-summary.js" || r.URL.Path == "/telemetry.js" || r.URL.Path == "/node-monitoring.js" || r.URL.Path == "/rule-submission.js" || r.URL.Path == "/rule-editor.js" || r.URL.Path == "/account-tools.js" || r.URL.Path == "/business-tools.js" || r.URL.Path == "/operations-tools.js" || r.URL.Path == "/resource-mode.js" || r.URL.Path == "/plan-catalog.js" || r.URL.Path == "/node-action-dialog.js" || r.URL.Path == "/node-contact-status.js" || r.URL.Path == "/node-content-dialog.js" || r.URL.Path == "/node-editor.js" || r.URL.Path == "/node-visibility.js" || r.URL.Path == "/node-withdrawal.js" {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			respond(w, 405, map[string]string{"error": "方法不支持"})
 			return
@@ -221,8 +225,12 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		contentType := map[string]string{"index.html": "text/html; charset=utf-8", "admin.html": "text/html; charset=utf-8", "admin.js": "text/javascript; charset=utf-8", "admin.css": "text/css; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "rule-submission.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
 		contentType["account-tools.js"] = "text/javascript; charset=utf-8"
+		contentType["account-menu.js"] = "text/javascript; charset=utf-8"
+		contentType["auth-session.js"] = "text/javascript; charset=utf-8"
 		contentType["business-tools.js"] = "text/javascript; charset=utf-8"
 		contentType["operations-tools.js"] = "text/javascript; charset=utf-8"
+		contentType["resource-mode.js"] = "text/javascript; charset=utf-8"
+		contentType["plan-catalog.js"] = "text/javascript; charset=utf-8"
 		contentType["rule-editor.js"] = "text/javascript; charset=utf-8"
 		contentType["workspace-summary.js"] = "text/javascript; charset=utf-8"
 		contentType["telemetry.js"] = "text/javascript; charset=utf-8"
@@ -231,6 +239,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		contentType["node-contact-status.js"] = "text/javascript; charset=utf-8"
 		contentType["node-content-dialog.js"] = "text/javascript; charset=utf-8"
 		contentType["node-editor.js"] = "text/javascript; charset=utf-8"
+		contentType["node-visibility.js"] = "text/javascript; charset=utf-8"
 		contentType["node-withdrawal.js"] = "text/javascript; charset=utf-8"
 		contentType["console-navigation.js"] = "text/javascript; charset=utf-8"
 		w.Header().Set("Content-Type", contentType[path])
@@ -357,6 +366,23 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == "GET" && r.URL.Path == "/api/auth/me":
 		respond(w, 200, who)
+	case r.Method == "POST" && r.URL.Path == "/api/auth/password":
+		var input struct {
+			CurrentPassword string `json:"currentPassword"`
+			NewPassword     string `json:"newPassword"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		if cookieErr != nil {
+			failure(w, platform.ErrForbidden)
+			return
+		}
+		if err = s.store.ChangePassword(ctx, who, cookie.Value, input.CurrentPassword, input.NewPassword); err != nil {
+			failure(w, err)
+			return
+		}
+		respond(w, 200, map[string]bool{"ok": true})
 	case r.Method == "POST" && r.URL.Path == "/api/auth/logout":
 		if err = s.store.Logout(ctx, cookie.Value); err != nil {
 			failure(w, err)
@@ -375,14 +401,14 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 			failure(w, err)
 			return
 		}
-		nodes, err := s.store.ListNodes(ctx)
+		nodes, err := s.store.ListTenantNodes(ctx, who)
 		if err != nil {
 			failure(w, err)
 			return
 		}
 		respond(w, 200, map[string]any{"account": who, "nodes": nodes, "rules": rules, "auditLogs": logs, "storage": "postgresql", "services": map[string]string{"agent": "validation-only-supported", "metering": "ingestion-supported", "collector": "not-connected", "payments": "not-connected"}})
 	case r.Method == "GET" && r.URL.Path == "/api/nodes":
-		nodes, err := s.store.ListNodes(ctx)
+		nodes, err := s.store.ListTenantNodes(ctx, who)
 		if err != nil {
 			failure(w, err)
 			return

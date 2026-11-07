@@ -144,7 +144,10 @@ func TestCostsCashMarginUsesPurchasesNotTopupsAndKeepsDeletedRule(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := s.AdminCreatePlan(ctx, admin, configuredPlan())
+	offering := publishedOffering(t, s, admin, "cost-hk", "hk-01")
+	planInput := configuredPlan()
+	planInput.OfferingID = offering.ID
+	plan, err := s.AdminCreatePlan(ctx, admin, planInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +191,33 @@ func TestCostsCashMarginUsesPurchasesNotTopupsAndKeepsDeletedRule(t *testing.T) 
 	emptyPage, err := s.AdminCashMargin(ctx, admin, from, to, 2)
 	if err != nil || len(emptyPage.Nodes.Items) != 0 || emptyPage.Nodes.Total != 2 || emptyPage.Totals.MarginCents == nil || *emptyPage.Totals.MarginCents != 15 {
 		t.Fatalf("totals depend on node page: %+v %v", emptyPage, err)
+	}
+}
+
+func TestCostsCountsUnboundPackageRevenueOnceAfterMultipleRuleBindings(t *testing.T) {
+	s, admin, owner, _, plan := subscriptionFixture(t)
+	ctx := context.Background()
+	if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: owner.TenantID, Key: "unbound-cost-funds", AmountCents: 500, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.PurchasePlan(ctx, owner, "unbound-cost-buy", PurchasePlanInput{PriceVersionID: plan.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	from, to := costWindow()
+	for i := 0; i < 3; i++ {
+		report, err := s.AdminCashMargin(ctx, admin, from, to, 1)
+		if err != nil || report.Totals.RevenueCents != plan.PriceCents {
+			t.Fatalf("bindings=%d revenue=%+v err=%v", i, report, err)
+		}
+		if i < 2 {
+			in := ruleInput("tcp")
+			in.SubscriptionID = p.ID
+			in.BandwidthMbps = plan.BandwidthMbps
+			if _, err = s.CreateRule(ctx, owner, fmt.Sprintf("unbound-cost-rule-%d", i), in); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 }
 
@@ -262,6 +292,8 @@ func TestCostsPlatformOverflowAcrossNodesAndActualPurchaseRevenue(t *testing.T) 
 		input := configuredPlan()
 		input.Code = "max-revenue"
 		input.PriceCents = math.MaxInt64
+		offering := publishedOffering(t, s, admin, "cost-max-hk", "hk-01")
+		input.OfferingID = offering.ID
 		plan, err := s.AdminCreatePlan(ctx, admin, input)
 		if err != nil {
 			t.Fatal(err)

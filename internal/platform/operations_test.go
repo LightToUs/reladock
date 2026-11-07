@@ -308,9 +308,9 @@ func TestListOperationsNodesAggregatesTrafficByAuthorizationScope(t *testing.T) 
 	}
 	admin.PlatformAdmin = true
 	for _, node := range []NodeInput{
-		{ID: "stale-01", Name: "Stale", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000},
-		{ID: "single-01", Name: "Single", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000},
-		{ID: "empty-01", Name: "Empty", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000},
+		{ID: "stale-01", Name: "Stale", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeShared},
+		{ID: "single-01", Name: "Single", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeShared},
+		{ID: "empty-01", Name: "Empty", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeShared},
 	} {
 		if err := s.AdminAddNode(ctx, admin, node); err != nil {
 			t.Fatal(err)

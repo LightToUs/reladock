@@ -17,6 +17,59 @@ type CertificateRotation struct {
 	ExpiresAt   time.Time `json:"expiresAt"`
 }
 
+// RequestNodeCertificateRenewal records intent only. The current identity stays
+// authorized until the Agent proves possession of the new key during activation.
+func (s *Store) RequestNodeCertificateRenewal(ctx context.Context, who Identity, nodeID string, revision int64) error {
+	if !nodeIDPattern.MatchString(nodeID) || revision < 1 {
+		return ErrInvalid
+	}
+	tx, err := s.adminTx(ctx, who)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockNode(ctx, tx, nodeID); err != nil {
+		return err
+	}
+	var supported bool
+	var currentRevision int64
+	var status, current, desired string
+	err = tx.QueryRow(ctx, `SELECT revision,status,COALESCE(certificate_fingerprint,''),COALESCE(certificate_renewal_fingerprint,''),agent_certificate_rotation_supported FROM nodes WHERE id=$1 FOR UPDATE`, nodeID).Scan(&currentRevision, &status, &current, &desired, &supported)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !supported || currentRevision != revision || status == "draining" || status == "retired" || current == "" {
+		return ErrConflict
+	}
+	if desired == current {
+		return tx.Commit(ctx)
+	}
+	if _, err = tx.Exec(ctx, "UPDATE nodes SET certificate_renewal_fingerprint=certificate_fingerprint,revision=revision+1 WHERE id=$1", nodeID); err != nil {
+		return err
+	}
+	if err = platformLog(ctx, tx, &who, "node.certificate-renew-requested", nodeID, map[string]any{"revision": revision + 1}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// NodeCertificateRenewalRequest rechecks current authorization after heartbeat
+// commit. A concurrent activation/revocation cannot send intent to an old peer.
+func (s *Store) NodeCertificateRenewalRequest(ctx context.Context, nodeID, fingerprint string) (string, error) {
+	if !nodeIDPattern.MatchString(nodeID) || !fingerprintPattern.MatchString(fingerprint) {
+		return "", ErrUnauthorized
+	}
+	var desired string
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(certificate_renewal_fingerprint,'') FROM nodes WHERE id=$1 AND certificate_fingerprint=$2`, nodeID, fingerprint).Scan(&desired)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrUnauthorized
+	}
+	return desired, err
+}
+
 func validateRenewalCSR(raw []byte) error {
 	if len(raw) == 0 || len(raw) > 8192 {
 		return ErrInvalid
@@ -162,7 +215,7 @@ func (s *Store) ActivateNodeCertificate(ctx context.Context, nodeID, presentedFi
 	if pending != presentedFingerprint {
 		return ErrUnauthorized
 	}
-	if _, err = tx.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$2,agent_certificate_not_after=$3,revision=revision+1 WHERE id=$1", nodeID, pending, notAfter); err != nil {
+	if _, err = tx.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$2,certificate_renewal_fingerprint=NULL,agent_certificate_not_after=$3,revision=revision+1 WHERE id=$1", nodeID, pending, notAfter); err != nil {
 		return nodeError(err)
 	}
 	if _, err = tx.Exec(ctx, "DELETE FROM node_certificate_rotations WHERE node_id=$1", nodeID); err != nil {

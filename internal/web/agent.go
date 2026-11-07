@@ -94,6 +94,7 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 			if !decode(w, r, &heartbeat) {
 				return
 			}
+			heartbeat.CertificateRotationSupported = r.Header.Get("X-RelaDock-Certificate-Rotation") == "1"
 			// Certificate expiry is observed from the verified TLS peer rather than
 			// accepted as an Agent claim.
 			if !heartbeat.CertificateNotAfter.Equal(cert.NotAfter) {
@@ -104,7 +105,15 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 				failure(w, err)
 				return
 			}
-			respond(w, 200, map[string]bool{"ok": true})
+			desired, err := store.NodeCertificateRenewalRequest(ctx, id, fingerprint)
+			if err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, 200, struct {
+				OK                            bool   `json:"ok"`
+				CertificateRenewalFingerprint string `json:"certificateRenewalFingerprint,omitempty"`
+			}{true, desired})
 			return
 		}
 		if r.URL.Path == "/agent/drain-status" {

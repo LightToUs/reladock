@@ -22,7 +22,11 @@ func (s *server) bootstrapEnabled() bool {
 	return s.bootstrap != nil && s.bootstrap.Signer != nil && s.bootstrap.Config.Enabled()
 }
 func (s *server) bootstrapUnavailable(w http.ResponseWriter) {
-	respond(w, 503, map[string]string{"error": "节点自动安装未配置：需要签发 CA、公开 HTTPS 地址和已发布版本的固定摘要"})
+	message := "节点自动安装未配置完成，请由控制端部署流程准备 HTTPS 接入、自动签发器及固定安装包；无需手动填写客户端证书。"
+	if strings.HasPrefix(s.origin, "http://") {
+		message = "当前为本地测试后台，尚未启用 HTTPS Agent 接入；线上域名不能兑换本地安装凭证。无需手动填写客户端证书。"
+	}
+	respond(w, 503, map[string]string{"error": message})
 }
 func (s *server) serveBootstrap(w http.ResponseWriter, r *http.Request) bool {
 	if r.URL.Path != "/install/agent.sh" && !strings.HasPrefix(r.URL.Path, "/api/node-bootstrap/") {

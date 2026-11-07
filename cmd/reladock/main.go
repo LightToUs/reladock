@@ -7,6 +7,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -44,13 +45,38 @@ func main() {
 			log.Fatal("invalid control TLS key pair")
 		}
 	}
+	if os.Getenv("DATABASE_URL") == "" {
+		log.Fatal("DATABASE_URL is required")
+	}
+	var store *platform.Store
+	if !*checkOnly {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		store, err = platform.OpenWithOptions(ctx, os.Getenv("DATABASE_URL"), platform.StoreOptions{AllowUnentitledRules: cfg.AllowUnentitledRules})
+		cancel()
+		if err != nil {
+			log.Fatal("PostgreSQL startup failed; check DATABASE_URL and database availability")
+		}
+		defer store.Close()
+	}
 	if cfg.AgentTLSDir != "" {
+		if cfg.ManagedPKIDir != "" && *checkOnly {
+			origin, _ := url.Parse(cfg.Bootstrap.AgentOrigin)
+			if err := nodeauth.ValidateManagedBundle(cfg.ManagedPKIDir, origin.Hostname()); err != nil {
+				log.Fatalf("managed node PKI validation failed: %v", err)
+			}
+		}
+		if cfg.ManagedPKIDir != "" && !*checkOnly {
+			origin, _ := url.Parse(cfg.Bootstrap.AgentOrigin)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			err := store.EnsureManagedNodePKI(ctx, cfg.ManagedPKIDir, origin.Hostname())
+			cancel()
+			if err != nil {
+				log.Fatalf("managed node PKI unavailable (existing identity was not replaced): %v", err)
+			}
+		}
 		if _, err := nodeauth.ServerTLS(filepath.Join(cfg.AgentTLSDir, "ca.crt"), filepath.Join(cfg.AgentTLSDir, "server.crt"), filepath.Join(cfg.AgentTLSDir, "server.key")); err != nil {
 			log.Fatal("invalid Agent server TLS files")
 		}
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		log.Fatal("DATABASE_URL is required")
 	}
 	var nodeSigner *nodeauth.BootstrapCA
 	if cfg.Bootstrap.SignerEnabled() {
@@ -61,20 +87,13 @@ func main() {
 		nodeSigner = signer
 	}
 	var bootstrap *web.BootstrapOptions
-	if cfg.Bootstrap.Enabled() {
+	if cfg.Bootstrap.SignerEnabled() {
 		bootstrap = &web.BootstrapOptions{Config: cfg.Bootstrap, Signer: nodeSigner}
 	}
 	if *checkOnly {
 		log.Print("Runtime configuration and TLS files validated; no database connection or listener opened")
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	store, err := platform.OpenWithOptions(ctx, os.Getenv("DATABASE_URL"), platform.StoreOptions{AllowUnentitledRules: cfg.AllowUnentitledRules})
-	cancel()
-	if err != nil {
-		log.Fatal("PostgreSQL startup failed; check DATABASE_URL and database availability")
-	}
-	defer store.Close()
 	metrics := observability.New(buildinfo.Current(), func(ctx context.Context) (platform.OperationalMetrics, error) {
 		return store.OperationalMetrics(ctx, platform.DefaultContactStaleAfter)
 	})

@@ -130,6 +130,88 @@ func TestAuthenticatedRuleFlowAndLogout(t *testing.T) {
 	}
 }
 
+func TestChangePasswordEndpointKeepsCurrentSessionAndRejectsOldPassword(t *testing.T) {
+	h := testServer(t)
+	registered := request(h, "POST", "/api/auth/register", `{"company":"Password","email":"change-password-http@example.com","password":"long-test-password-42"}`, nil)
+	if registered.Code != http.StatusCreated {
+		t.Fatalf("register: %d %s", registered.Code, registered.Body.String())
+	}
+	cookie := registered.Result().Cookies()[0]
+	if rec := request(h, "POST", "/api/auth/password", `{"currentPassword":"wrong-current-password","newPassword":"new-long-password-42"}`, cookie); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong current password: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(h, "POST", "/api/auth/password", `{"currentPassword":"long-test-password-42","newPassword":"new-long-password-42"}`, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("change password: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(h, "GET", "/api/auth/me", "", cookie); rec.Code != http.StatusOK {
+		t.Fatalf("current session revoked: %d", rec.Code)
+	}
+	old := request(h, "POST", "/api/auth/login", `{"email":"change-password-http@example.com","password":"long-test-password-42"}`, nil)
+	if old.Code != http.StatusUnauthorized {
+		t.Fatalf("old password accepted: %d", old.Code)
+	}
+	newLogin := request(h, "POST", "/api/auth/login", `{"email":"change-password-http@example.com","password":"new-long-password-42"}`, nil)
+	if newLogin.Code != http.StatusOK {
+		t.Fatalf("new password rejected: %d %s", newLogin.Code, newLogin.Body.String())
+	}
+}
+
+func TestTenantNodeInventoryScopesDedicatedNodes(t *testing.T) {
+	store := testWebStore(t)
+	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("tenant")}}
+	h := New(store, assets, "http://127.0.0.1:3001")
+	first := request(h, "POST", "/api/auth/register", `{"company":"First","email":"inventory-first@example.com","password":"long-test-password-42"}`, nil)
+	second := request(h, "POST", "/api/auth/register", `{"company":"Second","email":"inventory-second@example.com","password":"long-test-password-42"}`, nil)
+	if first.Code != http.StatusCreated || second.Code != http.StatusCreated {
+		t.Fatalf("register: %d %d", first.Code, second.Code)
+	}
+	firstCookie := first.Result().Cookies()[0]
+	secondCookie := second.Result().Cookies()[0]
+	firstWho, err := store.Session(context.Background(), firstCookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondWho, err := store.Session(context.Background(), secondCookie.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, _, err := store.Register(context.Background(), "Operator", "inventory-admin@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SetPlatformAdmin(context.Background(), admin.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	admin, _, err = store.Login(context.Background(), admin.Email, "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []platform.NodeInput{
+		{ID: "inventory-shared", Name: "Shared", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: platform.ResourceModeShared},
+		{ID: "inventory-first", Name: "First only", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: platform.ResourceModeDedicatedTenant, DedicatedTenantID: firstWho.TenantID},
+		{ID: "inventory-second", Name: "Second only", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: platform.ResourceModeDedicatedRule, DedicatedTenantID: secondWho.TenantID},
+	} {
+		if err = store.AdminAddNode(context.Background(), admin, input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertInventory := func(cookie *http.Cookie, present, absent string) {
+		t.Helper()
+		for _, path := range []string{"/api/nodes", "/api/overview"} {
+			rec := request(h, "GET", path, "", cookie)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, `"id":"inventory-shared"`) || !strings.Contains(body, `"id":"`+present+`"`) || strings.Contains(body, `"id":"`+absent+`"`) || strings.Contains(body, "dedicatedTenantId") {
+				t.Fatalf("scoped inventory %s: %s", path, body)
+			}
+		}
+	}
+	assertInventory(firstCookie, "inventory-first", "inventory-second")
+	assertInventory(secondCookie, "inventory-second", "inventory-first")
+}
+
 func TestHTTPRejectsCrossSiteMalformedAndOversizedRequests(t *testing.T) {
 	h := testServer(t)
 	for _, tc := range []struct {
@@ -268,7 +350,7 @@ func TestPlatformAdminAPIAuthorizationNodeWritesAndConflict(t *testing.T) {
 			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
 		}
 	}
-	created := request(h, "POST", "/api/admin/nodes", `{"id":"hk-test","name":"香港测试","region":"Hong Kong","listenAddress":"0.0.0.0","publicAddress":"192.0.2.60","capacityMbps":1000}`, cookie)
+	created := request(h, "POST", "/api/admin/nodes", `{"id":"hk-test","name":"香港测试","region":"Hong Kong","listenAddress":"0.0.0.0","publicAddress":"192.0.2.60","capacityMbps":1000,"resourceMode":"shared","dedicatedTenantId":""}`, cookie)
 	if created.Code != 201 {
 		t.Fatal(created.Body.String())
 	}
@@ -313,7 +395,7 @@ func TestAdminWithdrawNodeRegistrationHTTP(t *testing.T) {
 	}
 	login := request(h, "POST", "/api/auth/login", `{"email":"withdraw-operator@example.com","password":"long-test-password-42"}`, nil)
 	adminCookie := login.Result().Cookies()[0]
-	created := request(h, "POST", "/api/admin/nodes", `{"id":"unused-http","name":"误登记节点","region":"Hong Kong","listenAddress":"0.0.0.0","capacityMbps":1000}`, adminCookie)
+	created := request(h, "POST", "/api/admin/nodes", `{"id":"unused-http","name":"误登记节点","region":"Hong Kong","listenAddress":"0.0.0.0","capacityMbps":1000,"resourceMode":"shared","dedicatedTenantId":""}`, adminCookie)
 	if created.Code != http.StatusCreated {
 		t.Fatal(created.Body.String())
 	}

@@ -8,11 +8,11 @@
   <form id="auth-form">
     <label id="company-field" hidden>企业名称<input name="company" maxlength="120" autocomplete="organization"></label>
     <label>邮箱<input name="email" type="email" required maxlength="254" autocomplete="username"></label>
-    <label>密码<input name="password" type="password" required maxlength="128" autocomplete="current-password"></label>
+    <label>密码<div class="password-input"><input id="auth-password" name="password" type="password" required maxlength="128" autocomplete="current-password"><button id="auth-password-toggle" class="password-toggle" type="button" aria-controls="auth-password" aria-pressed="false">显示</button></div></label>
     <button id="auth-submit">登录</button>
   </form>
   <p id="auth-message" class="error" role="status"></p><p class="muted hint">企业账户用于管理中转服务；客户自行管理 VPN 用户、协议密钥与订阅。</p>
-  <details><summary>接受企业邀请</summary><form id="accept-invitation"><label>邀请令牌<input name="token" required autocomplete="off"></label><label>受邀邮箱<input name="email" type="email" required autocomplete="username"></label><label>设置密码<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"></label><button>接受邀请并登录</button></form><p id="accept-message" class="error" role="status"></p></details>
+  <details><summary>接受企业邀请</summary><form id="accept-invitation"><label>邀请令牌<input name="token" required autocomplete="off"></label><label>受邀邮箱<input name="email" type="email" required autocomplete="username"></label><label>设置密码<div class="password-input"><input id="invitation-password" name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"><button id="invitation-password-toggle" class="password-toggle" type="button" aria-controls="invitation-password" aria-pressed="false">显示</button></div></label><button>接受邀请并登录</button></form><p id="accept-message" class="error" role="status"></p></details>
 </section>
 <section class="auth" id="startup-error" hidden>
   <div class="tag">RelaDock · 企业网络中转</div><h1>工作台暂不可用</h1><p class="muted">登录状态尚未判定，当前没有切换为退出登录。</p>
@@ -20,41 +20,55 @@
 </section>
 <div id="console" hidden>
 <aside id="workspace-sidebar">
-  <div class="brand"><span class="brand-mark" aria-hidden="true">R</span><div class="brand-copy"><h2>RelaDock</h2><p>Relay operations</p></div><button id="workspace-nav-collapse" class="sidebar-collapse" type="button" aria-controls="workspace-navigation" aria-expanded="true">‹</button></div>
+  <div class="brand"><span class="brand-mark" aria-hidden="true">R</span><div class="brand-copy"><h2>RelaDock</h2></div><button id="workspace-nav-collapse" class="sidebar-collapse" type="button" aria-controls="workspace-navigation" aria-expanded="true">‹</button></div>
   <nav id="workspace-navigation" aria-label="工作台导航">
     <a data-view="overview" data-short="概" class="selected" href="#/overview"><span class="nav-label">运行概览</span></a>
+    <a data-view="billing" data-short="套" href="#/billing"><span class="nav-label">购买套餐</span></a>
     <a data-view="rules" data-short="转" href="#/rules"><span class="nav-label">转发规则</span></a>
-    <a data-view="traffic" data-short="流" href="#/traffic"><span class="nav-label">流量与资源</span></a>
-    <a data-view="node-status" data-short="状" href="#/node-status"><span class="nav-label">节点状态</span></a>
-    <a data-view="delivery" data-short="交" href="#/delivery"><span class="nav-label">节点交付</span></a>
-    <a data-view="billing" data-short="账" href="#/billing"><span class="nav-label">套餐账务</span></a>
-    <a data-view="team" data-short="企" href="#/team"><span class="nav-label">企业协作</span></a>
-    <a data-view="operations" data-short="警" href="#/operations"><span class="nav-label">告警工单</span></a>
+    <a data-view="node-status" data-short="点" href="#/node-status"><span class="nav-label">入口节点</span></a>
   </nav>
-  <div class="sidebar-note"><span class="signal-dot"></span><div><b>控制面工作台</b><small>应用状态不等于端到端健康</small></div></div>
 </aside>
 <main>
-<header><button id="workspace-nav-mobile" class="mobile-nav-toggle" type="button" aria-controls="workspace-navigation" aria-expanded="false">菜单</button><div><div class="workspace-label">Enterprise relay control</div><h1 id="workspace-view-title">运行概览</h1><p id="workspace-view-description" class="workspace-description">查看当前企业的配置、交付与节点联系摘要。</p><p class="workspace-company" id="company-name"></p></div><div class="account"><span class="account-identity" id="account-email"></span><a href="/admin" id="platform-link" class="text-link" hidden>平台管理</a><button class="secondary" id="refresh">刷新数据</button><button class="secondary quiet" id="logout">退出</button></div></header>
-<div class="command-deck" data-pane="overview">
-  <div class="relay-signal" aria-label="业务流量从入口经转发到达客户目标">
-    <div><span class="route-point is-entry"></span><small>ENTRY</small><b>入口节点</b></div>
-    <div class="route-track"><i></i><i></i><i></i></div>
-    <div><span class="route-point"></span><small>RELAY</small><b>透明转发</b></div>
-    <div class="route-track"><i></i><i></i><i></i></div>
-    <div><span class="route-point is-target"></span><small>TARGET</small><b>客户落地</b></div>
+<header class="workspace-header workspace-topbar">
+  <button id="workspace-nav-mobile" class="mobile-nav-toggle" type="button" aria-controls="workspace-navigation" aria-expanded="false">菜单</button>
+  <div class="workspace-heading"><h1 id="workspace-view-title">运行概览</h1><p class="workspace-company" id="company-name"></p></div>
+  <div class="account">
+    <button class="secondary account-refresh" id="refresh" type="button">刷新数据</button>
+    <div class="account-menu-shell">
+      <button id="account-menu-trigger" class="account-menu-trigger" type="button" aria-controls="account-menu" aria-expanded="false">
+        <span class="account-avatar" id="account-avatar" aria-hidden="true">R</span><span class="account-copy"><strong id="account-email"></strong><small id="account-role"></small></span><span class="account-caret" aria-hidden="true">⌄</span>
+      </button>
+      <div id="account-menu" class="account-menu" hidden>
+        <div class="account-menu-company" id="account-menu-company"></div>
+        <button type="button" class="account-menu-item" data-account-view="team">企业协作</button>
+        <button type="button" class="account-menu-item" data-account-view="audit">操作记录</button>
+        <button type="button" class="account-menu-item" data-account-view="operations">支持中心</button>
+        <button type="button" class="account-menu-item" data-account-view="password">修改密码</button>
+        <a href="/admin" id="platform-link" class="account-menu-item" hidden>平台管理</a>
+        <button type="button" id="logout" class="account-menu-item account-menu-logout">退出登录</button>
+      </div>
+    </div>
   </div>
-  <p>在一处确认配置交付、节点联系与逐规则运行状态。RelaDock 只透传业务流量，不终结客户协议。</p>
-</div>
+</header>
+<dialog id="password-dialog" class="editor-dialog" aria-labelledby="password-dialog-title">
+  <div class="dialog-heading"><div><h2 id="password-dialog-title">修改密码</h2><p class="muted">输入当前密码后设置新的登录密码。</p></div><button id="password-dialog-close" class="icon-button" type="button" aria-label="关闭修改密码弹窗">×</button></div>
+  <form id="password-form">
+    <label>当前密码<div class="password-input"><input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required maxlength="128"><button id="current-password-toggle" class="password-toggle" type="button" aria-controls="current-password" aria-pressed="false">显示</button></div></label>
+    <label>新密码<div class="password-input"><input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required><button id="new-password-toggle" class="password-toggle" type="button" aria-controls="new-password" aria-pressed="false">显示</button></div></label>
+    <label>确认新密码<div class="password-input"><input id="confirm-password" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required><button id="confirm-password-toggle" class="password-toggle" type="button" aria-controls="confirm-password" aria-pressed="false">显示</button></div></label>
+    <p id="password-form-message" class="error" role="status" aria-live="polite"></p>
+    <div class="dialog-actions"><button id="password-dialog-cancel" class="secondary" type="button">取消</button><button id="password-submit" type="submit">保存新密码</button></div>
+  </form>
+</dialog>
 <section class="workspace-summary" data-pane="overview" aria-label="工作台运行概览">
-  <article><span>规则总数</span><strong id="summary-rule-total">0</strong><small>当前企业配置</small></article>
-  <article><span>配置已应用</span><strong id="summary-rule-applied">0</strong><small>不代表链路健康</small></article>
-  <article><span>待交付处理</span><strong id="summary-rule-pending">0</strong><small>待部署或待确认</small></article>
-  <article><span>有联系记录</span><strong id="summary-node-contact">0/0</strong><small>节点数 / 节点总数</small></article>
+  <article><span>规则总数</span><strong id="summary-rule-total">0</strong></article>
+  <article><span>配置已应用</span><strong id="summary-rule-applied">0</strong></article>
+  <article><span>待交付处理</span><strong id="summary-rule-pending">0</strong></article>
+  <article><span>有联系记录</span><strong id="summary-node-contact">0/0</strong></article>
 </section>
-<div class="notice" data-pane="overview"><span>运行边界</span><p>每条规则独立设置带宽与统计流量。配置应用、节点在线和目标可达是不同事实；端到端转发仍需真实客户端验证。</p></div>
+<div class="notice" data-pane="overview"><span>运行边界</span><p>配置已应用、节点在线和目标可达均不代表端到端健康。</p></div>
 <section class="rule-management primary-section" id="rules-section" data-pane="rules" hidden>
-  <div class="section-index">Relay rules</div>
-  <div class="section-heading"><div><h2>转发规则 <span class="muted" id="rule-count"></span></h2><p class="hint muted">每条转发独立设置带宽并统计上下行流量。暂停保留端口；删除已下发规则后，端口继续隔离等待安全回收。</p></div><button id="rule-create" class="compact">创建规则</button></div>
+  <div class="section-heading"><div><h2>转发规则 <span class="muted" id="rule-count"></span></h2><p class="hint muted">先购买套餐，再用已购买套餐创建规则；暂停保留端口，删除已下发规则后继续隔离等待安全回收。</p></div><button id="rule-create" class="compact">创建规则</button></div>
   <div class="scroll"><table><thead><tr><th>名称 / 节点</th><th>预留端口</th><th>传输</th><th>目标</th><th>带宽上限</th><th>已使用流量</th><th>近期带宽</th><th>配置版本</th><th>状态</th><th>操作</th></tr></thead><tbody id="rules"></tbody></table></div><p id="rules-message" class="error" role="status"></p>
 </section>
 <dialog id="rule-dialog" class="editor-dialog" aria-labelledby="rule-dialog-title">
@@ -64,7 +78,7 @@
     <div class="editor-grid">
       <label class="field-wide">规则名称<input name="name" required maxlength="80" placeholder="新加坡落地 A"></label>
       <label>传输类型<select name="protocol"><option value="udp">UDP</option><option value="tcp">TCP</option><option value="both">TCP + UDP</option></select></label>
-      <label>入口节点<select name="nodeId" id="node-select" required></select></label>
+      <label>已购买套餐 / 入口节点<select name="nodeId" id="node-select" required></select></label>
       <label class="field-wide">目标 IP / 域名<input name="targetHost" required maxlength="253" placeholder="客户落地服务器地址"></label>
       <label>目标端口<input name="targetPort" type="number" min="1" max="65535" value="443" required></label>
       <label>带宽上限 / Mbps<input name="bandwidthMbps" type="number" min="1" max="1000" value="1000" required></label>
@@ -74,18 +88,17 @@
     <div class="dialog-actions"><button id="rule-dialog-cancel" class="secondary" type="button">取消</button><button id="rule-submit" type="submit">预留端口并保存</button></div>
   </form>
 </dialog>
-<section id="telemetry-section" class="telemetry-section" data-pane="traffic" hidden>
-  <div class="section-index">Traffic &amp; capacity</div>
-  <div class="section-heading"><div><h2>流量与入口节点资源</h2><p class="hint muted">累计流量按每条转发独立统计。近期带宽按平台接收时间的报告差值估算，不是瞬时值、保证带宽或端到端健康。</p></div></div>
+<section id="telemetry-section" class="telemetry-section" data-pane="rules" hidden>
+  <div class="section-heading"><div><h2>流量与入口节点资源</h2><p class="hint muted">近期带宽按平台接收时间估算，不代表保证带宽或端到端健康。</p></div></div>
   <div class="telemetry-controls">
     <label>查看规则<select id="telemetry-rule" aria-label="选择流量趋势规则"></select></label>
     <label>统计窗口<select id="telemetry-window" aria-label="选择流量趋势窗口"><option value="1h">最近 1 小时</option><option value="24h">最近 24 小时</option><option value="7d">最近 7 天</option></select></label>
   </div>
   <div class="telemetry-metrics" aria-live="polite">
     <article><span>累计总流量</span><strong id="telemetry-total">—</strong><small id="telemetry-total-detail">等待流量报告</small></article>
-    <article><span>近期上行</span><strong id="telemetry-upload-rate">—</strong><small>平台接收时间估算</small></article>
-    <article><span>近期下行</span><strong id="telemetry-download-rate">—</strong><small>平台接收时间估算</small></article>
-    <article><span>带宽利用率</span><strong id="telemetry-utilization">—</strong><small>相对本规则带宽上限</small></article>
+    <article><span>近期上行</span><strong id="telemetry-upload-rate">—</strong></article>
+    <article><span>近期下行</span><strong id="telemetry-download-rate">—</strong></article>
+    <article><span>带宽利用率</span><strong id="telemetry-utilization">—</strong></article>
   </div>
   <div class="telemetry-grid">
     <article class="trend-panel"><div class="panel-heading"><div><h3>已接收流量趋势</h3><p id="traffic-trend-message" class="muted">选择规则后加载。</p></div><span id="telemetry-rate-state" class="telemetry-state">等待数据</span></div><div id="traffic-trend" class="traffic-trend" role="img" aria-label="规则流量趋势"></div><p class="hint muted">按平台接收时间聚合；空档表示没有已接收报告，不推断为 0。</p></article>
@@ -94,20 +107,39 @@
   <p id="telemetry-message" class="error" role="status"></p>
 </section>
 <section id="node-status-section" class="node-status-section" data-pane="node-status" hidden>
-  <div class="section-index">Live nodes</div>
-  <div class="section-heading"><div><h2>节点状态</h2><p class="hint muted">仅显示当前企业转发规则关联的入口节点。在线、配置一致和资源正常均不代表端到端转发健康。</p></div></div>
+  <div class="section-heading"><div><h2>入口节点</h2><p class="hint muted">仅显示本企业关联节点；在线或配置一致不代表端到端健康。</p></div></div>
   <div class="scroll"><table class="node-status-table"><thead><tr><th>入口节点</th><th>联系 / 配置</th><th>实时速率</th><th>累计流量</th><th>Agent 运行</th><th>CPU / RAM / 存储 / 连接跟踪</th><th>样本时间</th></tr></thead><tbody id="node-status-rows"></tbody></table></div>
   <p id="node-status-message" class="muted hint" role="status" aria-live="polite">等待节点数据。</p>
 </section>
-<section id="nodes-section" data-pane="delivery" hidden><div class="section-index">Delivery</div><h2>节点与配置交付</h2><p class="muted hint">最近联系、配置校验和应用确认均不代表端到端转发健康。节点登记、维护和证书由平台运维管理。</p><div class="scroll"><table><thead><tr><th>节点</th><th>地区</th><th>资源状态</th><th>期望 / 校验 / 应用版本</th><th>交付状态</th><th>最近联系</th></tr></thead><tbody id="nodes"></tbody></table></div><p id="refresh-message" class="muted hint" role="status"></p></section>
-<section data-pane="overview"><div class="section-index">Activity</div><h2>最近操作</h2><p class="muted hint">显示当前企业最近 50 条账户与规则操作。</p><div class="scroll"><table id="audit"><thead><tr><th>时间</th><th>操作</th><th>资源</th></tr></thead><tbody id="audit-rows"></tbody></table></div></section>
+<section id="nodes-section" data-pane="rules" hidden><h2>交付概况</h2><p class="muted hint">校验和应用确认不代表端到端健康。</p><div class="scroll"><table><thead><tr><th>节点</th><th>地区</th><th>资源状态</th><th>期望 / 校验 / 应用版本</th><th>交付状态</th><th>最近联系</th></tr></thead><tbody id="nodes"></tbody></table></div><p id="refresh-message" class="muted hint" role="status"></p></section>
+<section data-pane="audit" hidden><h2>操作记录</h2><div class="scroll"><table id="audit"><thead><tr><th>时间</th><th>操作</th><th>资源</th></tr></thead><tbody id="audit-rows"></tbody></table></div></section>
 <div data-pane="team" hidden>
-<section id="member-tools"><div class="section-index" id="team">Team</div><h2>企业成员</h2><div class="scroll"><table><thead><tr><th>邮箱</th><th>角色</th><th>管理</th></tr></thead><tbody id="member-rows"></tbody></table></div><form id="invitation-form"><label>受邀邮箱<input name="email" type="email" required></label><label>角色<select name="role"><option value="viewer">只读成员</option><option value="admin">企业管理员</option></select></label><button>生成邀请（24 小时有效）</button></form><p class="hint muted">邀请令牌只显示一次，请通过可信渠道发给受邀人，由其在登录页接受。平台暂不自动发送邮件。</p><div class="scroll"><table><thead><tr><th>受邀邮箱</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="invitation-rows"></tbody></table></div></section>
-<section><div class="section-index">Access</div><h2>API Key</h2><p class="muted hint">Key 仅拥有当前企业权限，不能操作平台管理。令牌只在创建时显示，可随时撤销。</p><form id="api-key-form"><label>名称<input name="name" maxlength="80" required></label><label>范围<select name="scope"><option value="read">只读</option><option value="write">读写</option></select></label><button>创建 Key（30 天有效）</button></form><div class="scroll"><table><thead><tr><th>名称</th><th>范围</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="key-rows"></tbody></table></div></section>
+<section id="member-tools"><h2>企业成员</h2><div class="scroll"><table><thead><tr><th>邮箱</th><th>角色</th><th>管理</th></tr></thead><tbody id="member-rows"></tbody></table></div><form id="invitation-form"><label>受邀邮箱<input name="email" type="email" required></label><label>角色<select name="role"><option value="viewer">只读成员</option><option value="admin">企业管理员</option></select></label><button>生成邀请（24 小时有效）</button></form><p class="hint muted">邀请令牌只显示一次，请通过可信渠道发送。</p><div class="scroll"><table><thead><tr><th>受邀邮箱</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="invitation-rows"></tbody></table></div></section>
+<section><h2>API Key</h2><p class="muted hint">Key 仅限当前企业，不能操作平台管理；令牌只显示一次。</p><form id="api-key-form"><label>名称<input name="name" maxlength="80" required></label><label>范围<select name="scope"><option value="read">只读</option><option value="write">读写</option></select></label><button>创建 Key（30 天有效）</button></form><div class="scroll"><table><thead><tr><th>名称</th><th>范围</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="key-rows"></tbody></table></div></section>
 <section id="credential-result" hidden><h2>一次性令牌</h2><p class="hint muted">关闭或刷新后无法再次查看，请妥善保管。</p><input id="credential-token" readonly autocomplete="off" aria-label="一次性令牌"><button id="credential-clear" class="secondary">清除显示</button></section><p id="account-tools-message" class="error" role="status"></p>
 </div>
-<section id="business" data-pane="billing" hidden><div class="section-index">Billing</div><h2>规则套餐与钱包</h2><p id="wallet-status" class="muted"></p><p id="payment-availability" class="hint muted"></p><form id="top-up-form" hidden><label>充值金额 / 美分<input name="amountCents" type="number" min="50" max="1000000" required></label><button>前往支付页面</button></form><p id="plan-availability" class="muted"></p><form id="purchase-form"><label>转发规则<select name="ruleId" required></select></label><label>独立套餐<select name="priceVersionId" required></select></label><button>从钱包购买本规则套餐</button></form><p id="business-message" class="error" role="status"></p><button id="subscription-refresh" class="secondary">查询选中规则的套餐用量</button><div class="scroll"><table><thead><tr><th>套餐</th><th>本周期流量</th><th>带宽上限</th><th>到期时间</th><th>状态</th></tr></thead><tbody id="subscription-rows"></tbody></table></div><button id="wallet-ledger-refresh" class="secondary">查询钱包账本</button><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>所属规则</th><th>金额</th><th>说明</th></tr></thead><tbody id="wallet-ledger-rows"></tbody></table></div></section>
-<section id="operations" data-pane="operations" hidden><div class="section-index">Support</div><h2>告警与工单</h2><button id="operations-refresh" class="secondary">刷新告警和工单</button><div class="scroll"><table><thead><tr><th>节点</th><th>告警</th><th>状态</th><th>最近观察</th></tr></thead><tbody id="incident-rows"></tbody></table></div><form id="ticket-create"><label>工单标题<input name="subject" required maxlength="160"></label><label>问题描述<input name="body" required maxlength="4000"></label><button>提交工单</button></form><div class="scroll"><table><thead><tr><th>工单</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="ticket-rows"></tbody></table></div><div id="ticket-thread" hidden><h3 id="ticket-subject"></h3><div id="ticket-messages"></div><form id="ticket-reply"><label>回复内容<input name="body" required maxlength="4000"></label><label>状态<select name="status"><option value="open">处理中</option><option value="resolved">已解决</option></select></label><button>回复工单</button></form></div><p id="operations-message" class="error" role="status"></p></section>
-<footer>企业组网预留：站点、网关、路由与访问控制。生产链路、容量和客户协议仍须按真实环境验收。</footer>
+<section id="business" class="purchase-center" data-pane="billing" hidden>
+  <div class="section-heading"><div><h2>套餐市场</h2></div></div>
+  <div class="purchase-toolbar"><div class="plan-line-filter"><span>线路类型</span><div id="plan-line-filters" class="plan-filter-list" role="group" aria-label="按线路筛选套餐"></div></div></div>
+  <p id="plan-availability" class="muted"></p><div id="plan-card-grid" class="plan-card-grid" aria-live="polite"></div><p id="business-message" class="error" role="status"></p>
+  <dialog id="purchase-dialog" class="editor-dialog purchase-dialog" aria-labelledby="purchase-dialog-title"><div class="dialog-heading"><div><h2 id="purchase-dialog-title">配置套餐</h2></div></div><div class="purchase-dialog-summary"><div><span>绑定规则 / 待绑定</span><strong id="purchase-dialog-rule"></strong></div><div><span>套餐内容</span><strong id="purchase-dialog-plan"></strong></div><div class="purchase-dialog-total"><span>本周期价格</span><strong id="purchase-dialog-price"></strong></div></div><form id="purchase-form"><input name="ruleId" type="hidden"><input name="priceVersionId" type="hidden"><p class="hint muted">付款后立即计时；未绑定规则的套餐会在创建规则时绑定，节点未部署时等待交付。</p><p id="purchase-dialog-status" class="error" role="status"></p><div class="dialog-actions"><button type="button" id="purchase-dialog-cancel" class="secondary">取消</button><button id="purchase-confirm">确认购买</button></div></form></dialog>
+</section>
+<section class="subscription-center" data-pane="billing" hidden><div class="billing-detail-heading"><div><h2>当前套餐</h2></div><button id="subscription-refresh" class="secondary">刷新用量</button></div><div class="scroll"><table><thead><tr><th>套餐</th><th>本周期流量</th><th>带宽上限</th><th>到期时间</th><th>状态</th><th>自动续费</th></tr></thead><tbody id="subscription-rows"></tbody></table></div></section>
+<section class="finance-center" data-pane="overview"><div class="section-heading"><div><h2>钱包与账单</h2></div><div class="purchase-wallet"><span>可用钱包</span><strong id="wallet-status">读取中</strong></div></div><p id="payment-availability" class="hint muted"></p><form id="top-up-form" class="top-up-inline" hidden><label>充值金额 / 美分<input name="amountCents" type="number" min="50" max="1000000" required></label><button>前往支付页面</button></form><div class="billing-detail-heading"><div><h3>账本流水</h3></div><button id="wallet-ledger-refresh" class="secondary">刷新账本</button></div><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>所属规则</th><th>金额</th><th>说明</th></tr></thead><tbody id="wallet-ledger-rows"></tbody></table></div><p id="finance-message" class="error" role="status" aria-live="polite"></p></section>
+<section id="payment-checkout" class="payment-checkout" data-pane="checkout" hidden>
+  <div class="checkout-heading"><button type="button" id="checkout-back" class="secondary">返回套餐选购</button></div>
+  <div id="checkout-empty" class="checkout-empty"><h2>没有待支付的套餐</h2><p class="muted">请先返回套餐选购，选择规则和套餐后进入支付。</p></div>
+  <div id="checkout-content" hidden>
+    <h2>完成套餐支付</h2><p class="muted hint">仅钱包扣款成功后开通；外部支付返回不代表到账。</p>
+    <div class="checkout-order-summary"><div><span>关联规则</span><strong id="checkout-rule"></strong></div><div><span>套餐内容</span><strong id="checkout-plan"></strong></div><div class="checkout-total"><span>应付金额</span><strong id="checkout-amount"></strong></div></div>
+    <div class="payment-method-grid">
+      <article class="payment-method"><div><span>余额支付</span><h3>企业钱包</h3></div><strong id="checkout-wallet-balance">$0.00</strong><p id="checkout-balance-detail" class="muted"></p><button type="button" id="checkout-balance-pay">使用余额支付</button></article>
+      <article class="payment-method"><div><span>其他支付方式</span><h3>银行卡 / Stripe</h3></div><strong>外部支付</strong><p id="checkout-external-detail" class="muted"></p><button type="button" id="checkout-external-pay">前往外部支付</button></article>
+    </div>
+    <p class="checkout-boundary muted">外部支付必须经验签回调入账，再使用钱包完成购买。</p>
+    <p id="checkout-status" class="error" role="status" aria-live="polite"></p>
+  </div>
+</section>
+<section id="operations" data-pane="operations" hidden><h2>告警与工单</h2><button id="operations-refresh" class="secondary">刷新告警和工单</button><div class="scroll"><table><thead><tr><th>节点</th><th>告警</th><th>状态</th><th>最近观察</th></tr></thead><tbody id="incident-rows"></tbody></table></div><form id="ticket-create"><label>工单标题<input name="subject" required maxlength="160"></label><label>问题描述<input name="body" required maxlength="4000"></label><button>提交工单</button></form><div class="scroll"><table><thead><tr><th>工单</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead><tbody id="ticket-rows"></tbody></table></div><div id="ticket-thread" hidden><h3 id="ticket-subject"></h3><div id="ticket-messages"></div><form id="ticket-reply"><label>回复内容<input name="body" required maxlength="4000"></label><label>状态<select name="status"><option value="open">处理中</option><option value="resolved">已解决</option></select></label><button>回复工单</button></form></div><p id="operations-message" class="error" role="status"></p></section>
 </main></div>
 </body></html>

@@ -89,7 +89,9 @@ export function createLatestRequestGate() {
   let current = 0;
   return {
     next() { current += 1; return current; },
+    current() { return current; },
     isCurrent(token) { return token === current; },
+    invalidate() { current += 1; },
   };
 }
 

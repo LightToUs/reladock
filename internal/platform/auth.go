@@ -210,3 +210,47 @@ func (s *Store) Logout(ctx context.Context, token string) error {
 	}
 	return tx.Commit(ctx)
 }
+
+// ChangePassword verifies the current password, updates the member credential,
+// keeps the active browser session, and revokes every other session.
+func (s *Store) ChangePassword(ctx context.Context, who Identity, sessionToken, currentPassword, newPassword string) error {
+	if len(currentPassword) < 1 || len(currentPassword) > 128 || len(newPassword) < 12 || len(newPassword) > 128 {
+		return ErrInvalid
+	}
+	if err := memberSessionOnly(ctx); err != nil {
+		return err
+	}
+	hash, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = platformLock(ctx, tx); err != nil {
+		return err
+	}
+	var stored string
+	err = tx.QueryRow(ctx, `SELECT m.password_hash FROM members m JOIN tenants t ON t.id=m.tenant_id WHERE m.id=$1 AND m.tenant_id=$2 AND t.status='active' FOR UPDATE OF m,t`, who.MemberID, who.TenantID).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrUnauthorized
+	}
+	if err != nil {
+		return err
+	}
+	if !verifyPassword(currentPassword, stored) {
+		return ErrUnauthorized
+	}
+	if _, err = tx.Exec(ctx, `UPDATE members SET password_hash=$1 WHERE id=$2 AND tenant_id=$3`, hash, who.MemberID, who.TenantID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM sessions WHERE member_id=$1 AND token_hash<>$2`, who.MemberID, tokenHash(sessionToken)); err != nil {
+		return err
+	}
+	if err = audit(ctx, tx, who, "account.password_change", who.MemberID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

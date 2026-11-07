@@ -16,12 +16,13 @@ import (
 )
 
 type RuleInput struct {
-	Name          string `json:"name"`
-	Protocol      string `json:"protocol"`
-	TargetHost    string `json:"targetHost"`
-	TargetPort    int    `json:"targetPort"`
-	BandwidthMbps int    `json:"bandwidthMbps"`
-	NodeID        string `json:"nodeId"`
+	Name           string `json:"name"`
+	Protocol       string `json:"protocol"`
+	TargetHost     string `json:"targetHost"`
+	TargetPort     int    `json:"targetPort"`
+	BandwidthMbps  int    `json:"bandwidthMbps"`
+	NodeID         string `json:"nodeId"`
+	SubscriptionID string `json:"subscriptionId,omitempty"`
 }
 type RuleUpdateInput struct {
 	Name           string `json:"name"`
@@ -55,7 +56,7 @@ var idempotencyKey = regexp.MustCompile(`^[a-zA-Z0-9._:-]{8,128}$`)
 func validateRule(input RuleInput) (RuleInput, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.TargetHost = strings.ToLower(strings.TrimSpace(input.TargetHost))
-	if input.NodeID == "" {
+	if input.NodeID == "" && input.SubscriptionID == "" {
 		input.NodeID = "hk-01"
 	}
 	if !utf8.ValidString(input.Name) || utf8.RuneCountInString(input.Name) < 1 || utf8.RuneCountInString(input.Name) > 80 || len(input.TargetHost) > 253 || (net.ParseIP(input.TargetHost) == nil && !hostname.MatchString(input.TargetHost)) || input.TargetPort < 1 || input.TargetPort > 65535 || input.BandwidthMbps < 1 || input.BandwidthMbps > 1000 {
@@ -65,6 +66,9 @@ func validateRule(input RuleInput) (RuleInput, error) {
 		return RuleInput{}, ErrInvalid
 	}
 	if len(input.NodeID) > 80 {
+		return RuleInput{}, ErrInvalid
+	}
+	if input.SubscriptionID != "" && !billingUUID.MatchString(input.SubscriptionID) {
 		return RuleInput{}, ErrInvalid
 	}
 	return input, nil
@@ -116,17 +120,66 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return Rule{}, err
 	}
+	var packageID string
+	if input.SubscriptionID != "" {
+		var packageNode, packageStatus, offeringState string
+		var packageBandwidth, packageCapacity int
+		err = tx.QueryRow(ctx, `SELECT n.id,n.status,n.capacity_mbps,v.bandwidth_mbps,o.state
+			FROM rule_subscriptions p
+			JOIN plan_price_versions v ON v.id=p.price_version_id
+			JOIN line_offerings o ON o.id=v.offering_id
+			JOIN nodes n ON n.id=o.node_id
+			WHERE p.id=$1 AND p.tenant_id=$2 AND p.ends_at>clock_timestamp()
+			AND p.final_upload_bytes IS NULL AND p.final_download_bytes IS NULL
+			`, input.SubscriptionID, who.TenantID).Scan(&packageNode, &packageStatus, &packageCapacity, &packageBandwidth, &offeringState)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Rule{}, ErrConflict
+		}
+		if err != nil {
+			return Rule{}, err
+		}
+		if input.NodeID != "" && input.NodeID != packageNode || input.BandwidthMbps != packageBandwidth {
+			return Rule{}, ErrConflict
+		}
+		if offeringState != string(OfferingStatePublished) || !nodeAllowsSales(packageStatus) {
+			return Rule{}, ErrNodeNotAllocatable
+		}
+		if packageBandwidth > packageCapacity {
+			return Rule{}, ErrInvalid
+		}
+		input.NodeID = packageNode
+		input.BandwidthMbps = packageBandwidth
+		packageID = input.SubscriptionID
+	}
 	// The unique endpoint constraint is the final authority; this node lock avoids
 	// repeated collisions under concurrent allocation and covers both protocols.
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "reladock-node:"+input.NodeID); err != nil {
 		return Rule{}, err
 	}
 	var address, nodeStatus string
+	if packageID != "" {
+		// Match usage/renewal lock order: node first, then paid period. Recheck
+		// after waiting so an old renewed/exhausted period cannot gain bindings.
+		var locked string
+		if err = tx.QueryRow(ctx, "SELECT id FROM rule_subscriptions WHERE id=$1 FOR UPDATE", packageID).Scan(&locked); err != nil {
+			return Rule{}, err
+		}
+		period, e := readSubscription(ctx, tx, packageID)
+		if e != nil {
+			return Rule{}, e
+		}
+		if period.Status != "active" {
+			return Rule{}, ErrConflict
+		}
+	}
 	var nodeCapacity int
 	if err = tx.QueryRow(ctx, "SELECT listen_address::text,status,capacity_mbps FROM nodes WHERE id=$1", input.NodeID).Scan(&address, &nodeStatus, &nodeCapacity); errors.Is(err, pgx.ErrNoRows) {
 		return Rule{}, ErrNotFound
 	}
 	if err != nil {
+		return Rule{}, err
+	}
+	if err = checkNodeAdmission(ctx, tx, input.NodeID, who.TenantID); err != nil {
 		return Rule{}, err
 	}
 	if nodeStatus == "maintenance" || nodeStatus == "draining" || nodeStatus == "retired" {
@@ -162,6 +215,11 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 			return Rule{}, err
 		}
 	}
+	if packageID != "" {
+		if _, err = tx.Exec(ctx, "INSERT INTO subscription_usage(subscription_id,rule_id,tenant_id,node_id) VALUES($1,$2,$3,$4)", packageID, rule.ID, who.TenantID, input.NodeID); err != nil {
+			return Rule{}, err
+		}
+	}
 	if _, err = tx.Exec(ctx, "INSERT INTO idempotency_requests(tenant_id,key,request_hash,rule_id) VALUES($1,$2,$3,$4)", who.TenantID, key, requestHash, rule.ID); err != nil {
 		return Rule{}, err
 	}
@@ -175,6 +233,40 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 		return Rule{}, err
 	}
 	return rule, nil
+}
+
+func checkNodeAdmission(ctx context.Context, tx pgx.Tx, nodeID, tenantID string) error {
+	var mode ResourceMode
+	var owner string
+	if err := tx.QueryRow(ctx, "SELECT resource_mode,COALESCE(dedicated_tenant_id::text,'') FROM nodes WHERE id=$1", nodeID).Scan(&mode, &owner); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	switch mode {
+	case ResourceModeShared:
+		return nil
+	case ResourceModeDedicatedTenant:
+		if owner != tenantID {
+			return ErrConflict
+		}
+		return nil
+	case ResourceModeDedicatedRule:
+		if owner != tenantID {
+			return ErrConflict
+		}
+		var count int
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM relay_rules WHERE node_id=$1 AND status<>'deleted'", nodeID).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return ErrConflict
+		}
+		return nil
+	default:
+		return ErrConflict
+	}
 }
 
 func (s *Store) ListRules(ctx context.Context, who Identity) ([]Rule, error) {
@@ -240,7 +332,7 @@ func (s *Store) UpdateRule(ctx context.Context, who Identity, id string, input R
 		return Rule{}, ErrInvalid
 	}
 	var planBandwidth int
-	err = tx.QueryRow(ctx, `SELECT v.bandwidth_mbps FROM rule_subscriptions p JOIN plan_price_versions v ON v.id=p.price_version_id WHERE p.rule_id=$1 AND p.tenant_id=$2 AND p.ends_at>clock_timestamp() AND p.final_upload_bytes IS NULL ORDER BY p.ordinal DESC LIMIT 1`, id, who.TenantID).Scan(&planBandwidth)
+	err = tx.QueryRow(ctx, `SELECT v.bandwidth_mbps FROM rule_subscriptions p JOIN plan_price_versions v ON v.id=p.price_version_id WHERE p.tenant_id=$2 AND (p.rule_id=$1 OR EXISTS(SELECT 1 FROM subscription_usage u WHERE u.subscription_id=p.id AND u.rule_id=$1 AND u.tenant_id=$2)) AND p.ends_at>clock_timestamp() AND p.final_upload_bytes IS NULL ORDER BY p.ordinal DESC LIMIT 1`, id, who.TenantID).Scan(&planBandwidth)
 	if err == nil && validated.BandwidthMbps > planBandwidth {
 		return Rule{}, ErrInvalid
 	}

@@ -1,5 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+test('closing clears immediately and a delayed close event cannot clear a reopened dialog',async()=>{
+ const {bindBootstrapDialog}=await import('../public/node-bootstrap.js');
+ const pending=[];const dialog=new EventTarget();dialog.open=false;
+ dialog.showModal=()=>{dialog.open=true};dialog.close=()=>{dialog.open=false;pending.push(()=>dialog.dispatchEvent(new Event('close')))};
+ const closeButton=new EventTarget();let command='';
+ const view=bindBootstrapDialog({dialog,closeButton,onClose:()=>{command=''}});
+ view.open();command='first';view.close();assert.equal(command,'');
+ view.open();command='second';pending.shift()();assert.equal(command,'second');assert.equal(dialog.open,true);
+ view.close();assert.equal(command,'');pending.shift()();
+});
 test('agent installation opens as a dialog and every close clears credentials',async()=>{
  const {bindBootstrapDialog}=await import('../public/node-bootstrap.js');
  const dialog=new EventTarget();dialog.open=false;dialog.showModal=()=>{dialog.open=true};dialog.close=()=>{dialog.open=false;dialog.dispatchEvent(new Event('close'))};

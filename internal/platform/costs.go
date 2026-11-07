@@ -211,10 +211,12 @@ func (s *Store) AdminCashMargin(ctx context.Context, who Identity, from, to time
 	// and negation uses numeric BEFORE Go range checks, including platform totals
 	// across nodes not present on the current page. Deleted rules stay joined.
 	rows, err := tx.Query(ctx, `WITH revenue AS (
- SELECT r.node_id,SUM(-l.amount_cents::numeric) AS cents
- FROM billing_ledger l JOIN rule_subscriptions p ON p.ledger_id=l.id AND p.tenant_id=l.tenant_id AND p.rule_id=l.rule_id AND p.price_version_id=l.price_version_id
- JOIN relay_rules r ON r.id=l.rule_id AND r.tenant_id=l.tenant_id
- WHERE l.kind='subscription-debit' AND l.currency='USD' AND l.created_at>=$1 AND l.created_at<$2 GROUP BY r.node_id
+ SELECT COALESCE(o.node_id,r.node_id) AS node_id,SUM(-l.amount_cents::numeric) AS cents
+ FROM billing_ledger l JOIN rule_subscriptions p ON p.ledger_id=l.id AND p.tenant_id=l.tenant_id AND p.price_version_id=l.price_version_id
+ JOIN plan_price_versions v ON v.id=p.price_version_id
+ LEFT JOIN line_offerings o ON o.id=v.offering_id
+ LEFT JOIN relay_rules r ON r.id=p.rule_id AND r.tenant_id=p.tenant_id
+ WHERE l.kind='subscription-debit' AND l.currency='USD' AND l.created_at>=$1 AND l.created_at<$2 GROUP BY COALESCE(o.node_id,r.node_id)
  ), costs AS (
  SELECT node_id,SUM(amount_cents::numeric) AS cents,COUNT(*) AS entries FROM node_cost_entries WHERE recorded_at>=$1 AND recorded_at<$2 GROUP BY node_id
  ), values_by_node AS (

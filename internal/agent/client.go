@@ -49,9 +49,10 @@ func (e *controlRejection) Error() string {
 }
 
 type Client struct {
-	HTTP    *http.Client
-	BaseURL string
-	NodeID  string
+	Credentials *CredentialManager
+	HTTP        *http.Client
+	BaseURL     string
+	NodeID      string
 	// Nil Applier preserves validation-only operation, without begin or state I/O.
 	Applier      Applier
 	State        *ApplyState

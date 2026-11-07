@@ -8,7 +8,11 @@ import (
 
 func revertRetirementSchema(t *testing.T, s *Store) {
 	t.Helper()
+	revertSchemaTo26(t, s)
 	_, err := s.pool.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version>=22;
+DROP TABLE platform_node_visibility;
+ALTER TABLE plan_price_versions DROP COLUMN resource_mode;
+ALTER TABLE nodes DROP COLUMN resource_mode,DROP COLUMN dedicated_tenant_id;
 DROP TABLE node_resource_latest;
 DROP TABLE node_drain_attestations;
 ALTER TABLE nodes DROP COLUMN agent_kernel_boot_id,DROP COLUMN agent_journal_sequence;
@@ -28,7 +32,11 @@ ALTER TABLE operations_incidents DROP CONSTRAINT operations_incidents_kind_check
 
 func revertDrainSchemaTo22(t *testing.T, s *Store) {
 	t.Helper()
+	revertSchemaTo26(t, s)
 	_, err := s.pool.Exec(context.Background(), `DELETE FROM schema_migrations WHERE version>=23;
+DROP TABLE platform_node_visibility;
+ALTER TABLE plan_price_versions DROP COLUMN resource_mode;
+ALTER TABLE nodes DROP COLUMN resource_mode,DROP COLUMN dedicated_tenant_id;
 DROP TABLE node_resource_latest;
 DROP INDEX node_drain_attestations_unconsumed;
 ALTER TABLE node_drain_attestations DROP COLUMN node_revision;

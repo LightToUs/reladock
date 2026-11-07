@@ -144,7 +144,7 @@ func TestAdminNodeLifecycleAndRevisionGuards(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	admin, _ := adminIdentity(t, s)
-	input := NodeInput{ID: "hk-02", Name: "香港二号", Region: "Hong Kong", ListenAddress: "0.0.0.0", PublicAddress: "192.0.2.50", CapacityMbps: 1000}
+	input := NodeInput{ID: "hk-02", Name: "香港二号", Region: "Hong Kong", ListenAddress: "0.0.0.0", PublicAddress: "192.0.2.50", CapacityMbps: 1000, ResourceMode: ResourceModeShared}
 	if err := s.AdminAddNode(ctx, admin, input); err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestAdminWithdrawsNeverDeployedEmptyNode(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	admin, _ := adminIdentity(t, s)
-	input := NodeInput{ID: "unused-01", Name: "误登记节点", Region: "Hong Kong", ListenAddress: "0.0.0.0", CapacityMbps: 1000}
+	input := NodeInput{ID: "unused-01", Name: "误登记节点", Region: "Hong Kong", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeShared}
 	if err := s.AdminAddNode(ctx, admin, input); err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +459,7 @@ func TestAdminWithdrawRejectsLifecycleHistory(t *testing.T) {
 			ctx := context.Background()
 			admin, _ := adminIdentity(t, s)
 			id := "blocked-01"
-			if err := s.AdminAddNode(ctx, admin, NodeInput{ID: id, Name: "不可撤销节点", Region: "Hong Kong", ListenAddress: "0.0.0.0", CapacityMbps: 1000}); err != nil {
+			if err := s.AdminAddNode(ctx, admin, NodeInput{ID: id, Name: "不可撤销节点", Region: "Hong Kong", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeShared}); err != nil {
 				t.Fatal(err)
 			}
 			if err := tc.block(ctx, s, admin, id); err != nil {
@@ -486,7 +486,7 @@ func TestAdminWithdrawRollbackOnAuditFailure(t *testing.T) {
 	ctx := context.Background()
 	admin, _ := adminIdentity(t, s)
 	id := "rollback-01"
-	if err := s.AdminAddNode(ctx, admin, NodeInput{ID: id, Name: "回滚节点", Region: "Hong Kong", ListenAddress: "0.0.0.0", CapacityMbps: 1000}); err != nil {
+	if err := s.AdminAddNode(ctx, admin, NodeInput{ID: id, Name: "回滚节点", Region: "Hong Kong", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeShared}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.pool.Exec(ctx, `CREATE FUNCTION reject_withdraw_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.withdraw-registration' THEN RAISE EXCEPTION 'audit unavailable'; END IF; RETURN NEW; END; $$; CREATE TRIGGER reject_withdraw_audit BEFORE INSERT ON platform_audit_logs FOR EACH ROW EXECUTE FUNCTION reject_withdraw_audit()`); err != nil {

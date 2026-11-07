@@ -22,15 +22,18 @@ type CertificateInfo struct {
 }
 
 type CredentialManager struct {
-	mu                sync.RWMutex
-	pkiDir            string
-	nodeID            string
-	roots             *x509.CertPool
-	current           tls.Certificate
-	info              CertificateInfo
-	transports        []*http.Transport
-	rotationState     string
-	rotationErrorCode string
+	rotationMu         sync.Mutex
+	rotationRequested  chan struct{}
+	desiredFingerprint string
+	mu                 sync.RWMutex
+	pkiDir             string
+	nodeID             string
+	roots              *x509.CertPool
+	current            tls.Certificate
+	info               CertificateInfo
+	transports         []*http.Transport
+	rotationState      string
+	rotationErrorCode  string
 }
 
 func safePrivateFile(path string) error {
@@ -128,7 +131,7 @@ func OpenCredentialManager(pkiDir, nodeID string) (*CredentialManager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &CredentialManager{pkiDir: pkiDir, nodeID: nodeID, roots: roots, current: pair, info: info}, nil
+	return &CredentialManager{pkiDir: pkiDir, nodeID: nodeID, roots: roots, current: pair, info: info, rotationRequested: make(chan struct{}, 1)}, nil
 }
 
 func (m *CredentialManager) TLSConfig() (*tls.Config, error) {

@@ -1,6 +1,12 @@
 export function nodeActionDescriptor(kind, node) {
   if (kind === 'withdraw-registration' && !node.withdrawable) return null;
+  if (kind === 'rotate-certificate' && (!node.certificateFingerprint || !node.certificateRotationSupported || node.certificateRotationRequested || ['draining', 'retired'].includes(node.status))) return null;
   const definitions = {
+    'rotate-certificate': {
+      title: '自动更换证书', confirmLabel: '请求更换', danger: false,
+      description: 'Agent 将自动生成新私钥并申请证书，激活后替换旧身份，无需手动填写证书或重新安装。节点离线时等待恢复连接。',
+      successText: '更换请求已提交，等待 Agent 完成证书激活。',
+    },
     maintenance: {
       title: '进入维护', confirmLabel: '确认进入维护', danger: false,
       description: '进入维护只停止新增端口分配，不会停止已有业务流量。',
@@ -46,14 +52,25 @@ export function nodeActionDescriptor(kind, node) {
       description: '撤销当前证书的 Agent 接入权限，不会停止已有数据面流量。',
       successText: '节点证书授权已撤销。',
     },
+    hide: {
+      title: '隐藏节点', confirmLabel: '确认隐藏', danger: false,
+      description: '仅从默认入口节点列表隐藏；不删除客户规则，不改变 Agent、转发、计费或安全退役状态。',
+      successText: '节点已从默认列表隐藏，可通过“显示已隐藏节点”恢复查看。',
+    },
+    unhide: {
+      title: '恢复显示', confirmLabel: '确认恢复显示', danger: false,
+      description: '恢复到默认入口节点列表；不会改变节点运行或安全退役状态。',
+      successText: '节点已恢复到默认列表。',
+    },
   };
   const definition = definitions[kind];
   if (!definition) return null;
+  const visibility = kind === 'hide' || kind === 'unhide';
   return {
     ...definition,
     title: `${definition.title} · ${node.name}`,
-    path: `/api/admin/nodes/${encodeURIComponent(node.id)}/${kind}`,
-    body: { revision: node.revision },
+    path: `/api/admin/nodes/${encodeURIComponent(node.id)}/${visibility ? 'visibility' : kind}`,
+    body: visibility ? { visibilityRevision: node.visibilityRevision, hidden: kind === 'hide' } : { revision: node.revision },
   };
 }
 

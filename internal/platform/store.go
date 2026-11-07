@@ -13,12 +13,14 @@ import (
 )
 
 var (
-	ErrInvalid      = errors.New("输入参数无效")
-	ErrConflict     = errors.New("资源或幂等请求冲突")
-	ErrUnauthorized = errors.New("邮箱或密码错误，或登录已失效")
-	ErrNotFound     = errors.New("资源不存在或无权访问")
-	ErrForbidden    = errors.New("没有操作权限")
-	ErrCapacity     = errors.New("节点可用端口不足")
+	ErrInvalid             = errors.New("输入参数无效")
+	ErrConflict            = errors.New("资源或幂等请求冲突")
+	ErrUnauthorized        = errors.New("邮箱或密码错误，或登录已失效")
+	ErrNotFound            = errors.New("资源不存在或无权访问")
+	ErrForbidden           = errors.New("没有操作权限")
+	ErrCapacity            = errors.New("节点可用端口不足")
+	ErrNodeNotAllocatable  = errors.New("对应入口节点当前不可销售")
+	ErrInsufficientBalance = errors.New("钱包余额不足，请先充值或联系平台管理员")
 )
 
 type Store struct {
@@ -53,6 +55,33 @@ var migration23SQL string
 
 //go:embed migration24.sql
 var migration24SQL string
+
+//go:embed migration25.sql
+var migration25SQL string
+
+//go:embed migration26.sql
+var migration26SQL string
+
+//go:embed migration27.sql
+var migration27SQL string
+
+//go:embed migration28.sql
+var migration28SQL string
+
+//go:embed migration29.sql
+var migration29SQL string
+
+//go:embed migration30.sql
+var migration30SQL string
+
+//go:embed migration31.sql
+var migration31SQL string
+
+//go:embed migration32.sql
+var migration32SQL string
+
+//go:embed migration33.sql
+var migration33SQL string
 
 //go:embed migration2.sql
 var migration2SQL string
@@ -93,7 +122,7 @@ var migration14SQL string
 //go:embed migration16.sql
 var migration16SQL string
 
-const SchemaVersion = 24
+const SchemaVersion = 33
 
 func Open(ctx context.Context, url string) (*Store, error) {
 	return OpenWithOptions(ctx, url, StoreOptions{})
@@ -385,6 +414,78 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("migration 24: %w", err)
 		}
 		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(24)"); err != nil {
+			return err
+		}
+	}
+	if version < 25 {
+		if _, err = tx.Exec(ctx, migration25SQL); err != nil {
+			return fmt.Errorf("migration 25: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(25)"); err != nil {
+			return err
+		}
+	}
+	if version < 26 {
+		if _, err = tx.Exec(ctx, migration26SQL); err != nil {
+			return fmt.Errorf("migration 26: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(26)"); err != nil {
+			return err
+		}
+	}
+	if version < 27 {
+		if _, err = tx.Exec(ctx, migration27SQL); err != nil {
+			return fmt.Errorf("migration 27: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(27)"); err != nil {
+			return err
+		}
+	}
+	if version < 28 {
+		if _, err = tx.Exec(ctx, migration28SQL); err != nil {
+			return fmt.Errorf("migration 28: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(28)"); err != nil {
+			return err
+		}
+	}
+	if version < 29 {
+		if _, err = tx.Exec(ctx, migration29SQL); err != nil {
+			return fmt.Errorf("migration 29: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(29)"); err != nil {
+			return err
+		}
+	}
+	if version < 30 {
+		if _, err = tx.Exec(ctx, migration30SQL); err != nil {
+			return fmt.Errorf("migration 30: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(30)"); err != nil {
+			return err
+		}
+	}
+	if version < 31 {
+		if _, err = tx.Exec(ctx, migration31SQL); err != nil {
+			return fmt.Errorf("migration 31: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(31)"); err != nil {
+			return err
+		}
+	}
+	if version < 32 {
+		if _, err = tx.Exec(ctx, migration32SQL); err != nil {
+			return fmt.Errorf("migration 32: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(32)"); err != nil {
+			return err
+		}
+	}
+	if version < 33 {
+		if _, err = tx.Exec(ctx, migration33SQL); err != nil {
+			return fmt.Errorf("migration 33: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(33)"); err != nil {
 			return err
 		}
 	}

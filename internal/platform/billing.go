@@ -197,7 +197,8 @@ type RuleTelemetrySeries struct {
 type telemetryHistorySnapshotHookKey struct{}
 
 // ReportUsage atomically records a cumulative report and its deltas. It does not
-// infer prices, quota, payment, health, deployment or charge a wallet. Soft-deleted
+// infer prices, payment, health or deployment. Explicitly enabled quota renewal
+// may debit the wallet in the same transaction. Soft-deleted
 // rules still accept buffered reports from their owning node. First report in a
 // new epoch adds its full counters. Explicitly bound epochs accept monotonic late
 // reports for their original period, including closed periods; legacy unbound
@@ -288,14 +289,14 @@ func (s *Store) ReportUsage(ctx context.Context, nodeID string, input UsageRepor
 	var periodUp, periodDown int64
 	if input.SubscriptionID == "" {
 		var subscribed bool
-		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM rule_subscriptions WHERE rule_id=$1)", input.RuleID).Scan(&subscribed); err != nil {
+		if err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM rule_subscriptions p WHERE p.rule_id=$1 OR EXISTS(SELECT 1 FROM subscription_usage u WHERE u.subscription_id=p.id AND u.rule_id=$1))", input.RuleID).Scan(&subscribed); err != nil {
 			return receipt, err
 		}
 		if subscribed && !input.DevelopmentBypass {
 			return receipt, ErrInvalid
 		}
 	} else {
-		err = tx.QueryRow(ctx, `SELECT u.upload_bytes,u.download_bytes FROM subscription_usage u JOIN rule_subscriptions p ON p.id=u.subscription_id WHERE u.subscription_id=$1 AND p.rule_id=$2 AND p.tenant_id=$3 AND u.node_id=$4`, input.SubscriptionID, input.RuleID, tenantID, nodeID).Scan(&periodUp, &periodDown)
+		err = tx.QueryRow(ctx, `SELECT u.upload_bytes,u.download_bytes FROM subscription_usage u JOIN rule_subscriptions p ON p.id=u.subscription_id WHERE u.subscription_id=$1 AND u.rule_id=$2 AND u.tenant_id=$3 AND u.node_id=$4`, input.SubscriptionID, input.RuleID, tenantID, nodeID).Scan(&periodUp, &periodDown)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return receipt, ErrNotFound
 		}
@@ -355,7 +356,7 @@ func (s *Store) ReportUsage(ctx context.Context, nodeID string, input UsageRepor
 		return receipt, err
 	}
 	if input.SubscriptionID != "" {
-		if _, err = tx.Exec(ctx, "UPDATE subscription_usage SET upload_bytes=$2,download_bytes=$3,updated_at=clock_timestamp() WHERE subscription_id=$1", input.SubscriptionID, periodUp, periodDown); err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE subscription_usage SET upload_bytes=$3,download_bytes=$4,updated_at=clock_timestamp() WHERE subscription_id=$1 AND rule_id=$2", input.SubscriptionID, input.RuleID, periodUp, periodDown); err != nil {
 			return receipt, err
 		}
 	}

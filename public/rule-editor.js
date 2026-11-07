@@ -21,7 +21,7 @@ export function createRuleEditor(dialog, form, elements) {
     form.reset();
     setAllocationLocked(false);
     elements.title.textContent = '创建中转规则';
-    elements.description.textContent = '预留 TCP/UDP 入口端口，保存配置并等待节点交付。';
+    elements.description.textContent = '使用已购买套餐预留 TCP/UDP 入口端口，保存配置并等待节点交付。';
     elements.submit.textContent = '预留端口并保存';
     elements.submit.disabled = false;
     elements.status.textContent = '';

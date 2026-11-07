@@ -85,6 +85,41 @@ test('latest-request gate rejects an older history response after selection chan
   assert.deepEqual(rendered, ['rule-b']);
 });
 
+test('latest-request gate invalidation blocks a pre-logout workspace response', async () => {
+  const gate = createLatestRequestGate();
+  const rendered = [];
+  let finishTenantA;
+  const tenantAResponse = new Promise(resolve => { finishTenantA = resolve; });
+  const tenantAToken = gate.next();
+  const tenantARender = tenantAResponse.then(value => { if (gate.isCurrent(tenantAToken)) rendered.push(value); });
+
+  assert.equal(typeof gate.invalidate, 'function');
+  gate.invalidate();
+  const tenantBToken = gate.next();
+  await Promise.resolve('tenant-b').then(value => { if (gate.isCurrent(tenantBToken)) rendered.push(value); });
+  finishTenantA('tenant-a');
+  await tenantARender;
+  assert.deepEqual(rendered, ['tenant-b']);
+});
+
+test('auth generation ignores a delayed unauthorized response from the previous login', async () => {
+  const gate = createLatestRequestGate();
+  let finishTenantA;
+  let loginShown = false;
+  const tenantAResponse = new Promise(resolve => { finishTenantA = resolve; });
+  const tenantAToken = gate.current();
+  const tenantAHandling = tenantAResponse.then(status => {
+    if (status === 401 && gate.isCurrent(tenantAToken)) loginShown = true;
+  });
+
+  gate.invalidate();
+  const tenantBToken = gate.current();
+  finishTenantA(401);
+  await tenantAHandling;
+  assert.equal(loginShown, false);
+  assert.equal(gate.isCurrent(tenantBToken), true);
+});
+
 test('optional telemetry failures preserve the authenticated overview', async () => {
   const result = await loadWorkspaceData(async path => {
     if (path === '/api/overview') return { account: { email: 'owner@example.com' }, rules: [], nodes: [] };

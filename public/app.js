@@ -5,22 +5,24 @@ import { createLatestRequestGate, loadWorkspaceData, telemetryInteractionState, 
 import { resourcePresentation } from './node-contact-status.js';
 import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation } from './node-monitoring.js';
 import { bindAccountTools,refreshAccountTools,clearCredential } from './account-tools.js';
-import { bindBusinessTools,refreshBusinessTools } from './business-tools.js';
+import { bindBusinessTools,businessViewChanged,refreshBusinessTools,resetBusinessTools } from './business-tools.js';
 import { bindOperations } from './operations-tools.js';
 import { bindConsoleNavigation } from './console-navigation.js';
+import { bindAccountMenu } from './account-menu.js';
+import { createLogoutGuard, bindPasswordVisibility } from './auth-session.js';
 const $ = selector => document.querySelector(selector);
 const workspaceNavigation = bindConsoleNavigation({
   root: $('#console'), sidebar: $('#workspace-sidebar'), mobileToggle: $('#workspace-nav-mobile'), collapseToggle: $('#workspace-nav-collapse'),
-  title: $('#workspace-view-title'), description: $('#workspace-view-description'),
+  title: $('#workspace-view-title'),
   items: document.querySelectorAll('#workspace-navigation [data-view]'), panes: document.querySelectorAll('[data-pane]'),
   defaultView: 'overview', storageKey: 'reladock.enterprise.sidebar.collapsed',
-  titles: { overview: '运行概览', rules: '转发规则', traffic: '流量与资源', 'node-status': '节点状态', delivery: '节点交付', billing: '套餐账务', team: '企业协作', operations: '告警工单' },
-  descriptions: {
-    overview: '查看当前企业的配置、交付与节点联系摘要。', rules: '创建并管理每条独立计量和限速的转发规则。',
-    traffic: '查看逐规则累计流量、近期速率和入口节点资源。', 'node-status': '查看本企业关联入口节点的最新联系与运行样本。',
-    delivery: '核对期望、校验与应用版本；这些状态不等于端到端健康。', billing: '管理逐规则套餐、钱包余额和不可变账本。',
-    team: '管理企业成员、邀请和企业范围 API Key。', operations: '查看控制面告警并与平台处理工单。',
-  },
+  titles: { overview: '运行概览', rules: '转发规则', 'node-status': '入口节点', billing: '购买套餐', checkout: '支付套餐', team: '企业协作', audit: '操作记录', operations: '支持中心' },
+  onSelect: businessViewChanged,
+});
+const accountMenu = bindAccountMenu({
+  root: $('#account-menu'), trigger: $('#account-menu-trigger'),
+  items: document.querySelectorAll('#account-menu [data-account-view]'),
+  onSelect: view => view === 'password' ? openPasswordDialog() : workspaceNavigation.select(view, { focus: true }),
 });
 let mode = 'login';
 let identity;
@@ -29,6 +31,20 @@ let telemetryByRule = new Map();
 let telemetrySummariesAvailable = false;
 let nodeMonitoringPoller;
 const telemetryHistoryGate = createLatestRequestGate();
+const workspaceRefreshGate = createLatestRequestGate();
+const authSessionGate = createLatestRequestGate();
+const logoutGuard = createLogoutGuard(authSessionGate);
+const authPasswordVisibility = bindPasswordVisibility($('#auth-password'), $('#auth-password-toggle'));
+const invitationPasswordVisibility = bindPasswordVisibility($('#invitation-password'), $('#invitation-password-toggle'));
+const currentPasswordVisibility = bindPasswordVisibility($('#current-password'), $('#current-password-toggle'));
+const newPasswordVisibility = bindPasswordVisibility($('#new-password'), $('#new-password-toggle'));
+const confirmPasswordVisibility = bindPasswordVisibility($('#confirm-password'), $('#confirm-password-toggle'));
+function openPasswordDialog() {
+  $('#password-form').reset();
+  for (const visibility of [currentPasswordVisibility, newPasswordVisibility, confirmPasswordVisibility]) visibility.hide();
+  $('#password-form-message').textContent = '';
+  $('#password-dialog').showModal();
+}
 const ruleEditor = createRuleEditor($('#rule-dialog'), $('#rule-form'), {
   title: $('#rule-dialog-title'), description: $('#rule-dialog-description'), submit: $('#rule-submit'),
   status: $('#rule-dialog-status'), allocation: $('#rule-allocation'),
@@ -37,6 +53,7 @@ const ruleEditor = createRuleEditor($('#rule-dialog'), $('#rule-form'), {
 $('#rule-dialog-close').addEventListener('click', ruleEditor.close);
 
 async function api(path, { method = 'GET', body, key, signal } = {}) {
+  const authToken = authSessionGate.current();
   const headers = {};
   if (method !== 'GET') headers['X-Requested-With'] = 'RelaDock';
   if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -44,15 +61,17 @@ async function api(path, { method = 'GET', body, key, signal } = {}) {
   const response = await fetch(path, { method, headers, credentials: 'same-origin', signal, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await response.json();
   if (!response.ok) {
-    if (response.status === 401) showAuth();
+    if (response.status === 401 && authSessionGate.isCurrent(authToken)) showAuth();
     const error = new Error(data.error || '操作失败，请重试'); error.status = response.status; throw error;
   }
   return data;
 }
-function showAuth() { clearCredential();identity = undefined; nodeMonitoringPoller?.stop(); nodeMonitoringPoller = undefined; ruleDraft.pending = undefined; ruleEditor.close(); $('#startup-error').hidden = true; $('#auth').hidden = false; $('#console').hidden = true; for (const id of ['rules-message','refresh-message','account-tools-message','rule-dialog-status']) $(`#${id}`).textContent = ''; }
+function setLogoutPendingUI(pending) { $('#console').inert = pending; $('#console').setAttribute('aria-busy', String(pending)); $('#auth').inert = pending; $('#auth').setAttribute('aria-busy', String(pending)); for (const id of ['login-tab', 'register-tab', 'auth-submit']) $(`#${id}`).disabled = pending; }
+function showAuth() { authSessionGate.invalidate(); workspaceRefreshGate.invalidate(); telemetryHistoryGate.invalidate(); clearCredential();resetBusinessTools();accountMenu.close();identity = undefined; nodeMonitoringPoller?.stop(); nodeMonitoringPoller = undefined; ruleDraft.pending = undefined; ruleEditor.close(); $('#startup-error').hidden = true; $('#auth').hidden = false; $('#console').hidden = true; setLogoutPendingUI(logoutGuard.isPending()); for (const id of ['rules-message','refresh-message','account-tools-message','rule-dialog-status']) $(`#${id}`).textContent = ''; }
 function showStartupFailure(error) { $('#auth').hidden = true; $('#console').hidden = true; $('#startup-error').hidden = false; $('#startup-error-message').textContent = error.message; }
 function setMode(value) {
   mode = value;
+  authPasswordVisibility.hide();
   $('#company-field').hidden = value !== 'register'; $('#company-field input').required = value === 'register';
   $('#auth-form [name=password]').minLength = value === 'register' ? 12 : 1;
   $('#auth-form [name=password]').autocomplete = value === 'register' ? 'new-password' : 'current-password';
@@ -63,19 +82,59 @@ function setMode(value) {
 }
 $('#login-tab').addEventListener('click', () => setMode('login'));
 $('#register-tab').addEventListener('click', () => setMode('register'));
+$('#auth-form').addEventListener('reset', () => authPasswordVisibility.hide());
+$('#accept-invitation').addEventListener('reset', () => invitationPasswordVisibility.hide());
+$('#password-dialog-close').addEventListener('click', () => $('#password-dialog').close());
+$('#password-dialog-cancel').addEventListener('click', () => $('#password-dialog').close());
+$('#password-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.target;
+  const button = $('#password-submit');
+  const fields = Object.fromEntries(new FormData(form));
+  if (fields.newPassword !== fields.confirmPassword) {
+    $('#password-form-message').textContent = '两次输入的新密码不一致。';
+    return;
+  }
+  button.disabled = true;
+  $('#password-form-message').textContent = '';
+  try {
+    await api('/api/auth/password', { method: 'POST', body: { currentPassword: fields.currentPassword, newPassword: fields.newPassword } });
+    $('#password-dialog').close();
+    form.reset();
+    $('#account-tools-message').textContent = '密码已更新，其他登录会话已退出。';
+  } catch (error) {
+    $('#password-form-message').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 $('#auth-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = $('#auth-submit'); button.disabled = true;
+  event.preventDefault(); if (!logoutGuard.canLogin()) return; const button = $('#auth-submit'); button.disabled = true;
   const fields = Object.fromEntries(new FormData(event.target)); if (mode === 'login') delete fields.company;
   try { identity = await api(`/api/auth/${mode}`, { method: 'POST', body: fields }); event.target.reset(); $('#auth-message').textContent = ''; if (identity.platformAdmin) { location.assign('/admin'); return; } await refresh(); }
   catch (error) { $('#auth-message').textContent = error.message; } finally { button.disabled = false; }
 });
 $('#logout').addEventListener('click', async () => {
+  const logoutToken = logoutGuard.start();
+  if (logoutToken === undefined) return;
+  accountMenu.close();
+  workspaceRefreshGate.invalidate();
+  telemetryHistoryGate.invalidate();
+  resetBusinessTools();
   $('#logout').disabled = true;
-  try { await api('/api/auth/logout', { method: 'POST' }); ruleDraft.pending = undefined; showAuth(); }
-  catch (error) { $('#rules-message').textContent = error.message; } finally { $('#logout').disabled = false; }
+  setLogoutPendingUI(true);
+  let loggedOut = false;
+  try { await api('/api/auth/logout', { method: 'POST' }); loggedOut = true; }
+  catch (error) { if (error.status === 401) loggedOut = true; else $('#rules-message').textContent = error.message; }
+  finally {
+    if (!logoutGuard.finish(logoutToken)) return;
+    setLogoutPendingUI(false);
+    $('#logout').disabled = false;
+    if (loggedOut) { ruleDraft.pending = undefined; showAuth(); }
+  }
 });
 function cell(row, value) { row.insertCell().textContent = value; }
-const actions = { 'account.register': '开通企业', 'account.login': '登录', 'account.logout': '退出登录', 'rule.create': '创建规则', 'rule.update': '编辑规则', 'rule.pause': '暂停配置', 'rule.resume': '恢复配置', 'rule.delete': '删除配置' };
+const actions = { 'account.register': '开通企业', 'account.login': '登录', 'account.logout': '退出登录', 'account.password_change': '修改密码', 'rule.create': '创建规则', 'rule.update': '编辑规则', 'rule.pause': '暂停配置', 'rule.resume': '恢复配置', 'rule.delete': '删除配置' };
 const deliveryStates = { queued: '等待领取', leased: '领取处理中', applying: '应用中 · 等待确认', applied: '已应用 · 健康未验证', validated: '校验通过 · 未应用', failed: '配置失败 / 待重试', superseded: '已被新版本替代' };
 
 function appendTelemetryDetail(target, primary, detail) {
@@ -252,10 +311,22 @@ function renderTelemetryWorkspace(rules, telemetry, operationNodes, { telemetryA
 }
 
 async function refresh() {
-  const workspace = await loadWorkspaceData(api);
+  const refreshToken = workspaceRefreshGate.next();
+  let workspace;
+  try {
+    workspace = await loadWorkspaceData(api);
+  } catch (error) {
+    if (!workspaceRefreshGate.isCurrent(refreshToken)) return { stale: true };
+    throw error;
+  }
+  if (!workspaceRefreshGate.isCurrent(refreshToken)) return { stale: true };
   const data = workspace.overview; const telemetry = workspace.telemetry;
   identity = data.account;
+  const roleLabels = { owner: '企业所有者', admin: '企业管理员', viewer: '只读成员' };
   $('#startup-error').hidden = true; $('#auth').hidden = true; $('#console').hidden = false; $('#company-name').textContent = identity.company; $('#account-email').textContent = identity.email;
+  $('#account-role').textContent = roleLabels[identity.role] || identity.role;
+  $('#account-avatar').textContent = (identity.email || identity.company || 'R').trim().charAt(0).toUpperCase();
+  $('#account-menu-company').textContent = identity.company;
   $('#platform-link').hidden = !identity.platformAdmin;
   const summary = workspaceSummary(data);
   $('#summary-rule-total').textContent = summary.totalRules.toLocaleString();
@@ -265,9 +336,19 @@ async function refresh() {
   const editable = ['owner', 'admin'].includes(identity.role); $('#rule-create').disabled = !editable;
   const nodeRoot = $('#nodes'); nodeRoot.replaceChildren();
   const selector = $('#node-select'); const selected = selector.value; selector.replaceChildren();
+  let unboundPackages = [];
+  try { unboundPackages = await api('/api/subscriptions?unbound=true'); }
+  catch (error) { $('#refresh-message').textContent = `待绑定套餐加载失败：${error.message}`; }
+  for (const period of unboundPackages) {
+    const item = document.createElement('option');
+    item.value = period.id;
+    item.dataset.nodeId = period.plan.offering?.nodeId || '';
+    item.dataset.bandwidth = String(period.plan.bandwidthMbps || 0);
+    item.textContent = `${item.dataset.nodeId || '未知节点'} · ${period.plan.name} · ${(period.plan.quotaBytes / 1e9).toLocaleString()} GB · ${period.plan.bandwidthMbps} Mbps`;
+    selector.append(item);
+  }
   for (const node of data.nodes) {
     const label = node.status === 'maintenance' ? '维护中' : node.appliedGeneration > 0 ? '已有应用确认 · 健康未知' : '尚未部署';
-    const option = document.createElement('option'); option.value = node.id; option.textContent = `${node.name} · ${label}`; option.disabled = node.status === 'maintenance'; selector.append(option);
     const row = nodeRoot.insertRow();
     const delivery = node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试已耗尽 · 待运维处理' : deliveryStates[node.deliveryState] || '未知';
     for (const value of [node.name, node.region, label, `${node.desiredGeneration} / ${node.validatedGeneration} / ${node.appliedGeneration}`, delivery, node.lastSeenAt ? `${new Date(node.lastSeenAt).toLocaleString()}（控制通道）` : '尚无联系记录']) cell(row, value);
@@ -319,10 +400,14 @@ async function refresh() {
   $('#telemetry-message').textContent = workspace.errors.map(item => `${item.path.includes('nodes') ? '节点资源' : '流量遥测'}暂不可用：${item.error.message}`).join('；');
   if (telemetryUnavailable) renderTrafficUnavailable();
   else await refreshTelemetryHistory();
+  if (!workspaceRefreshGate.isCurrent(refreshToken)) return { stale: true };
   const audit = $('#audit-rows'); audit.replaceChildren();
   for (const entry of data.auditLogs) { const row = audit.insertRow(); cell(row, new Date(entry.createdAt).toLocaleString()); cell(row, actions[entry.action] || entry.action); cell(row, entry.resourceId); }
-  try{await refreshAccountTools(api,identity);}catch(e){$('#account-tools-message').textContent=e.message;}
-  try{await refreshBusinessTools(api,identity,data.rules);}catch(e){$('#business-message').textContent=e.message;}
+  try{await refreshAccountTools(api,identity,()=>workspaceRefreshGate.isCurrent(refreshToken));}catch(e){if(workspaceRefreshGate.isCurrent(refreshToken))$('#account-tools-message').textContent=e.message;}
+  if (!workspaceRefreshGate.isCurrent(refreshToken)) return { stale: true };
+  try{await refreshBusinessTools(api,identity,data.rules);}catch(e){if(workspaceRefreshGate.isCurrent(refreshToken))$('#business-message').textContent=e.message;}
+  if (!workspaceRefreshGate.isCurrent(refreshToken)) return { stale: true };
+  return { stale: false };
 }
 function actionButton(label, id, action) {
   const button = document.createElement('button'); button.textContent = label; button.className = `secondary ${action === 'delete' ? 'danger' : ''}`;
@@ -344,6 +429,11 @@ $('#rule-form').addEventListener('submit', async event => {
       const update = { name: fields.name, targetHost: fields.targetHost, targetPort: fields.targetPort, bandwidthMbps: fields.bandwidthMbps, desiredVersion: Number(fields.desiredVersion) };
       result = await submitRuleUpdate(update, body => api(`/api/rules/${editing.id}`, { method: 'PATCH', body }), refresh);
     } else {
+      const packageOption = $('#node-select').selectedOptions[0];
+      if (!packageOption?.value) throw new Error('请先购买套餐，再创建规则。');
+      fields.subscriptionId = packageOption.value;
+      fields.nodeId = packageOption.dataset.nodeId;
+      fields.bandwidthMbps = Number(packageOption.dataset.bandwidth || 0);
       delete fields.desiredVersion;
       result = await submitRule(ruleDraft, fields, (body, key) => api('/api/rules', { method: 'POST', body, key }), refresh);
     }
@@ -362,7 +452,7 @@ $('#rule-form').addEventListener('submit', async event => {
 });
 setMode('login');
 bindAccountTools(api,refresh);
-bindBusinessTools(api,refresh);
+bindBusinessTools(api,refresh,view=>workspaceNavigation.select(view));
 bindOperations(api,{canWrite:()=>identity&&['owner','admin'].includes(identity.role)});
 $('#telemetry-rule').addEventListener('change', () => refreshTelemetryHistory());
 $('#telemetry-window').addEventListener('change', () => refreshTelemetryHistory());

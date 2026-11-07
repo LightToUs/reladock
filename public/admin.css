@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
-  --bg: #eef5ff;
-  --surface: #f8fbff;
+  --bg: #f3f5f8;
+  --surface: #f6f8fa;
   --surface-strong: #ffffff;
   --ink: #10233f;
   --muted: #5c6f89;
@@ -16,7 +16,7 @@
   --warning-bg: #eee3bd;
   --danger: #a73737;
   --danger-bg: #f4dddd;
-  --field: #e7effa;
+  --field: #f3f5f8;
   --table-line: #d5e1f0;
   --focus: #2563eb;
   --margin: clamp(1rem, 2.2vw, 2rem);
@@ -222,7 +222,7 @@ section > .hint { margin-bottom: 20px; }
   color: var(--ink);
   box-shadow: 0 24px 72px rgba(8, 24, 51, .3);
 }
-.node-dialog::backdrop { background: rgba(5, 18, 38, .68); backdrop-filter: blur(3px); }
+.node-dialog::backdrop { background: rgba(5, 18, 38, .55); }
 .node-dialog-card { padding: clamp(22px, 3vw, 34px); background: var(--surface-strong); }
 .dialog-heading { padding-bottom: 20px; border-bottom: 1px solid var(--table-line); }
 .dialog-heading .context-label { margin-bottom: 7px; }
@@ -245,6 +245,9 @@ section > .hint { margin-bottom: 20px; }
 .bootstrap-dialog .hint { margin: 20px 0 14px; }
 .bootstrap-dialog textarea { min-height: 132px; }
 .bootstrap-dialog [role="status"] { min-height: 24px; margin: 10px 0; color: var(--muted); }
+.bootstrap-dialog [role="alert"] { margin: 16px 0; padding: 14px 16px; color: #9f2020; background: #fff1f0; border-left: 3px solid #b42318; line-height: 1.7; }
+.bootstrap-dialog .dialog-heading { position: relative; padding-right: 76px; }
+.bootstrap-close { position: absolute; right: 0; top: 0; }
 .bootstrap-dialog .inline-actions { margin-top: 12px; }
 .bootstrap-dialog pre { max-height: min(32rem, 42svh); }
 
@@ -325,6 +328,23 @@ pre {
 .single-form { grid-template-columns: 1fr; }
 .inline-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .inline-actions button { width: auto; }
+.node-visibility-toggle {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid #c5d4e7;
+  background: var(--surface);
+  white-space: nowrap;
+}
+.node-visibility-toggle input {
+  width: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--focus);
+}
 .filter-form { grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto; }
 .filter-form p { margin-bottom: 7px; }
 
@@ -494,4 +514,65 @@ footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+/* Match the enterprise workspace, with density suited to platform operations. */
+.admin-main { font-variant-numeric: tabular-nums; padding-top: 0; }
+.admin-header { position: sticky; top: 0; z-index: 15; align-items: center; min-height: 84px; margin-inline: calc(var(--margin) * -1); padding: 16px var(--margin); background: var(--surface-strong); }
+.admin-header h1 { font-size: 24px; line-height: 1.3; margin: 0 0 4px; letter-spacing: -.025em; }
+.view-heading p:last-child { font-size: 13px; color: var(--muted); }
+.admin-header .context-label { margin: 0 0 4px; font-size: 13px; }
+.admin-main h2 { font-size: 21px; line-height: 1.4; letter-spacing: -.025em; }
+.admin-main h3 { font-size: 17px; }
+.admin-nav { padding: 26px 18px 22px; }
+.admin-brand h2 { font-size: 22px; }
+.admin-brand p { font-size: 13px; }
+.admin-nav nav { gap: 5px; }
+.admin-nav nav [data-view] { border-radius: 4px; font-size: 14px; font-weight: 600; min-height: 44px; }
+.admin-nav nav [data-view].selected { background: #183b65; font-weight: 650; }
+.admin-nav nav [data-view]:hover { transform: none; }
+.admin-nav nav [data-view].selected::before { background: transparent; }
+.notice { border-radius: 4px; background: #eaf0f7; font-size: 13px; }
+[data-pane] > section { border-radius: 6px; }
+.operations-summary { grid-template-columns: 1fr; gap: 24px; }
+.summary-intro { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 24px; }
+.summary-intro h2 { margin: 0; }
+.summary-intro p { font-size: 14px; }
+.admin-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.metric { min-height: 150px; padding: 22px; border-radius: 4px; }
+.metric strong { font-size: 42px; line-height: 1.2; letter-spacing: -.04em; }
+.metric-primary { background: #eaf0f7; color: var(--ink); }
+.metric-primary > span, .metric-primary small { color: var(--muted); }
+.management-index { grid-template-columns: 1fr; gap: 16px; }
+.quick-actions button { min-height: 100px; border-radius: 4px; background: var(--surface); padding: 22px; }
+.quick-actions button:hover { background: #eaf0f7; }
+.section-heading { margin-bottom: 18px; align-items: flex-start; }
+.section-heading > div { min-width: 0; }
+.section-heading button { flex-shrink: 0; }
+.scroll { max-width: 100%; border-radius: 4px; overscroll-behavior-x: contain; }
+th { background: var(--surface); font-size: 13px; color: var(--muted); font-weight: 600; white-space: nowrap; padding: 13px 16px; }
+td { font-size: 14px; padding: 15px 16px; line-height: 1.6; }
+tbody tr:hover { background: #f5f8fc; }
+button, input, select, textarea { border-radius: 4px; }
+button { font-weight: 650; }
+button:active:not(:disabled) { transform: translateY(1px); }
+.node-dialog { border-radius: 8px; }
+.dialog-heading { border: 0; padding-bottom: 8px; }
+.dialog-actions { margin-top: 16px; }
+.account-email { font-size: 13px; }
+.operator-notes { margin: 8px 0 20px; padding: 12px 16px; background: var(--surface); border-radius: 4px; }
+.operator-notes summary { cursor: pointer; font-size: 14px; color: var(--muted); }
+.operator-notes p { margin: 12px 0 0; }
+@media (max-width: 900px) {
+  .admin-header { position: static; }
+  .admin-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-primary { grid-column: auto; }
+}
+@media (max-width: 620px) {
+  .admin-main { padding-top: 0; }
+  .metric { min-height: 130px; padding: 16px; }
+  .metric strong { font-size: 34px; }
+  .section-heading { flex-wrap: wrap; }
+  .section-heading > .inline-actions { width: 100%; }
+  .admin-header .account { gap: 8px; }
 }

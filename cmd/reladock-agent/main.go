@@ -74,7 +74,7 @@ func main() {
 	credentials.RegisterTransport(transport)
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	runner := agent.Client{HTTP: client, BaseURL: *endpoint, NodeID: *nodeID, State: state, Applier: applier}
+	runner := agent.Client{HTTP: client, BaseURL: *endpoint, NodeID: *nodeID, State: state, Applier: applier, Credentials: credentials}
 	kernelBootID := ""
 	var retirementState *agent.RetirementState
 	if engine != nil {
@@ -124,7 +124,7 @@ func main() {
 	}
 	upgradeHealth := agent.NewUpgradeHealth("/run/reladock-updater/health-request.json", "/run/reladock-agent", buildinfo.Current())
 	resourceCollector := agent.NewResourceCollector()
-	hooks := agent.RuntimeHooks{Preflight: func(parent context.Context) error {
+	hooks := agent.RuntimeHooks{RenewalRequests: credentials.RotationRequests(), Preflight: func(parent context.Context) error {
 		// Contact and inspection are distinct from configuration/application health.
 		activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
 		defer cancel()
@@ -169,7 +169,7 @@ func main() {
 			}
 		}
 		rotationState, rotationError := credentials.RotationStatus()
-		if err := runner.ReportRuntimeHeartbeat(activityCtx, platform.AgentHeartbeat{Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError, KernelBootID: kernelBootID, JournalSequence: journalSequence}, resourceCollector, engine); err != nil {
+		if err := runner.ReportRuntimeHeartbeat(activityCtx, platform.AgentHeartbeat{CertificateRotationSupported: true, Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError, KernelBootID: kernelBootID, JournalSequence: journalSequence}, resourceCollector, engine); err != nil {
 			return err
 		}
 		return upgradeHealth.HeartbeatSucceeded()

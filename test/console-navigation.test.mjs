@@ -47,13 +47,13 @@ function fixture(hash = '#/rules', stored = {}) {
   };
   const root = new FakeElement(); const sidebar = new FakeElement(); const mobileToggle = new FakeElement();
   const collapseToggle = new FakeElement(); const title = new FakeElement(); const description = new FakeElement();
-  const labels = { overview: '运行概览', rules: '转发规则', team: '企业协作' };
-  const items = ['overview', 'rules', 'team'].map(view => { const item = new FakeElement({ view }); item.textContent = labels[view]; return item; });
-  const panes = ['overview', 'rules', 'team'].map(pane => new FakeElement({ pane }));
+  const labels = { overview: '运行概览', rules: '转发规则', 'node-status': '入口节点', billing: '套餐中心' };
+  const items = ['overview', 'rules', 'node-status', 'billing'].map(view => { const item = new FakeElement({ view }); item.textContent = labels[view]; return item; });
+  const panes = ['overview', 'rules', 'node-status', 'billing', 'team', 'audit', 'operations', 'checkout'].map(pane => new FakeElement({ pane }));
   const storage = new FakeStorage(stored); const selected = [];
   const binding = bindConsoleNavigation?.({
     root, sidebar, mobileToggle, collapseToggle, title, description, items, panes,
-    defaultView: 'overview', titles: { overview: '运行概览', rules: '转发规则', team: '企业协作' },
+    defaultView: 'overview', titles: { ...labels, team: '企业协作', audit: '操作记录', operations: '支持中心', checkout: '支付套餐' },
     descriptions: { rules: '规则说明' }, storageKey: 'test.collapsed', storage,
     windowTarget, locationTarget, historyTarget, documentTarget: windowTarget,
     onSelect: view => selected.push(view),
@@ -85,15 +85,38 @@ test('unknown routes replace the address with overview and never expose every pa
 
 test('menu selection creates a history entry and history events restore the matching pane', () => {
   const view = fixture('#/overview');
-  view.items[2].dispatchEvent(new Event('click'));
-  assert.equal(view.locationTarget.hash, '#/team');
-  assert.equal(view.panes[2].hidden, false);
-  assert.match(view.historyTarget.paths.at(-1), /#\/team$/);
+  view.items[3].dispatchEvent(new Event('click'));
+  assert.equal(view.locationTarget.hash, '#/billing');
+  assert.equal(view.panes[3].hidden, false);
+  assert.match(view.historyTarget.paths.at(-1), /#\/billing$/);
 
   view.locationTarget.hash = '#/rules';
   view.windowTarget.dispatchEvent(new Event('popstate'));
   assert.equal(view.panes[1].hidden, false);
   assert.equal(view.title.textContent, '转发规则');
+});
+
+test('account-only route opens directly without selecting a primary sidebar item', () => {
+  const view = fixture('#/team');
+  assert.equal(view.panes[4].hidden, false);
+  assert.equal(view.items.every(item => !item.classList.contains('selected')), true);
+  assert.equal(view.title.textContent, '企业协作');
+});
+
+test('account destinations use history and Back restores the previous primary page', () => {
+  for (const accountView of ['team', 'audit', 'operations']) {
+    const view = fixture('#/overview');
+    view.binding.select(accountView, { focus: true });
+    assert.equal(view.locationTarget.hash, `#/${accountView}`);
+    assert.equal(view.panes.find(pane => pane.dataset.pane === accountView).hidden, false);
+    assert.equal(view.items.every(item => !item.classList.contains('selected')), true);
+    assert.match(view.historyTarget.paths.at(-1), new RegExp(`#/${accountView}$`));
+
+    view.locationTarget.hash = '#/overview';
+    view.windowTarget.dispatchEvent(new Event('popstate'));
+    assert.equal(view.panes[0].hidden, false);
+    assert.equal(view.items[0].classList.contains('selected'), true);
+  }
 });
 
 test('mobile drawer closes after selection or Escape and restores useful focus', () => {

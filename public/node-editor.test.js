@@ -7,6 +7,20 @@ class Control extends EventTarget {
   click() { this.dispatchEvent(new Event('click')); }
 }
 
+class Field extends EventTarget {
+  constructor(value) {
+    super();
+    this.value = value;
+    this.initialValue = value;
+    this.readOnly = false;
+    this.disabled = false;
+    this.required = false;
+    this.focused = false;
+  }
+  focus() { this.focused = true; }
+  change() { this.dispatchEvent(new Event('change')); }
+}
+
 function fixture() {
   const fields = Object.fromEntries([
     ['id', ''],
@@ -15,13 +29,9 @@ function fixture() {
     ['listenAddress', '0.0.0.0'],
     ['publicAddress', ''],
     ['capacityMbps', '1000'],
-  ].map(([name, initialValue]) => [name, {
-    value: initialValue,
-    initialValue,
-    readOnly: false,
-    focused: false,
-    focus() { this.focused = true; },
-  }]));
+    ['resourceMode', 'shared'],
+    ['dedicatedTenantId', ''],
+  ].map(([name, initialValue]) => [name, new Field(initialValue)]));
   const form = {
     elements: { namedItem: name => fields[name] },
     reset() { for (const field of Object.values(fields)) field.value = field.initialValue; },
@@ -57,6 +67,10 @@ test('new-node action opens a reset create dialog with editable identity', () =>
   assert.equal(ui.fields.name.value, '');
   assert.equal(ui.fields.listenAddress.value, '0.0.0.0');
   assert.equal(ui.fields.capacityMbps.value, '1000');
+	assert.equal(ui.fields.resourceMode.value, 'shared');
+	assert.equal(ui.fields.dedicatedTenantId.value, '');
+	assert.equal(ui.fields.dedicatedTenantId.disabled, true);
+	assert.equal(ui.fields.dedicatedTenantId.required, false);
   assert.equal(ui.fields.id.focused, true);
   assert.equal(ui.status.textContent, '');
 });
@@ -71,6 +85,8 @@ test('edit action opens the same dialog with node values and locked identity', (
     listenAddress: '0.0.0.0',
     publicAddress: '203.0.113.20',
     capacityMbps: 800,
+	resourceMode: 'dedicated-tenant',
+	dedicatedTenantId: '9bd89fc7-b8ce-4b79-904f-e71bd4540751',
     revision: 7,
   };
 
@@ -82,9 +98,36 @@ test('edit action opens the same dialog with node values and locked identity', (
   assert.equal(ui.save.textContent, '保存节点修改');
   assert.equal(ui.fields.id.value, 'hk-02');
   assert.equal(ui.fields.capacityMbps.value, 800);
+	assert.equal(ui.fields.resourceMode.value, 'dedicated-tenant');
+	assert.equal(ui.fields.dedicatedTenantId.value, '9bd89fc7-b8ce-4b79-904f-e71bd4540751');
+	assert.equal(ui.fields.dedicatedTenantId.disabled, false);
+	assert.equal(ui.fields.dedicatedTenantId.required, true);
   assert.equal(ui.fields.id.readOnly, true);
   assert.equal(ui.fields.name.focused, true);
   assert.equal(ui.status.textContent, '');
+});
+
+test('switching to shared clears a previous dedicated tenant before create', () => {
+  const ui = fixture();
+  const editor = bindNodeEditor(ui);
+  editor.openEdit({
+    id: 'tenant-01',
+    name: '企业专属',
+    resourceMode: 'dedicated-rule',
+    dedicatedTenantId: '9bd89fc7-b8ce-4b79-904f-e71bd4540751',
+  });
+
+  ui.fields.resourceMode.value = 'shared';
+  ui.fields.resourceMode.change();
+
+  assert.equal(ui.fields.dedicatedTenantId.value, '');
+  assert.equal(ui.fields.dedicatedTenantId.disabled, true);
+  assert.equal(ui.fields.dedicatedTenantId.required, false);
+
+  editor.close();
+  editor.openCreate();
+  assert.equal(ui.fields.resourceMode.value, 'shared');
+  assert.equal(ui.fields.dedicatedTenantId.value, '');
 });
 
 test('cancel closes the dialog and clears the edited node', () => {

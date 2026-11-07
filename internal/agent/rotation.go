@@ -13,12 +13,39 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"reladock/internal/platform"
 )
 
 const certificateRenewalWindow = 7 * 24 * time.Hour
+
+var renewalFingerprintPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+func (m *CredentialManager) RotationRequests() <-chan struct{} { return m.rotationRequested }
+
+// Server intent is durable until activation; once work begins rotation.json
+// takes over recovery. Delayed responses cannot renew a replacement identity.
+func (m *CredentialManager) RequestRotation(fingerprint string) error {
+	if fingerprint == "" {
+		return nil
+	}
+	if !renewalFingerprintPattern.MatchString(fingerprint) {
+		return errors.New("invalid certificate renewal request")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if fingerprint != m.info.Fingerprint || fingerprint == m.desiredFingerprint {
+		return nil
+	}
+	m.desiredFingerprint = fingerprint
+	select {
+	case m.rotationRequested <- struct{}{}:
+	default:
+	}
+	return nil
+}
 
 type RotationAPI interface {
 	Renew(context.Context, []byte) (platform.CertificateRotation, error)
@@ -213,6 +240,8 @@ func (m *CredentialManager) pendingPair(record rotationRecord) (tls.Certificate,
 }
 
 func (m *CredentialManager) ReconcileRotation(ctx context.Context, api RotationAPI, now time.Time) error {
+	m.rotationMu.Lock()
+	defer m.rotationMu.Unlock()
 	if api == nil {
 		return rotationFailure(m, "renew-unavailable", errors.New("rotation API unavailable"))
 	}
@@ -221,7 +250,10 @@ func (m *CredentialManager) ReconcileRotation(ctx context.Context, api RotationA
 		return rotationFailure(m, "state-invalid", err)
 	}
 	if record == nil {
-		if m.Current().NotAfter.After(now.Add(certificateRenewalWindow)) {
+		m.mu.RLock()
+		forced := m.desiredFingerprint != "" && m.desiredFingerprint == m.info.Fingerprint
+		m.mu.RUnlock()
+		if !forced && m.Current().NotAfter.After(now.Add(certificateRenewalWindow)) {
 			m.setRotationStatus("idle", "")
 			return nil
 		}

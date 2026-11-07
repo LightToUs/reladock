@@ -91,6 +91,47 @@ func (s *server) serveAdmin(w http.ResponseWriter, r *http.Request, who platform
 			return
 		}
 		id, action := parts[0], parts[1]
+		if action == "rotate-certificate" {
+			if r.Method != http.MethodPost {
+				respond(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+				return
+			}
+			var input struct {
+				Revision int64 `json:"revision"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			if s.bootstrap == nil || s.bootstrap.Signer == nil {
+				respond(w, http.StatusServiceUnavailable, map[string]string{"error": "节点证书自动续签未配置：需要签发 CA"})
+				return
+			}
+			if err := s.store.AdminNodeAction(ctx, who, id, input.Revision, action, ""); err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusAccepted, map[string]bool{"ok": true, "certificateRotationRequested": true})
+			return
+		}
+		if r.Method == "POST" && action == "visibility" {
+			var input struct {
+				VisibilityRevision int64 `json:"visibilityRevision"`
+				Hidden             *bool `json:"hidden"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			if input.Hidden == nil {
+				failure(w, platform.ErrInvalid)
+				return
+			}
+			if err := s.store.AdminSetNodeVisibility(ctx, who, id, input.VisibilityRevision, *input.Hidden); err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusOK, map[string]bool{"ok": true})
+			return
+		}
 		if r.Method == "POST" && action == "withdraw-registration" {
 			var input struct {
 				Revision int64 `json:"revision"`

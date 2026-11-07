@@ -10,6 +10,7 @@ import (
 )
 
 type Activity struct {
+	Wake     <-chan struct{}
 	Name     string
 	Interval time.Duration
 	Run      func(context.Context) error
@@ -17,13 +18,14 @@ type Activity struct {
 }
 
 type RuntimeHooks struct {
-	Configuration func(context.Context) error
-	Heartbeat     func(context.Context) error
-	Preflight     func(context.Context) error
-	MeterSample   func(context.Context) error
-	UsageUpload   func(context.Context) error
-	Probes        func(context.Context) error
-	Renewal       func(context.Context) error
+	RenewalRequests <-chan struct{}
+	Configuration   func(context.Context) error
+	Heartbeat       func(context.Context) error
+	Preflight       func(context.Context) error
+	MeterSample     func(context.Context) error
+	UsageUpload     func(context.Context) error
+	Probes          func(context.Context) error
+	Renewal         func(context.Context) error
 }
 
 func RuntimeActivities(hooks RuntimeHooks) ([]Activity, error) {
@@ -34,7 +36,7 @@ func RuntimeActivities(hooks RuntimeHooks) ([]Activity, error) {
 		{Name: "configuration", Interval: 5 * time.Second, Run: hooks.Configuration},
 		{Name: "heartbeat", Interval: 30 * time.Second, Run: hooks.Heartbeat},
 		{Name: "preflight", Interval: time.Minute, Run: hooks.Preflight},
-		{Name: "renewal", Interval: time.Hour, Run: hooks.Renewal},
+		{Name: "renewal", Interval: time.Hour, Run: hooks.Renewal, Wake: hooks.RenewalRequests},
 	}
 	if hooks.MeterSample != nil || hooks.UsageUpload != nil || hooks.Probes != nil {
 		if hooks.MeterSample == nil || hooks.UsageUpload == nil || hooks.Probes == nil {
@@ -99,6 +101,10 @@ func RunSupervisor(ctx context.Context, activities []Activity, report func(strin
 					a.backoff.Success()
 				}
 				timer := time.NewTimer(delay)
+				wake := a.Wake
+				if err != nil {
+					wake = nil
+				} // Requests must not bypass failure backoff.
 				select {
 				case <-ctx.Done():
 					if !timer.Stop() {
@@ -106,6 +112,8 @@ func RunSupervisor(ctx context.Context, activities []Activity, report func(strin
 					}
 					return
 				case <-timer.C:
+				case <-wake:
+					timer.Stop()
 				}
 			}
 		}()

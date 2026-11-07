@@ -18,3 +18,12 @@ func TestBootstrapDisabledDoesNotExposeInstaller(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalBootstrapDoesNotSuggestUsingProductionForLocalCredentials(t *testing.T) {
+	h := New(nil, fstest.MapFS{}, "http://127.0.0.1:3012")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "http://127.0.0.1:3012/install/agent.sh", nil))
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "本地测试") || !strings.Contains(w.Body.String(), "无需手动填写客户端证书") {
+		t.Fatalf("unexpected local enrollment guidance: %d %s", w.Code, w.Body.String())
+	}
+}

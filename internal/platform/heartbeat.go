@@ -11,15 +11,17 @@ const AgentHeartbeatStaleAfter = 90 * time.Second
 var agentVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,79}$`)
 
 type AgentHeartbeat struct {
-	Version             string              `json:"version"`
-	Mode                string              `json:"mode"`
-	StartedAt           time.Time           `json:"startedAt"`
-	CertificateNotAfter time.Time           `json:"certificateNotAfter"`
-	RotationState       string              `json:"rotationState"`
-	RotationErrorCode   string              `json:"rotationErrorCode"`
-	KernelBootID        string              `json:"kernelBootId,omitempty"`
-	JournalSequence     int64               `json:"journalSequence,omitempty"`
-	Resources           ResourceObservation `json:"resources"`
+	// Negotiated via HTTP header so older strict JSON decoders keep accepting heartbeats.
+	CertificateRotationSupported bool                `json:"-"`
+	Version                      string              `json:"version"`
+	Mode                         string              `json:"mode"`
+	StartedAt                    time.Time           `json:"startedAt"`
+	CertificateNotAfter          time.Time           `json:"certificateNotAfter"`
+	RotationState                string              `json:"rotationState"`
+	RotationErrorCode            string              `json:"rotationErrorCode"`
+	KernelBootID                 string              `json:"kernelBootId,omitempty"`
+	JournalSequence              int64               `json:"journalSequence,omitempty"`
+	Resources                    ResourceObservation `json:"resources"`
 }
 
 type ResourceObservation struct {
@@ -115,7 +117,8 @@ last_seen_at=now(),agent_heartbeat_at=now(),agent_version=$2,agent_mode=$3,agent
 agent_rotation_error_since=CASE WHEN $6='error' AND (agent_rotation_state<>'error' OR agent_rotation_error_code<>$7 OR agent_rotation_error_since IS NULL) THEN now() WHEN $6='error' THEN agent_rotation_error_since ELSE NULL END,
 agent_rotation_state=$6,agent_rotation_error_code=$7
 		,agent_kernel_boot_id=NULLIF($8,'')::uuid,agent_journal_sequence=$9
-WHERE id=$1 AND agent_journal_sequence<=$9`, nodeID, heartbeat.Version, heartbeat.Mode, heartbeat.StartedAt, heartbeat.CertificateNotAfter, heartbeat.RotationState, heartbeat.RotationErrorCode, heartbeat.KernelBootID, heartbeat.JournalSequence)
+		,agent_certificate_rotation_supported=$10
+WHERE id=$1 AND agent_journal_sequence<=$9`, nodeID, heartbeat.Version, heartbeat.Mode, heartbeat.StartedAt, heartbeat.CertificateNotAfter, heartbeat.RotationState, heartbeat.RotationErrorCode, heartbeat.KernelBootID, heartbeat.JournalSequence, heartbeat.CertificateRotationSupported)
 	if err != nil {
 		return err
 	}

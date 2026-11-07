@@ -174,7 +174,11 @@ func TestUpgradeReissuesSnapshotWithKernelEntitlementMetadata(t *testing.T) {
 	}
 	// Restore this test's isolated schema to v16, including reversing all newer
 	// additive objects, so the migration runner sees a faithful upgrade source.
+	revertSchemaTo26(t, s)
 	if _, e = s.pool.Exec(ctx, `DELETE FROM schema_migrations WHERE version>=17;
+DROP TABLE platform_node_visibility;
+ALTER TABLE plan_price_versions DROP COLUMN resource_mode;
+ALTER TABLE nodes DROP COLUMN resource_mode,DROP COLUMN dedicated_tenant_id;
 DROP TABLE node_resource_latest;
 DROP TABLE node_drain_attestations;
 ALTER TABLE nodes DROP COLUMN agent_kernel_boot_id,DROP COLUMN agent_journal_sequence;

@@ -48,7 +48,10 @@ func probeFixture(t *testing.T) (*Store, Identity, Rule, probe.Result, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := s.AdminCreatePlan(ctx, admin, configuredPlan())
+	offering := publishedOffering(t, s, admin, "probe-hk", "hk-01")
+	planInput := configuredPlan()
+	planInput.OfferingID = offering.ID
+	plan, err := s.AdminCreatePlan(ctx, admin, planInput)
 	if err != nil {
 		t.Fatal(err)
 	}
