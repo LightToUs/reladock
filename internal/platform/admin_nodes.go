@@ -189,11 +189,13 @@ func (s *Store) AdminSetNodeVisibility(ctx context.Context, who Identity, id str
 	return tx.Commit(ctx)
 }
 
+// Administrative edits, retries and draining do not imply Agent contact. Check
+// every delivery and retained identity record, since revocation clears live fields.
 func (s *Store) nodeRegistrationWithdrawable(ctx context.Context, tx pgx.Tx, id string) (bool, error) {
 	var withdrawable bool
 	err := tx.QueryRow(ctx, `SELECT
-		n.status='unprovisioned'
-		AND n.desired_generation=1
+		n.status IN ('unprovisioned','maintenance','draining')
+		AND n.desired_generation>=1
 		AND n.validated_generation=0
 		AND n.applied_generation=0
 		AND n.last_seen_at IS NULL
@@ -208,8 +210,10 @@ func (s *Store) nodeRegistrationWithdrawable(ctx context.Context, tx pgx.Tx, id 
 		AND n.agent_rotation_error_since IS NULL
 		AND n.agent_kernel_boot_id IS NULL
 		AND n.agent_journal_sequence=0
-		AND (SELECT count(*)=1 FROM config_outbox c WHERE c.node_id=n.id)
-		AND EXISTS(SELECT 1 FROM config_outbox c WHERE c.node_id=n.id AND c.generation=1 AND c.state='queued' AND c.attempts=0 AND c.lease_token IS NULL AND c.lease_until IS NULL AND c.error_code='' AND c.reported_at IS NULL)
+		AND EXISTS(SELECT 1 FROM config_outbox c WHERE c.node_id=n.id AND c.generation=n.desired_generation AND c.state='queued')
+		AND NOT EXISTS(SELECT 1 FROM config_outbox c WHERE c.node_id=n.id AND (c.state NOT IN ('queued','superseded') OR c.attempts<>0 OR c.lease_token IS NOT NULL OR c.lease_until IS NOT NULL OR c.error_code<>'' OR c.reported_at IS NOT NULL))
+		AND NOT EXISTS(SELECT 1 FROM platform_audit_logs a WHERE a.resource_id=n.id AND a.action IN ('node.enroll','node.bootstrap-redeem','node.revoke-certificate','node.certificate-renew-requested','node.certificate-renew-issued','node.certificate-renew-activated','node.retired'))
+		AND NOT EXISTS(SELECT 1 FROM line_offerings o WHERE o.node_id=n.id)
 		AND NOT EXISTS(SELECT 1 FROM node_bootstrap b WHERE b.node_id=n.id AND (b.csr_hash IS NOT NULL OR b.certificate IS NOT NULL OR b.fingerprint IS NOT NULL))
 		AND NOT EXISTS(SELECT 1 FROM relay_rules r WHERE r.node_id=n.id)
 		AND NOT EXISTS(SELECT 1 FROM endpoint_allocations a WHERE a.node_id=n.id)

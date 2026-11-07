@@ -75,7 +75,7 @@ async function reload() {
 function renderSummary(data) { $('#stat-tenants').textContent = data.tenants; $('#stat-suspended').textContent = `${data.suspendedTenants} 家已停用`; $('#stat-nodes').textContent = data.nodes; $('#stat-maintenance').textContent = `${data.maintenanceNodes} 个维护中`; $('#stat-rules').textContent = data.rules; $('#stat-paused').textContent = `${data.pausedRules} 条已暂停`; $('#stat-failed').textContent = data.failedDeliveries; }
 async function mutate(path, body, success) {
   try { await api(path, body); }
-  catch (error) { if (error.status === 409) { await reload(); const nodeId = /^\/api\/admin\/nodes\/([^/]+)\//.exec(path)?.[1]; const latest = state.nodes.find(node => node.id === nodeId); const detail = path.endsWith('/start-draining') ? '节点必须先进入维护；排空一旦开始不可恢复分配。' : path.endsWith('/finalize-retirement') ? `尚未满足最终退役门禁：${retirementReasonText(latest?.retirementReasons).join('；') || '状态已经变化'}。` : path.endsWith('/withdraw-registration') ? '节点已进入部署或业务生命周期，不能撤销登记；请改用安全退役。' : path.endsWith('/visibility') ? '节点显示状态已被其他页面修改。' : '有规则的节点不可更换绑定地址或降低至规则速率以下。'; message(`操作冲突，已载入最新数据，请重新确认后操作。${detail}`); return false; } throw error; }
+  catch (error) { if (error.status === 409) { await reload(); const nodeId = /^\/api\/admin\/nodes\/([^/]+)\//.exec(path)?.[1]; const latest = state.nodes.find(node => node.id === nodeId); const detail = path.endsWith('/start-draining') ? '节点必须先进入维护；排空一旦开始不可恢复分配。' : path.endsWith('/finalize-retirement') ? `尚未满足最终退役门禁：${retirementReasonText(latest?.retirementReasons).join('；') || '状态已经变化'}。` : path.endsWith('/withdraw-registration') ? '节点存在接入历史或关联资源，不能撤销登记；请先清理关联资源，已接入节点需安全退役。' : path.endsWith('/visibility') ? '节点显示状态已被其他页面修改。' : '有规则的节点不可更换绑定地址或降低至规则速率以下。'; message(`操作冲突，已载入最新数据，请重新确认后操作。${detail}`); return false; } throw error; }
   message(success);
   try { await reload(); } catch (error) { message(`${success} 列表刷新失败，请点击刷新查看结果：${error.message}`); }
   return true;
@@ -151,6 +151,7 @@ function renderNodes(nodes) {
     const probe = probePresentation(node); const probeCell = cell(row, probe.label, probe.detail); probeCell.classList.add('agent-status', `agent-status-${probe.tone}`); const certificate = certificatePresentation(node); const certificateCell = cell(row, certificate.label, certificate.detail); certificateCell.classList.add('agent-status', `agent-status-${certificate.tone}`);
     const controls = row.insertCell(); controls.className = 'table-actions';
     if (node.status === 'retired') { controls.append(deliveryControl(node), visibilityControl(node)); continue; }
+    if (node.withdrawable) controls.append(button('撤销登记', () => openNodeAction('withdraw-registration', node), true));
     if (node.status === 'draining') {
       controls.append(button('重试交付', () => openNodeAction('retry', node)), deliveryControl(node));
       if (node.retirementEligible) controls.append(button('最终退役节点', () => openNodeAction('finalize-retirement', node), true));
@@ -168,7 +169,6 @@ function renderNodes(nodes) {
     appendUpgradeControls(controls, node);
     if (node.status === 'maintenance') controls.append(button('进入安全排空', () => openNodeAction('start-draining', node), true));
     controls.append(button('安装 Agent',()=>bootstrapUI.open(node)));
-    if (node.withdrawable) controls.append(button('撤销登记', () => openNodeAction('withdraw-registration', node), true));
     controls.append(visibilityControl(node));
   }
   empty(root, 17, state.nodes.some(node => node.hidden) && !state.showHiddenNodes ? '当前没有可见节点；可勾选“显示已隐藏节点”恢复查看。' : '暂无节点，请先登记入口资源。');
