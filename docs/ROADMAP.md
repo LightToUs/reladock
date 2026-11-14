@@ -2,6 +2,7 @@
 
 ## 已实现
 
+- 2026-11-14 v0.9.10 发布准备：一条命令安装器可区分全新主机、完整既有 Agent 和残缺/冲突状态；仅完整既有安装显示 `/dev/tty`“升级 / 不操作”菜单。升级验证固定双架构 Release 后只替换 RelaDock 二进制与 systemd 单元，保留身份、环境、WAL、journal 和原 validation/apply 模式，候选启动失败自动回滚。残留单个二进制、单元或悬空符号链接也失败关闭。真实生产发布与 VPS 菜单验收需以 IMPLEMENTATION_STATUS 最新记录为准。
 - 2026-11-07 本地 v33：新控制端托管 PKI 初始化、已有身份保护、平台发起节点证书更换、新 Agent 心跳接收并执行持久两阶段轮换。用户选择仅本地测试；线上控制台和公开 Agent 安装包尚未更新，当前 HTTP 本地服务不对外生成可用安装命令。验证及既有全量测试失败边界见 IMPLEMENTATION_STATUS.md。
 - v18–v23 节点生命周期：后台一次性安装命令、固定 Release 摘要、本地私钥、mTLS 环境报告；独立活动调度与退避、90 秒心跳、30 天证书提前 7 天两阶段自动轮换；固定目标的持久 Agent 升级任务、多层归档校验、两信号确认和自动二进制回滚；精确 conntrack retirement、持久 proof/ACK 恢复，以及绑定当前证书/boot/process/version/generation/journal/quarantine 集合的 draining 最终证明。发行包还包含 age 加密的控制/节点恢复包创建、临时数据库校验和节点仅暂存校验工具。安装包尚未发布；真实 VPS/systemd、GitHub 可达性、完整安全退役、升级中断、真实离机复制/替换主机恢复和 PKI 签发器高可用仍需验收，不视为生产就绪。
 
