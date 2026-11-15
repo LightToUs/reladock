@@ -1,5 +1,11 @@
 # 当前实现状态与 AI 交接
 
+## 2026-11-15 新增节点的专属企业搜索（本地源码，未部署）
+
+平台管理员在新增或编辑企业专属/规则专属节点时，可在原企业 ID 字段按企业名称、owner 邮箱或 ID 搜索，候选项显示企业名、owner 邮箱及停用标记，选中后提交真实企业 ID。搜索接口仅平台管理员可用，最多返回 20 条；节点归属、存在规则时不可改归属等原有服务端约束未改变。
+
+聚焦 TDD 先确认旧节点编辑器不会发起搜索、旧后端返回 404，实现后 `public/node-editor.test.js` 7/7 通过，`TestPlatformAdminAPIAuthorizationNodeWritesAndConflict` 在独立临时 PostgreSQL 上通过。全量 `npm test` 通过：Go race 全包通过（`internal/platform` 509.357s、`internal/web` 76.339s），Node 113 项中 112 通过、1 个 opt-in Linux 安装测试跳过、0 失败；`npm run vet` 与 `git diff --check` 通过。本地 Playwright 使用真实登录会话验证：共享模式搜索框禁用，切换企业专属后必填且可用，输入“海外业务”后返回唯一真实企业 ID 及“海外业务公司 · search-owner-ui@example.com”候选，搜索请求均为 200。未部署生产。
+
 ## 2026-11-15 validation-only Agent 身份重装菜单（生产公开入口已部署）
 
 真实 VPS 启动 validation Agent 后持续收到 claim/heartbeat HTTP 401。只读核对显示本机证书 node-id 为 `node-01`、SAN 为 `spiffe://reladock/nodes/node-01`、证书 SHA256 为 `87bcd50f1c7afcef28bcdb022248eb76db2e78efa17e0773243d46919636af3b`；生产数据库当时仅有 `hk-01` 且没有 `node-01` 身份。由此确认不是 systemd 自启问题，而是本机旧证书身份与当前控制台登记节点不一致：mTLS 可以建立，但应用层按节点 ID/指纹认证返回 401，后台继续显示“待 Agent 连接”符合事实。

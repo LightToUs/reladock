@@ -345,10 +345,18 @@ func TestPlatformAdminAPIAuthorizationNodeWritesAndConflict(t *testing.T) {
 	}
 	login := request(h, "POST", "/api/auth/login", `{"email":"operator@example.com","password":"long-test-password-42"}`, nil)
 	cookie = login.Result().Cookies()[0]
+	searchable, _, err := store.Register(context.Background(), "海外业务公司", "search-owner@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range []string{"/api/admin/overview", "/api/admin/nodes", "/api/admin/tenants", "/api/admin/rules", "/api/admin/audit"} {
 		if rec := request(h, "GET", path, "", cookie); rec.Code != 200 {
 			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
 		}
+	}
+	tenantOptions := request(h, "GET", "/api/admin/tenant-options?q="+url.QueryEscape("海外业务"), "", cookie)
+	if tenantOptions.Code != http.StatusOK || !strings.Contains(tenantOptions.Body.String(), searchable.TenantID) || !strings.Contains(tenantOptions.Body.String(), "search-owner@example.com") || strings.Contains(tenantOptions.Body.String(), "operator@example.com") {
+		t.Fatalf("tenant search: %d %s", tenantOptions.Code, tenantOptions.Body.String())
 	}
 	created := request(h, "POST", "/api/admin/nodes", `{"id":"hk-test","name":"香港测试","region":"Hong Kong","listenAddress":"0.0.0.0","publicAddress":"192.0.2.60","capacityMbps":1000,"resourceMode":"shared","dedicatedTenantId":""}`, cookie)
 	if created.Code != 201 {

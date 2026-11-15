@@ -19,6 +19,7 @@ class Field extends EventTarget {
   }
   focus() { this.focused = true; }
   change() { this.dispatchEvent(new Event('change')); }
+  input() { this.dispatchEvent(new Event('input')); }
 }
 
 function fixture() {
@@ -128,6 +129,22 @@ test('switching to shared clears a previous dedicated tenant before create', () 
   editor.openCreate();
   assert.equal(ui.fields.resourceMode.value, 'shared');
   assert.equal(ui.fields.dedicatedTenantId.value, '');
+});
+
+test('dedicated mode searches tenants by the entered company text', () => {
+  const ui = fixture();
+  const searches = [];
+  ui.searchTenants = query => searches.push(query);
+  bindNodeEditor(ui);
+
+  ui.fields.resourceMode.value = 'dedicated-tenant';
+  ui.fields.resourceMode.change();
+  ui.fields.dedicatedTenantId.value = '海外业务';
+  ui.fields.dedicatedTenantId.input();
+
+  assert.deepEqual(searches, ['', '海外业务']);
+  assert.equal(ui.fields.dedicatedTenantId.disabled, false);
+  assert.equal(ui.fields.dedicatedTenantId.required, true);
 });
 
 test('cancel closes the dialog and clears the edited node', () => {

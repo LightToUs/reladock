@@ -179,7 +179,19 @@ const nodeFormMessage = $('#node-form-message');
 const nodeActionDialog = bindNodeActionDialog({ dialog: $('#node-action-dialog'), title: $('#node-action-title'), description: $('#node-action-description'), status: $('#node-action-status'), confirmButton: $('#node-action-confirm'), cancelButton: $('#node-action-cancel') });
 const offeringActionDialog = bindNodeActionDialog({ dialog: $('#offering-action-dialog'), title: $('#offering-action-title'), description: $('#offering-action-description'), status: $('#offering-action-status'), confirmButton: $('#offering-action-confirm'), cancelButton: $('#offering-action-cancel') });
 const deliveryDialog = bindNodeDeliveryDialog({ dialog: $('#node-delivery-dialog'), closeButton: $('#node-delivery-close'), title: $('#node-delivery-title'), status: $('#node-delivery-status'), load: id => api(`/api/admin/nodes/${encodeURIComponent(id)}/deliveries`), render: records => renderDeliveryRows($('#node-delivery-rows'), records) });
-const nodeEditor = bindNodeEditor({ dialog: $('#node-dialog'), form: $('#node-form'), title: $('#node-form-title'), save: $('#node-save'), status: nodeFormMessage, createButton: $('#node-new'), cancelButton: $('#node-dialog-cancel') });
+let tenantSearchSequence = 0;
+async function searchDedicatedTenants(query) {
+  const sequence = ++tenantSearchSequence;
+  try {
+    const tenants = await api(`/api/admin/tenant-options?q=${encodeURIComponent(query)}`);
+    if (sequence !== tenantSearchSequence) return;
+    const options = $('#dedicated-tenant-options'); options.replaceChildren();
+    for (const tenant of tenants) { const option = document.createElement('option'); option.value = tenant.id; option.label = `${tenant.name} · ${tenant.ownerEmail}${tenant.status === 'active' ? '' : ' · 已停用登录'}`; options.append(option); }
+  } catch (error) {
+    if (sequence === tenantSearchSequence) nodeFormMessage.textContent = `企业搜索失败：${error.message}`;
+  }
+}
+const nodeEditor = bindNodeEditor({ dialog: $('#node-dialog'), form: $('#node-form'), title: $('#node-form-title'), save: $('#node-save'), status: nodeFormMessage, createButton: $('#node-new'), cancelButton: $('#node-dialog-cancel'), searchTenants: searchDedicatedTenants });
 const certificateDialog = bindNodeContentDialog({ dialog: $('#certificate-dialog'), closeButton: $('#certificate-close'), onClose: () => { state.certificateNode = null; $('#certificate-form').reset(); $('#certificate-message').textContent = ''; } });
 function editNode(node) { nodeEditor.openEdit(node); }
 $('#node-form').addEventListener('submit', async event => { event.preventDefault(); const submit = $('#node-save'); submit.disabled = true; nodeFormMessage.textContent = ''; const input = Object.fromEntries(new FormData(event.target)); input.capacityMbps = Number(input.capacityMbps); input.dedicatedTenantId ||= ''; const editing = nodeEditor.current(); if (editing) input.revision = editing.revision; await runDialogSession(nodeEditor, () => mutate(editing ? `/api/admin/nodes/${editing.id}/update` : '/api/admin/nodes', input, editing ? '节点资料已更新。' : '节点已登记，尚未部署实际转发。'), { success: async saved => { if (saved) { nodeEditor.close(); } else { const latest = editing && state.nodes.find(node => node.id === editing.id); if (latest) editNode(latest); nodeFormMessage.textContent = $('#admin-message').textContent; } }, error: error => { message(error.message); nodeFormMessage.textContent = error.message; }, finally: () => { submit.disabled = false; } }); });

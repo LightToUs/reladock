@@ -1,6 +1,6 @@
 const fieldNames = ['id', 'name', 'region', 'listenAddress', 'publicAddress', 'capacityMbps', 'resourceMode', 'dedicatedTenantId'];
 
-export function bindNodeEditor({ dialog, form, title, save, status, createButton, cancelButton }) {
+export function bindNodeEditor({ dialog, form, title, save, status, createButton, cancelButton, searchTenants = () => {} }) {
   let editingNode = null;
   let session = 0;
   const resourceMode = form.elements.namedItem('resourceMode');
@@ -11,6 +11,7 @@ export function bindNodeEditor({ dialog, form, title, save, status, createButton
     dedicatedTenant.disabled = shared;
     dedicatedTenant.required = !shared;
     if (shared) dedicatedTenant.value = '';
+    else searchTenants(dedicatedTenant.value.trim());
   }
 
   function show() {
@@ -53,6 +54,9 @@ export function bindNodeEditor({ dialog, form, title, save, status, createButton
   createButton.addEventListener('click', openCreate);
   cancelButton.addEventListener('click', close);
   resourceMode.addEventListener('change', syncDedicatedTenant);
+  dedicatedTenant.addEventListener('input', () => {
+    if (!dedicatedTenant.disabled) searchTenants(dedicatedTenant.value.trim());
+  });
   dialog.addEventListener('close', () => { session++; editingNode = null; });
   syncDedicatedTenant();
 

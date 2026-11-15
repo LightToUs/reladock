@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -150,6 +152,44 @@ type TenantSummary struct {
 	Rules            int       `json:"rules"`
 	OwnerEmail       string    `json:"ownerEmail"`
 	HasPlatformAdmin bool      `json:"hasPlatformAdmin"`
+}
+
+type TenantOption struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	OwnerEmail string `json:"ownerEmail"`
+	Status     string `json:"status"`
+}
+
+func (s *Store) AdminTenantOptions(ctx context.Context, who Identity, query string) ([]TenantOption, error) {
+	query = strings.TrimSpace(query)
+	if !utf8.ValidString(query) || utf8.RuneCountInString(query) > 120 {
+		return nil, ErrInvalid
+	}
+	tx, err := s.adminReadTx(ctx, who)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT t.id,t.name,COALESCE((SELECT email FROM members m WHERE m.tenant_id=t.id AND role='owner' ORDER BY created_at LIMIT 1),''),t.status
+		FROM tenants t
+		WHERE $1='' OR strpos(lower(t.name),lower($1))>0 OR strpos(lower(t.id::text),lower($1))>0
+			OR EXISTS(SELECT 1 FROM members m WHERE m.tenant_id=t.id AND m.role='owner' AND strpos(lower(m.email),lower($1))>0)
+		ORDER BY CASE WHEN lower(t.id::text)=lower($1) THEN 0 WHEN lower(t.name)=lower($1) THEN 1 ELSE 2 END,t.created_at DESC,t.id
+		LIMIT 20`, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	options := []TenantOption{}
+	for rows.Next() {
+		var option TenantOption
+		if err = rows.Scan(&option.ID, &option.Name, &option.OwnerEmail, &option.Status); err != nil {
+			return nil, err
+		}
+		options = append(options, option)
+	}
+	return options, rows.Err()
 }
 
 func (s *Store) AdminTenants(ctx context.Context, who Identity, page int) (Page[TenantSummary], error) {
