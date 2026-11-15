@@ -14,6 +14,8 @@
 
 生产发布提交为 `0dc4f6b`，已推送到 `origin/feat/console-page-navigation`。Linux amd64 `v0.9.13` 归档 SHA256 为 `67cd46946ca7c90369a0e04e26e8cc276f90b191b71be06e201b79363ca63ec1`，安装的控制二进制 SHA256 为 `cf873f8ec94089e08e9f75b5bb2968e43f574ea978c1d8c21141ea5396b5f2be`。部署前候选使用生产配置执行 `--check-config` 通过；备份位于 `/root/reladock-pre-v39-20261115T170432Z`，包含旧二进制、环境、systemd 配置和 custom-format 数据库，`pg_restore --list` 与 SHA256 清单通过。切换后服务 active/enabled、schema v39、钱包与最新账本不一致 0、Lightsail 实例/任务均为 0、生产环境没有 `LIGHTSAIL_*` 配置、部署后 journal warning/error 均为空。公网首页返回 200，`lightsail-admin.js` 与本地 SHA256 同为 `b8f4c44ddd0de2e08805b6d7edce27418b4212fd9bc989d43bed3c3752f56faa`，未登录 Lightsail 状态 API 返回 401。首次切换脚本在备份清单自引用校验处于停服前安全中止；修正后切换完成，后置检查曾因 Type=simple active 早于迁移事务完成而返回非零，随后独立复核确认迁移和服务均正常。
 
+首次公网查看没有 Lightsail 入口。后端直连的 v0.9.13 页面已包含菜单和页面容器，根因是 Nginx 仍以 2026-11-16 早期统一界面及 `25fa06e` 租户搜索热修复文件精确覆盖 `/admin`、`/admin.js`、`/admin.css` 和 `/node-editor.js`；旧 `admin.js` 不导入 `lightsail-admin.js`。配置备份位于 `/root/reladock-pre-admin-proxy-20261115T172738Z`。删除这四个精确覆盖、`nginx -t` 通过并无中断 reload 后，Nginx 与 RelaDock 均 active；公网管理页的 Lightsail 菜单、pane 和模块导入各为 1，四个管理资源 SHA256 全部与当前源码/后端嵌入资源一致，`lightsail-admin.js` 返回 200，未登录状态 API 仍返回 401。官网根页面、`app.css`、插图和安装器覆盖未改动；生产连接器仍关闭，未访问 AWS。
+
 ## 2026-11-14 既有 Agent 安装菜单与安全升级（本地）
 
 一条命令安装器现在先区分全新主机、完整既有安装和残缺/冲突现场。全新主机继续原注册流程；完整既有安装从 `/dev/tty` 显示“升级 / 不操作”，因此不会误读标准输入中的短期凭证。回车、其他输入、无终端或选择不操作均保持现场，且不依赖发布元数据。残缺 PKI、缺少二进制/单元、符号链接或 `agent.env` 与本地 node/control/PKI 不一致时失败关闭，不提供覆盖式升级。

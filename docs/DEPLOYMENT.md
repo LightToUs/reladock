@@ -64,6 +64,8 @@ Lightsail API 会限流；worker 对未完成操作和可重试 provider 失败�
 
 `PUBLIC_ORIGIN` 必须是浏览器实际访问的完整 HTTPS origin（包含非默认端口，无路径和末尾 `/`）。控制台直接终结 TLS 1.3；不信任 X-Forwarded-* 或 Forwarded 头。错误 Host 与跨 origin 写操作会拒绝。TLS 私钥和公钥证书必须成对配置；证书轮换后重启服务。生产 API 使用 PostgreSQL 共享限流；支付 webhook 另有单进程预算，多副本/高并发前仍须验收容量及上游入口限流。
 
+若前置 Nginx 为官网或紧急修复保留静态 `alias`，不得长期覆盖 `/admin`、`/admin.js`、`/admin.css`、`/node-editor.js` 等控制二进制内嵌管理资源；否则升级二进制后公网仍会返回旧界面。每次控制端发布都应分别比较后端直连与公网管理页，至少核对新菜单/模块引用以及管理 HTML、JS、CSS 摘要。确需临时覆盖时须版本化、记录撤销条件，并在下一次包含该修复的二进制发布时删除覆盖。
+
 独立 Agent 通道需要 `ca.crt`、`server.crt`、`server.key`，由与节点身份相匹配的 CA 签发。节点证书含 `spiffe://reladock/nodes/<id>` 和客户端用途，先在平台登记节点并绑定其公钥证书。服务器证书 SAN 必须匹配 Agent 连接域名。CA 签名私钥不得复制到节点或随发布包分发；本机 dev-enroll 证书不得当作生产证书。
 
 ## 节点安装
