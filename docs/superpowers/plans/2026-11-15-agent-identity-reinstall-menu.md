@@ -70,5 +70,5 @@
 - Produces: operator recovery guidance and an auditable production deployment record.
 
 - [x] Document menu semantics, validation-only gate, persistent backup path, enrollment boundary, token handling, and the fact that reinstall is not apply or forwarding health.
-- [ ] Commit and push the tested implementation, deploy only the public installer script behind the exact Nginx route with precondition hashes and rollback backup, then verify public hash/headers, health, metadata, services, and warnings.
-- [ ] Record production hashes and unresolved real-VPS acceptance boundaries, commit/push the documentation, and leave the immutable `v0.9.10` tag unchanged.
+- [x] Commit and push the tested implementation, deploy only the public installer script behind the exact Nginx route with precondition hashes and rollback backup, then verify public hash/headers, health, metadata, services, and warnings.
+- [x] Record production hashes and unresolved real-VPS acceptance boundaries, commit/push the documentation, and leave the immutable `v0.9.10` tag unchanged.
