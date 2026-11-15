@@ -15,7 +15,7 @@ test('Linux installer verifies archive, enrolls, enables only validation, and pr
   '[ "$1" = enroll ] || exit 8',
   'IFS= read -r token',
   'node=hk-01',
-  'case "$token" in *9) node=sg-02;; esac',
+  'case "$token" in *9) if flock -n /var/lib/reladock-updater/lock true; then exit 7; fi; node=sg-02;; esac',
   'printf "enroll\\n" >> /tmp/enrollments',
   'mkdir /etc/reladock/node-pki',
   'printf "fixture-private" > /etc/reladock/node-pki/agent.key',
@@ -37,18 +37,16 @@ test('Linux installer verifies archive, enrolls, enables only validation, and pr
  const systemctl=[
   '#!/bin/sh',
   'printf "%s\\n" "$*" >> /tmp/services',
-  'case "$1" in enable) if [ "$2" = --now ]; then unit=$3; else unit=$2; fi;; disable) unit=$2;; is-active|is-enabled) unit=$3;; show) unit=$4;; mask|unmask) unit=$3;; *) unit=$2;; esac',
+  'case "$1" in enable) if [ "$2" = --now ]; then unit=$3; else unit=$2; fi;; disable) unit=$2;; is-active|is-enabled) unit=$3;; show) unit=$4;; *) unit=$2;; esac',
   '[ "$unit" != reladock-agent ] || unit=reladock-agent.service',
   'case "$1" in',
   '  enable) if [ "$2" = --now ] && [ -f "/tmp/fail-once.$unit" ]; then rm -f "/tmp/fail-once.$unit"; exit 1; fi; touch "/tmp/enabled.$unit"; [ "$2" != --now ] || touch "/tmp/active.$unit";;',
   '  disable) rm -f "/tmp/enabled.$unit";;',
-  '  start|restart) if [ -f "/tmp/fail-once.$unit" ]; then rm -f "/tmp/fail-once.$unit"; exit 1; fi; touch "/tmp/active.$unit";;',
+  '  start|restart) if [ "$unit" = reladock-updater.service ] && [ -e /run/reladock-updater-identity-reinstall ] && [ -f /run/systemd/system/reladock-updater.service.d/90-reladock-identity-reinstall.conf ]; then exit 0; fi; if [ -f "/tmp/fail-once.$unit" ]; then rm -f "/tmp/fail-once.$unit"; exit 1; fi; touch "/tmp/active.$unit";;',
   '  stop) rm -f "/tmp/active.$unit"; if [ "$unit" = reladock-updater.timer ] && [ -f /tmp/race-updater-on-timer-stop ]; then printf "activating\\n" > /tmp/state.reladock-updater.service; touch /tmp/active.reladock-agent.service; fi;;',
   '  is-active) [ "$2" = --quiet ] && test -f "/tmp/active.$unit";;',
   '  is-enabled) [ "$2" = --quiet ] && test -f "/tmp/enabled.$unit";;',
-  '  show) if [ -f "/tmp/state.$unit" ]; then cat "/tmp/state.$unit"; elif [ -f "/tmp/active.$unit" ]; then echo active; else echo inactive; fi;;',
-  '  mask) touch "/tmp/masked.$unit";;',
-  '  unmask) rm -f "/tmp/masked.$unit";;',
+  '  show) if [ "$2" = --property=DropInPaths ]; then [ ! -f /run/systemd/system/reladock-updater.service.d/90-reladock-identity-reinstall.conf ] || echo /run/systemd/system/reladock-updater.service.d/90-reladock-identity-reinstall.conf; elif [ -f "/tmp/state.$unit" ]; then cat "/tmp/state.$unit"; elif [ -f "/tmp/active.$unit" ]; then echo active; else echo inactive; fi;;',
   'esac',
  ].join('\n')+'\n';
  const tools={curl,systemctl,useradd:'#!/bin/sh\naddgroup -S reladock\nadduser -S -D -G reladock reladock\n',uname:'#!/bin/sh\ncase "$1" in -s)echo Linux;;-m)echo x86_64;;esac\n'};
@@ -129,7 +127,7 @@ exit [lindex $result 3]
  const reinstallUpdaterActivating=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; printf "activating\\n" > /tmp/state.reladock-updater.service; touch /tmp/fail-metadata; if printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; then exit 9; fi; grep -q hk-01 /etc/reladock/node-pki/node-id; test "$(wc -l < /tmp/enrollments)" = 1; test ! -d /var/backups/reladock; systemctl is-active --quiet reladock-agent.service');
  assert.equal(reinstallUpdaterActivating.status,0,reinstallUpdaterActivating.stdout+reinstallUpdaterActivating.stderr);
  assert.match(reinstallUpdaterActivating.stderr,/controlled updater state is activating/);
- const reinstallUpdaterRace=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; touch /tmp/race-updater-on-timer-stop; if printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; then exit 9; fi; grep -q hk-01 /etc/reladock/node-pki/node-id; test "$(wc -l < /tmp/enrollments)" = 1; test ! -d /var/backups/reladock; systemctl is-active --quiet reladock-agent.service; systemctl is-active --quiet reladock-updater.timer; test ! -e /tmp/masked.reladock-updater.service');
+ const reinstallUpdaterRace=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; touch /tmp/race-updater-on-timer-stop; if printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; then exit 9; fi; grep -q hk-01 /etc/reladock/node-pki/node-id; test "$(wc -l < /tmp/enrollments)" = 1; test ! -d /var/backups/reladock; systemctl is-active --quiet reladock-agent.service; systemctl is-active --quiet reladock-updater.timer; test ! -e /run/reladock-updater-identity-reinstall; test ! -e /run/systemd/system/reladock-updater.service.d/90-reladock-identity-reinstall.conf');
  assert.equal(reinstallUpdaterRace.status,0,reinstallUpdaterRace.stdout+reinstallUpdaterRace.stderr);
  assert.match(reinstallUpdaterRace.stderr,/controlled updater state is activating/);
  const noninteractive=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 5 | sh /installer https://console.example.com; printf "old-agent" > /opt/reladock/reladock-agent; sh /installer https://console.example.com; grep -q old-agent /opt/reladock/reladock-agent; test "$(wc -l < /tmp/enrollments)" = 1');

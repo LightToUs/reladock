@@ -116,7 +116,7 @@ reinstall_state_paths_safe() {
  done
 }
 if [ "$bootstrap_reinstall" = 1 ]; then
- for dependency in flock rmdir; do command -v "$dependency" >/dev/null 2>&1 || fail "Missing dependency for identity reinstall: $dependency"; done
+ for dependency in find flock rmdir; do command -v "$dependency" >/dev/null 2>&1 || fail "Missing dependency for identity reinstall: $dependency"; done
  reinstall_runtime_safe || fail "$reinstall_safety_reason"
  reinstall_state_paths_safe || fail "$reinstall_safety_reason"
 fi
@@ -247,7 +247,8 @@ reinstall_validation_active=0
 reinstall_validation_enabled=0
 reinstall_timer_active=0
 reinstall_timer_enabled=0
-reinstall_updater_masked=0
+reinstall_updater_excluded=0
+reinstall_updater_dropin_dir_created=0
 reinstall_updater_dir_created=0
 reinstall_updater_lock_created=0
 reinstall_updater_lock_held=0
@@ -262,10 +263,33 @@ release_reinstall_updater_lock() {
 release_reinstall_updater_exclusion() {
  release_exclusion_ok=1
  release_reinstall_updater_lock || release_exclusion_ok=0
- if [ "$reinstall_updater_masked" = 1 ]; then
-  if systemctl unmask --runtime reladock-updater.service >/dev/null 2>&1; then reinstall_updater_masked=0; else release_exclusion_ok=0; fi
+ if [ "$reinstall_updater_excluded" = 1 ]; then
+  rm -f /run/systemd/system/reladock-updater.service.d/90-reladock-identity-reinstall.conf || release_exclusion_ok=0
+  if [ "$reinstall_updater_dropin_dir_created" = 1 ] && [ -d /run/systemd/system/reladock-updater.service.d ]; then rmdir /run/systemd/system/reladock-updater.service.d >/dev/null 2>&1 || release_exclusion_ok=0; fi
+  if systemctl daemon-reload >/dev/null 2>&1; then
+   if rm -f /run/reladock-updater-identity-reinstall; then reinstall_updater_excluded=0; else release_exclusion_ok=0; fi
+  else
+   release_exclusion_ok=0
+  fi
  fi
  [ "$release_exclusion_ok" = 1 ]
+}
+install_reinstall_updater_exclusion() {
+ reinstall_dropin_dir=/run/systemd/system/reladock-updater.service.d
+ reinstall_dropin=$reinstall_dropin_dir/90-reladock-identity-reinstall.conf
+ reinstall_guard=/run/reladock-updater-identity-reinstall
+ [ ! -e "$reinstall_dropin" ] && [ ! -L "$reinstall_dropin" ] || return 1
+ [ ! -e "$reinstall_guard" ] && [ ! -L "$reinstall_guard" ] || return 1
+ if [ ! -e "$reinstall_dropin_dir" ]; then reinstall_updater_dropin_dir_created=1; fi
+ install -d -o root -g root -m 0755 "$reinstall_dropin_dir" || return 1
+ [ -d "$reinstall_dropin_dir" ] && [ ! -L "$reinstall_dropin_dir" ] || return 1
+ reinstall_updater_excluded=1
+ install -o root -g root -m 0600 /dev/null "$reinstall_guard" || return 1
+ printf '%s\n' '[Unit]' 'ConditionPathExists=!/run/reladock-updater-identity-reinstall' > "$temp/updater-identity-reinstall.conf" || return 1
+ install -o root -g root -m 0644 "$temp/updater-identity-reinstall.conf" "$reinstall_dropin" || return 1
+ systemctl daemon-reload || return 1
+ updater_dropins=$(systemctl show --property=DropInPaths --value reladock-updater.service) || return 1
+ case " $updater_dropins " in *" $reinstall_dropin "*) ;; *) return 1;; esac
 }
 restore_reinstall() {
  restore_ok=1
@@ -274,10 +298,10 @@ restore_reinstall() {
   systemctl stop reladock-agent-apply.service >/dev/null 2>&1 || restore_ok=0
  fi
  systemctl stop reladock-updater.timer >/dev/null 2>&1 || restore_ok=0
- release_reinstall_updater_lock || restore_ok=0
  if [ "$reinstall_state_removed" = 1 ] && [ "$reinstall_backup_ready" = 1 ]; then
   rm -f /etc/reladock/agent.env || restore_ok=0
-  rm -rf /etc/reladock/node-pki /var/lib/reladock-agent /var/lib/reladock-updater /run/reladock-agent /run/reladock-updater || restore_ok=0
+  rm -rf /etc/reladock/node-pki /var/lib/reladock-agent /run/reladock-agent /run/reladock-updater || restore_ok=0
+  find /var/lib/reladock-updater -mindepth 1 -maxdepth 1 ! -name lock -exec rm -rf -- {} + || restore_ok=0
   install -d -o root -g reladock -m 0750 /etc/reladock || restore_ok=0
   install -d -o root -g root -m 0755 /opt/reladock /etc/systemd/system || restore_ok=0
   cp -a "$reinstall_backup/etc/reladock/agent.env" /etc/reladock/agent.env || restore_ok=0
@@ -289,14 +313,12 @@ restore_reinstall() {
    cp -a "$reinstall_backup/etc/systemd/system/$restore_path" "/etc/systemd/system/$restore_path" || restore_ok=0
   done
   if [ -d "$reinstall_backup/var/lib/reladock-agent" ]; then cp -a "$reinstall_backup/var/lib/reladock-agent" /var/lib/reladock-agent || restore_ok=0; fi
-  if [ -d "$reinstall_backup/var/lib/reladock-updater" ]; then cp -a "$reinstall_backup/var/lib/reladock-updater" /var/lib/reladock-updater || restore_ok=0; fi
+  if [ -d "$reinstall_backup/var/lib/reladock-updater" ]; then cp -a "$reinstall_backup/var/lib/reladock-updater/." /var/lib/reladock-updater || restore_ok=0; fi
   systemctl daemon-reload || restore_ok=0
  fi
+ release_reinstall_updater_exclusion || restore_ok=0
  if [ "$reinstall_updater_lock_created" = 1 ]; then rm -f /var/lib/reladock-updater/lock || restore_ok=0; fi
  if [ "$reinstall_updater_dir_created" = 1 ]; then rmdir /var/lib/reladock-updater || restore_ok=0; fi
- if [ "$reinstall_updater_masked" = 1 ]; then
-  if systemctl unmask --runtime reladock-updater.service >/dev/null 2>&1; then reinstall_updater_masked=0; else restore_ok=0; fi
- fi
  if [ "$reinstall_agent_snapshot" = 1 ]; then
   systemctl disable reladock-agent-apply.service >/dev/null 2>&1 || restore_ok=0
   if [ "$reinstall_validation_enabled" = 1 ]; then systemctl enable reladock-agent.service >/dev/null 2>&1 || restore_ok=0; else systemctl disable reladock-agent.service >/dev/null 2>&1 || restore_ok=0; fi
@@ -310,8 +332,7 @@ prepare_reinstall() {
  systemctl is-active --quiet reladock-updater.timer && reinstall_timer_active=1
  systemctl is-enabled --quiet reladock-updater.timer && reinstall_timer_enabled=1
  systemctl stop reladock-updater.timer || return 1
- systemctl mask --runtime reladock-updater.service || return 1
- reinstall_updater_masked=1
+ install_reinstall_updater_exclusion || return 1
  reinstall_runtime_safe || return 1
  if [ ! -e /var/lib/reladock-updater ]; then
   install -d -o root -g root -m 0700 /var/lib/reladock-updater || return 1
@@ -350,6 +371,7 @@ prepare_reinstall() {
  for backup_path in reladock-agent reladock-updater reladock-locks; do
   if [ -d "/var/lib/$backup_path" ]; then cp -a "/var/lib/$backup_path" "$reinstall_backup/var/lib/$backup_path" || return 1; fi
  done
+ rm -f "$reinstall_backup/var/lib/reladock-updater/lock" || return 1
  [ -f "$reinstall_backup/etc/reladock/agent.env" ] || return 1
  for backup_path in agent.key enrollment.json agent.crt ca.crt control node-id; do [ -f "$reinstall_backup/etc/reladock/node-pki/$backup_path" ] || return 1; done
  if [ -f /etc/reladock/node-pki/identity.pem ]; then [ -f "$reinstall_backup/etc/reladock/node-pki/identity.pem" ] || return 1; fi
@@ -364,8 +386,8 @@ prepare_reinstall() {
  systemctl disable reladock-updater.timer || return 1
  reinstall_state_removed=1
  rm -f /etc/reladock/agent.env || return 1
- release_reinstall_updater_lock || return 1
- rm -rf /etc/reladock/node-pki /var/lib/reladock-agent /var/lib/reladock-updater /run/reladock-agent /run/reladock-updater || return 1
+ rm -rf /etc/reladock/node-pki /var/lib/reladock-agent /run/reladock-agent /run/reladock-updater || return 1
+ find /var/lib/reladock-updater -mindepth 1 -maxdepth 1 ! -name lock -exec rm -rf -- {} + || return 1
 }
 if [ "$bootstrap_reinstall" = 1 ] && ! prepare_reinstall; then
  reinstall_prepare_error=${reinstall_safety_reason:-Identity reinstall preparation failed.}
