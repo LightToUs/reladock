@@ -117,7 +117,7 @@ CA 必须仍有至少 31 天有效期。签发节点证书固定 ClientAuth、�
 ## 操作者使用
 
 - 后台登记节点 → 得到专属命令 → 在该 VPS 粘贴执行 → 等待服务连接 → 点击“刷新连接与检查结果”。后台尚未配置发布信息时明确提示未配置，不生成虚构下载地址。
-- 系统要求 Linux、systemd、curl、tar、sha256sum、useradd 等；Agent 安装仅在缺少 `/usr/sbin/conntrack` 时尝试通过 apt/dnf/yum/apk 安装对应 conntrack 工具，其他缺项会明确失败。不会修改软件包源。支持 amd64/arm64，脚本依赖常规 IPv4/DNS HTTPS origin，暂不支持引导地址使用 IPv6 字面量。
+- 系统要求 Linux、systemd、curl、tar、sha256sum、useradd 等；身份重装额外要求 util-linux `flock`。Agent 安装仅在缺少 `/usr/sbin/conntrack` 时尝试通过 apt/dnf/yum/apk 安装对应 conntrack 工具，其他缺项会明确失败。不会修改软件包源。支持 amd64/arm64，脚本依赖常规 IPv4/DNS HTTPS origin，暂不支持引导地址使用 IPv6 字面量。
 - 安装凭证有效 15 分钟、绑定一个节点身份、数据库只存摘要。生成新命令使旧命令失效，撤销凭证不等于撤销已签发的节点证书；已接入身份应通过“证书 → 撤销”处理。
 - 生成的命令先从可信控制台下载引导脚本，再从固定 GitHub tag 下载归档，使用控制台固定摘要验证后才执行包内 Agent。凭证经 stdin 交给 Agent，不进入 URL、服务参数、环境文件或后台审计。
 - **复制命令本身含短期凭证**，可能被终端历史、剪贴板或屏幕录制保存；不要发给他人。界面仅内存保存命令，过期、收起或退出后清除。控制台及反向代理不得记录 Authorization/响应正文。
@@ -126,7 +126,7 @@ CA 必须仍有至少 31 天有效期。签发节点证书固定 ClientAuth、�
 - “完整既有安装”要求 `agent.env`、PKI 关键文件、本地节点/控制地址对应关系、四个 Agent 二进制及四个 systemd 单元均为非符号链接的普通文件。任一缺失或身份冲突都不显示升级选项，保留全部现场并进入下方恢复流程。
 - 菜单升级仍从控制台固定版本和摘要取得归档，完成外层摘要、平面文件白名单和包内摘要验证后，只替换 Agent/dataplane/updater/recovery 二进制与四个 systemd 单元；不注册新身份、不安装系统包、不修改网络前置条件。升级前 apply 正在运行时只恢复并 enable apply；其他情况 disable apply、enable 并立即启动 validation-only，使 Agent 重新连接且主机重启后自动启动。原来活动的 updater timer 继续恢复。候选启动或 enable 失败时恢复旧文件、活动状态和两个 Agent 单元原 enable 状态。服务 active 只证明进程恢复，不代表配置应用或端到端转发健康。
 - “更换身份并重新安装”用于本机证书身份与控制台登记节点不一致、旧证书持续收到 401 的 validation-only 恢复场景。apply service 活动或已设为开机启用、`agent.env` 含 apply 参数、存在 shaping 配置、受控 updater 正在执行，或运行状态路径不安全时，安装器在请求发布元数据前拒绝重装。不得为了绕过此门槛手工停 apply 后删除配置；apply 节点必须走离机恢复或受控退役流程。
-- 身份重装先完成固定版本、外层摘要、归档白名单和包内摘要验证，随后停止 validation/updater，在 `/var/backups/reladock/agent-reinstall.XXXXXX` 创建 mode `0700` 的持久备份。备份包含原 `agent.env`、完整 PKI、Agent/dataplane/updater/recovery、四个 systemd 单元，以及存在的 Agent journal/WAL、updater 与锁状态。验证关键备份文件后，才移除旧 `agent.env`、PKI、Agent/updater 节点状态和易失运行目录，并进入与全新安装相同的 stdin 注册路径。
+- 身份重装先完成固定版本、外层摘要、归档白名单和包内摘要验证，随后先停止 updater timer、用 runtime mask 阻止新 updater systemd 作业，并要求 oneshot updater 的 `ActiveState` 明确为 `inactive`；安装器还取得 updater 持久状态锁，再次核对 apply/updater 状态后才停止并确认两个 Agent 单元均为 inactive。排他状态保持到旧状态清理完成，避免下载期间 timer 触发或 updater 重启 Agent 的竞态。随后在 `/var/backups/reladock/agent-reinstall.XXXXXX` 创建 mode `0700` 的持久备份。备份包含原 `agent.env`、完整 PKI、Agent/dataplane/updater/recovery、四个 systemd 单元，以及存在的 Agent journal/WAL、updater 与锁状态。验证关键备份文件后，才移除旧 `agent.env`、PKI、Agent/updater 节点状态和易失运行目录，并进入与全新安装相同的 stdin 注册路径。
 - 备份或注册前准备失败时，安装器尝试恢复原文件与原 validation/updater 活动和开机状态；旧备份仍保留供复核。一旦新 Agent 开始注册，响应失败或结果不确定时不会恢复旧身份：新的私钥/申请现场保留在 `/etc/reladock/node-pki`，旧身份和运行状态保留在打印出的备份目录，操作者按“注册响应丢失”流程恢复同一申请。不要删除两处现场重新生成身份。成功后仅 enable/start validation Agent 与 updater timer，apply 保持禁用，主机重启会自动连接；该动作不修改网络规则，也不证明配置 ACK 或端到端转发健康。
 - 后台环境报告包含采样时间、架构和有限只读网络信息；无权限/不支持的检查显示 unknown。数据有截断限制，不可用它替代专用网卡、完整防火墙和流量健康验收。
 

@@ -92,21 +92,33 @@ if [ "$bootstrap_check" = 0 ]; then
   fail 'No existing Agent installation was found for the requested action.'
  fi
 fi
-if [ "$bootstrap_reinstall" = 1 ]; then
- systemctl is-active --quiet reladock-agent-apply.service && fail 'Identity reinstall is unavailable while apply mode is active.'
- systemctl is-enabled --quiet reladock-agent-apply.service && fail 'Identity reinstall is unavailable while apply mode is enabled for reboot.'
- systemctl is-active --quiet reladock-updater.service && fail 'Identity reinstall is unavailable while a controlled upgrade is running.'
+unit_active_state() {
+ systemctl show --property=ActiveState --value "$1"
+}
+reinstall_runtime_safe() {
+ reinstall_safety_reason=
+ apply_active_state=$(unit_active_state reladock-agent-apply.service) || { reinstall_safety_reason='Cannot determine the apply Agent state.'; return 1; }
+ if [ "$apply_active_state" != inactive ]; then reinstall_safety_reason="Identity reinstall is unavailable while the apply Agent state is $apply_active_state."; return 1; fi
+ if systemctl is-enabled --quiet reladock-agent-apply.service; then reinstall_safety_reason='Identity reinstall is unavailable while apply mode is enabled for reboot.'; return 1; fi
+ updater_active_state=$(unit_active_state reladock-updater.service) || { reinstall_safety_reason='Cannot determine the controlled updater state.'; return 1; }
+ if [ "$updater_active_state" != inactive ]; then reinstall_safety_reason="Identity reinstall is unavailable while the controlled updater state is $updater_active_state."; return 1; fi
  if awk '/^[[:space:]]*RELADOCK_(STATE_DIR|SNAT|SHAPING_INTERFACE|WAL_DIR|NFT_BINARY|TC_BINARY|IP_BINARY|ETHTOOL_BINARY|SHAPING_LEASE)=/ {found=1} END {exit !found}' /etc/reladock/agent.env; then
-  fail 'Identity reinstall is available only for validation-only Agent configuration.'
+  reinstall_safety_reason='Identity reinstall is available only for validation-only Agent configuration.'
+  return 1
  fi
- if [ -e /etc/reladock/shaping.json ] || [ -L /etc/reladock/shaping.json ]; then
-  fail 'Identity reinstall refuses a host with shaping configuration.'
- fi
+ if [ -e /etc/reladock/shaping.json ] || [ -L /etc/reladock/shaping.json ]; then reinstall_safety_reason='Identity reinstall refuses a host with shaping configuration.'; return 1; fi
+}
+reinstall_state_paths_safe() {
  for state_path in /var/lib/reladock-agent /var/lib/reladock-updater /var/lib/reladock-locks /run/reladock-agent /run/reladock-updater; do
   if [ -e "$state_path" ] || [ -L "$state_path" ]; then
-   [ -d "$state_path" ] && [ ! -L "$state_path" ] || fail 'Identity reinstall refuses unsafe Agent state paths.'
+   [ -d "$state_path" ] && [ ! -L "$state_path" ] || { reinstall_safety_reason='Identity reinstall refuses unsafe Agent state paths.'; return 1; }
   fi
  done
+}
+if [ "$bootstrap_reinstall" = 1 ]; then
+ for dependency in flock rmdir; do command -v "$dependency" >/dev/null 2>&1 || fail "Missing dependency for identity reinstall: $dependency"; done
+ reinstall_runtime_safe || fail "$reinstall_safety_reason"
+ reinstall_state_paths_safe || fail "$reinstall_safety_reason"
 fi
 metadata=$(curl --fail --silent --show-error --proto '=https' --connect-timeout 10 --max-time 30 "$origin/api/node-bootstrap/release") || fail 'Cannot fetch pinned release metadata'
 set -f
@@ -235,12 +247,34 @@ reinstall_validation_active=0
 reinstall_validation_enabled=0
 reinstall_timer_active=0
 reinstall_timer_enabled=0
+reinstall_updater_masked=0
+reinstall_updater_dir_created=0
+reinstall_updater_lock_created=0
+reinstall_updater_lock_held=0
+reinstall_agent_snapshot=0
+release_reinstall_updater_lock() {
+ if [ "$reinstall_updater_lock_held" = 1 ]; then
+  flock -u 9 >/dev/null 2>&1 || return 1
+  exec 9>&-
+  reinstall_updater_lock_held=0
+ fi
+}
+release_reinstall_updater_exclusion() {
+ release_exclusion_ok=1
+ release_reinstall_updater_lock || release_exclusion_ok=0
+ if [ "$reinstall_updater_masked" = 1 ]; then
+  if systemctl unmask --runtime reladock-updater.service >/dev/null 2>&1; then reinstall_updater_masked=0; else release_exclusion_ok=0; fi
+ fi
+ [ "$release_exclusion_ok" = 1 ]
+}
 restore_reinstall() {
  restore_ok=1
- systemctl stop reladock-agent.service >/dev/null 2>&1 || restore_ok=0
- systemctl stop reladock-agent-apply.service >/dev/null 2>&1 || restore_ok=0
- systemctl stop reladock-updater.service >/dev/null 2>&1 || restore_ok=0
+ if [ "$reinstall_agent_snapshot" = 1 ]; then
+  systemctl stop reladock-agent.service >/dev/null 2>&1 || restore_ok=0
+  systemctl stop reladock-agent-apply.service >/dev/null 2>&1 || restore_ok=0
+ fi
  systemctl stop reladock-updater.timer >/dev/null 2>&1 || restore_ok=0
+ release_reinstall_updater_lock || restore_ok=0
  if [ "$reinstall_state_removed" = 1 ] && [ "$reinstall_backup_ready" = 1 ]; then
   rm -f /etc/reladock/agent.env || restore_ok=0
   rm -rf /etc/reladock/node-pki /var/lib/reladock-agent /var/lib/reladock-updater /run/reladock-agent /run/reladock-updater || restore_ok=0
@@ -258,21 +292,49 @@ restore_reinstall() {
   if [ -d "$reinstall_backup/var/lib/reladock-updater" ]; then cp -a "$reinstall_backup/var/lib/reladock-updater" /var/lib/reladock-updater || restore_ok=0; fi
   systemctl daemon-reload || restore_ok=0
  fi
- systemctl disable reladock-agent-apply.service >/dev/null 2>&1 || restore_ok=0
- if [ "$reinstall_validation_enabled" = 1 ]; then systemctl enable reladock-agent.service >/dev/null 2>&1 || restore_ok=0; else systemctl disable reladock-agent.service >/dev/null 2>&1 || restore_ok=0; fi
+ if [ "$reinstall_updater_lock_created" = 1 ]; then rm -f /var/lib/reladock-updater/lock || restore_ok=0; fi
+ if [ "$reinstall_updater_dir_created" = 1 ]; then rmdir /var/lib/reladock-updater || restore_ok=0; fi
+ if [ "$reinstall_updater_masked" = 1 ]; then
+  if systemctl unmask --runtime reladock-updater.service >/dev/null 2>&1; then reinstall_updater_masked=0; else restore_ok=0; fi
+ fi
+ if [ "$reinstall_agent_snapshot" = 1 ]; then
+  systemctl disable reladock-agent-apply.service >/dev/null 2>&1 || restore_ok=0
+  if [ "$reinstall_validation_enabled" = 1 ]; then systemctl enable reladock-agent.service >/dev/null 2>&1 || restore_ok=0; else systemctl disable reladock-agent.service >/dev/null 2>&1 || restore_ok=0; fi
+ fi
  if [ "$reinstall_timer_enabled" = 1 ]; then systemctl enable reladock-updater.timer >/dev/null 2>&1 || restore_ok=0; else systemctl disable reladock-updater.timer >/dev/null 2>&1 || restore_ok=0; fi
- [ "$reinstall_validation_active" = 0 ] || systemctl start reladock-agent.service || restore_ok=0
+ [ "$reinstall_agent_snapshot" = 0 ] || [ "$reinstall_validation_active" = 0 ] || systemctl start reladock-agent.service || restore_ok=0
  [ "$reinstall_timer_active" = 0 ] || systemctl start reladock-updater.timer || restore_ok=0
  [ "$restore_ok" = 1 ]
 }
 prepare_reinstall() {
- systemctl is-active --quiet reladock-agent.service && reinstall_validation_active=1
- systemctl is-enabled --quiet reladock-agent.service && reinstall_validation_enabled=1
  systemctl is-active --quiet reladock-updater.timer && reinstall_timer_active=1
  systemctl is-enabled --quiet reladock-updater.timer && reinstall_timer_enabled=1
- systemctl stop reladock-agent.service || return 1
  systemctl stop reladock-updater.timer || return 1
- systemctl stop reladock-updater.service || return 1
+ systemctl mask --runtime reladock-updater.service || return 1
+ reinstall_updater_masked=1
+ reinstall_runtime_safe || return 1
+ if [ ! -e /var/lib/reladock-updater ]; then
+  install -d -o root -g root -m 0700 /var/lib/reladock-updater || return 1
+  reinstall_updater_dir_created=1
+ fi
+ [ -d /var/lib/reladock-updater ] && [ ! -L /var/lib/reladock-updater ] || return 1
+ if [ ! -e /var/lib/reladock-updater/lock ]; then
+  install -o root -g root -m 0600 /dev/null /var/lib/reladock-updater/lock || return 1
+  reinstall_updater_lock_created=1
+ fi
+ [ -f /var/lib/reladock-updater/lock ] && [ ! -L /var/lib/reladock-updater/lock ] || return 1
+ exec 9<>/var/lib/reladock-updater/lock || return 1
+ flock -n 9 || { exec 9>&-; return 1; }
+ reinstall_updater_lock_held=1
+ reinstall_runtime_safe || return 1
+ reinstall_state_paths_safe || return 1
+ systemctl is-active --quiet reladock-agent.service && reinstall_validation_active=1
+ systemctl is-enabled --quiet reladock-agent.service && reinstall_validation_enabled=1
+ reinstall_agent_snapshot=1
+ systemctl stop reladock-agent.service || return 1
+ validation_active_state=$(unit_active_state reladock-agent.service) || return 1
+ apply_active_state=$(unit_active_state reladock-agent-apply.service) || return 1
+ [ "$validation_active_state" = inactive ] && [ "$apply_active_state" = inactive ] || return 1
  install -d -o root -g root -m 0700 /var/backups/reladock || return 1
  reinstall_backup=$(mktemp -d /var/backups/reladock/agent-reinstall.XXXXXX) || return 1
  chmod 0700 "$reinstall_backup" || return 1
@@ -302,11 +364,13 @@ prepare_reinstall() {
  systemctl disable reladock-updater.timer || return 1
  reinstall_state_removed=1
  rm -f /etc/reladock/agent.env || return 1
+ release_reinstall_updater_lock || return 1
  rm -rf /etc/reladock/node-pki /var/lib/reladock-agent /var/lib/reladock-updater /run/reladock-agent /run/reladock-updater || return 1
 }
 if [ "$bootstrap_reinstall" = 1 ] && ! prepare_reinstall; then
- if restore_reinstall; then fail "Identity reinstall preparation failed. Previous Agent state was restored; backup retained at ${reinstall_backup:-not-created}."; fi
- fail "Identity reinstall preparation failed and automatic restoration was incomplete. Preserve ${reinstall_backup:-the existing Agent files} and inspect systemd before retrying."
+ reinstall_prepare_error=${reinstall_safety_reason:-Identity reinstall preparation failed.}
+ if restore_reinstall; then fail "$reinstall_prepare_error Previous Agent state was restored; backup retained at ${reinstall_backup:-not-created}."; fi
+ fail "$reinstall_prepare_error Automatic restoration was incomplete. Preserve ${reinstall_backup:-the existing Agent files} and inspect systemd before retrying."
 fi
 prepare_fresh_install() {
  install -d -o root -g root -m 0755 /opt/reladock || return 1
@@ -326,7 +390,10 @@ if ! prepare_fresh_install; then
 fi
 # Token travels over stdin, never argv, environment, URL or a persistent file.
 if ! /opt/reladock/reladock-agent enroll --bootstrap-origin "$origin" --pki /etc/reladock/node-pki --env-file /etc/reladock/agent.env; then
- if [ "$bootstrap_reinstall" = 1 ]; then fail "Enrollment failed. New private enrollment state was retained for recovery; previous Agent backup remains at $reinstall_backup."; fi
+ if [ "$bootstrap_reinstall" = 1 ]; then
+  release_reinstall_updater_exclusion || fail "Enrollment failed and updater exclusion could not be released. New private enrollment state remains at /etc/reladock; previous Agent backup remains at $reinstall_backup. Inspect systemd before recovery."
+  fail "Enrollment failed. New private enrollment state was retained for recovery; previous Agent backup remains at $reinstall_backup."
+ fi
  fail 'Enrollment failed. Private enrollment state retained; see recovery instructions.'
 fi
 finish_fresh_install() {
@@ -345,13 +412,20 @@ finish_fresh_install() {
  install_failure='Agent failed to enable and start.'
  systemctl enable --now reladock-agent || return 1
  systemctl is-active --quiet reladock-agent || return 1
+ if [ "$bootstrap_reinstall" = 1 ]; then
+  install_failure='Cannot release the controlled updater exclusion.'
+  release_reinstall_updater_exclusion || return 1
+ fi
  install_failure='Updater timer failed to enable and start.'
  systemctl enable --now reladock-updater.timer || return 1
  systemctl is-active --quiet reladock-updater.timer || return 1
 }
 install_failure='Agent setup failed after enrollment.'
 if ! finish_fresh_install; then
- if [ "$bootstrap_reinstall" = 1 ]; then fail "$install_failure New identity state remains at /etc/reladock and /var/lib/reladock-agent; previous Agent backup remains at $reinstall_backup. Inspect systemd without restoring the old identity."; fi
+ if [ "$bootstrap_reinstall" = 1 ]; then
+  release_reinstall_updater_exclusion || install_failure="$install_failure Updater exclusion release also failed."
+  fail "$install_failure New identity state remains at /etc/reladock and /var/lib/reladock-agent; previous Agent backup remains at $reinstall_backup. Inspect systemd without restoring the old identity."
+ fi
  fail "$install_failure Enrollment retained; inspect systemd and the Agent journal."
 fi
 if [ "$bootstrap_reinstall" = 1 ]; then echo "Previous Agent identity and runtime state preserved at $reinstall_backup."; fi
