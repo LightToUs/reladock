@@ -1,5 +1,13 @@
 # 当前实现状态与 AI 交接
 
+## 2026-11-15 validation-only Agent 身份重装菜单（本地已实现，生产入口待切换）
+
+真实 VPS 启动 validation Agent 后持续收到 claim/heartbeat HTTP 401。只读核对显示本机证书 node-id 为 `node-01`、SAN 为 `spiffe://reladock/nodes/node-01`、证书 SHA256 为 `87bcd50f1c7afcef28bcdb022248eb76db2e78efa17e0773243d46919636af3b`；生产数据库当时仅有 `hk-01` 且没有 `node-01` 身份。由此确认不是 systemd 自启问题，而是本机旧证书身份与当前控制台登记节点不一致：mTLS 可以建立，但应用层按节点 ID/指纹认证返回 401，后台继续显示“待 Agent 连接”符合事实。
+
+当前分支把完整既有安装菜单扩展为“升级 / 更换身份并重新安装 / 不操作”，并提供 `--existing-action reinstall`。重装只允许 validation-only：apply 活动、开机启用、环境含 apply 参数、存在 shaping 配置、updater 正在执行或状态路径不安全时，均在读取发布元数据和改变现场前拒绝。固定 Release 完整验证后，脚本在 `/var/backups/reladock/agent-reinstall.XXXXXX` 创建 mode 0700 持久备份，保存旧环境、PKI、二进制、systemd 单元、Agent journal/WAL、updater 与锁状态；验证备份后才移除旧节点身份和节点绑定运行状态，并消费当前 stdin token 注册控制台本次命令绑定的新身份。准备失败恢复旧状态；新注册开始后的失败保留新私钥/申请现场和旧备份，不自动切回可能已失效的身份。成功仅启用 validation Agent 与 updater timer，apply 保持禁用，不修改 nftables/tc/路由/offload/云安全组。
+
+隔离无网络 Docker 回归已通过，覆盖三项菜单、成功更换 node-id、root-only 备份及 journal/updater 旧状态隔离、validation 自启、apply 活动/启用/配置拒绝且不请求元数据、发布元数据失败保持原服务和身份、新注册失败保留新私钥与旧备份，以及既有升级/回滚/归档安全测试。`sh -n`、`git diff --check` 与 `npm run vet` 通过。真实 PostgreSQL + Go race 在 Go 与数据库共用 Docker VM 时钟的环境中全包通过（`internal/platform` 442.633s、`internal/web` 68.285s）；Node 112 项为 111 通过、1 个 opt-in Docker 安装测试默认跳过、0 失败。较早用宿主 Go 连接 Docker PostgreSQL 的运行有 3 个一秒边界用例失败，精确测得数据库时钟快约 1.6 秒；同 Docker 时钟后这 3 项先连续 10 次通过，再完成全包通过，未修改相关 Go 代码。代码提交、生产公开脚本切换及目标 VPS 真实重装尚未执行，因此当前不能声称该节点已连接或生产验收完成；不可变 `v0.9.10` 标签与双架构 Release 不需要改变。
+
 ## 2026-11-15 v0.9.10 既有 Agent 安装菜单（已发布）
 
 本分支从公开 `v0.9.9` 标签隔离回移安装器增量，不包含主工作区其他未提交功能。全新主机继续原注册流程；完整既有 Agent 从 `/dev/tty` 显示“升级 / 不操作”，不读取承载短期凭证的标准输入。回车、其他输入、无交互终端或选择不操作均保持现场且不请求发布元数据。环境、PKI、任一 Agent 二进制或 systemd 单元只要出现但未形成完整一致安装，即失败关闭；悬空符号链接、身份配置冲突也不允许覆盖。

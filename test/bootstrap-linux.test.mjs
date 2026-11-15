@@ -13,16 +13,20 @@ test('Linux installer verifies archive, enrolls, enables only validation, and pr
  const fakeAgent=[
   '#!/bin/sh',
   '[ "$1" = enroll ] || exit 8',
+  'IFS= read -r token',
+  'node=hk-01',
+  'case "$token" in *9) node=sg-02;; esac',
   'printf "enroll\\n" >> /tmp/enrollments',
   'mkdir /etc/reladock/node-pki',
   'printf "fixture-private" > /etc/reladock/node-pki/agent.key',
+  '[ ! -f /tmp/fail-enroll ] || exit 1',
   'printf "fixture-enrollment" > /etc/reladock/node-pki/enrollment.json',
   'printf "fixture-certificate" > /etc/reladock/node-pki/agent.crt',
   'printf "fixture-ca" > /etc/reladock/node-pki/ca.crt',
   'printf "fixture-certificatefixture-private" > /etc/reladock/node-pki/identity.pem',
   'printf "https://agent.example.com:9443" > /etc/reladock/node-pki/control',
-  'printf "hk-01" > /etc/reladock/node-pki/node-id',
-  'printf "RELADOCK_NODE=hk-01\\nRELADOCK_CONTROL=https://agent.example.com:9443\\nRELADOCK_PKI=/etc/reladock/node-pki\\n" > /etc/reladock/agent.env',
+  'printf "%s" "$node" > /etc/reladock/node-pki/node-id',
+  'printf "RELADOCK_NODE=%s\\nRELADOCK_CONTROL=https://agent.example.com:9443\\nRELADOCK_PKI=/etc/reladock/node-pki\\n" "$node" > /etc/reladock/agent.env',
  ].join('\n')+'\n';
  const files={'reladock':'fixture control','reladock-admin':'fixture admin','reladock-recovery':'fixture recovery','reladock-agent':fakeAgent,'reladock-dataplane':'#!/bin/sh\nexit 0\n','reladock-updater':'#!/bin/sh\nexit 0\n','reladock.service':'fixture control service','reladock-agent.service':'fixture validation','reladock-agent-apply.service':'fixture opt-in','reladock-updater.service':'fixture updater','reladock-updater.timer':'fixture timer','control.env.example':'fixture control env','agent.env.example':'fixture agent env','install-linux.sh':await readFile(join(process.cwd(),'deploy/install-linux.sh')),'bootstrap-agent.sh':'fixture bootstrap','RELEASE.json':'{}\n','DEPLOYMENT.md':'fixture deployment','LINK-AND-CAPACITY.md':'fixture capacity','OFFSITE-RECOVERY.md':'fixture recovery docs','SAFE-RETIREMENT.md':'fixture retirement'};
  const sums=[];for(const [n,b]of Object.entries(files)){await writeFile(join(dir,'release',n),b);sums.push(`${createHash('sha256').update(b).digest('hex')}  ${n}`)}
@@ -62,11 +66,11 @@ test('Linux installer verifies archive, enrolls, enables only validation, and pr
 set timeout 20
 spawn docker start -a -i ${interactiveName}
 expect {
- -exact {Select [1/2]: } {}
+ -exact {Select [1/2/3]: } {}
  eof {exit 91}
  timeout {exit 92}
 }
-send "2\\r"
+send "3\\r"
 expect {
  -exact {Existing complete Agent installation left unchanged.} {}
  eof {exit 93}
@@ -91,6 +95,23 @@ exit [lindex $result 3]
  assert.equal(inactiveUpgrade.status,0,inactiveUpgrade.stdout+inactiveUpgrade.stderr);
  const activeApplyUpgrade=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 8 | sh /installer https://console.example.com; systemctl stop reladock-agent.service; systemctl enable --now reladock-agent-apply.service; printf "old-agent" > /opt/reladock/reladock-agent; sh /installer https://console.example.com --existing-action upgrade; systemctl is-active --quiet reladock-agent-apply.service; systemctl is-enabled --quiet reladock-agent-apply.service; ! systemctl is-active --quiet reladock-agent.service; ! systemctl is-enabled --quiet reladock-agent.service; grep -q fixture-certificate /opt/reladock/reladock-agent');
  assert.equal(activeApplyUpgrade.status,0,activeApplyUpgrade.stdout+activeApplyUpgrade.stderr);
+ const reinstall=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; mkdir -p /var/lib/reladock-updater; printf "old-journal" > /var/lib/reladock-agent/control/old-journal; printf "old-updater" > /var/lib/reladock-updater/old-state; printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; test "$(wc -l < /tmp/enrollments)" = 2; grep -q sg-02 /etc/reladock/node-pki/node-id; test ! -e /var/lib/reladock-agent/control/old-journal; test ! -e /var/lib/reladock-updater/old-state; set -- /var/backups/reladock/agent-reinstall.*; test "$#" = 1; test -d "$1"; test "$(stat -c %a "$1")" = 700; grep -q hk-01 "$1/etc/reladock/node-pki/node-id"; grep -q old-journal "$1/var/lib/reladock-agent/control/old-journal"; grep -q old-updater "$1/var/lib/reladock-updater/old-state"; systemctl is-active --quiet reladock-agent.service; systemctl is-enabled --quiet reladock-agent.service; ! systemctl is-active --quiet reladock-agent-apply.service; ! systemctl is-enabled --quiet reladock-agent-apply.service; systemctl is-active --quiet reladock-updater.timer');
+ assert.equal(reinstall.status,0,reinstall.stdout+reinstall.stderr);
+ const reinstallMetadataFailure=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; touch /tmp/fail-metadata; if printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; then exit 9; fi; grep -q hk-01 /etc/reladock/node-pki/node-id; test "$(wc -l < /tmp/enrollments)" = 1; test ! -d /var/backups/reladock; systemctl is-active --quiet reladock-agent.service; systemctl is-enabled --quiet reladock-agent.service');
+ assert.equal(reinstallMetadataFailure.status,0,reinstallMetadataFailure.stdout+reinstallMetadataFailure.stderr);
+ assert.match(reinstallMetadataFailure.stderr,/Cannot fetch pinned release metadata/);
+ const reinstallEnrollmentFailure=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; touch /tmp/fail-enroll; if printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; then exit 9; fi; set -- /var/backups/reladock/agent-reinstall.*; test "$#" = 1; grep -q hk-01 "$1/etc/reladock/node-pki/node-id"; test -f /etc/reladock/node-pki/agent.key; test ! -e /etc/reladock/node-pki/node-id; test ! -e /etc/reladock/agent.env; ! systemctl is-active --quiet reladock-agent.service; ! systemctl is-enabled --quiet reladock-agent-apply.service; test "$(wc -l < /tmp/enrollments)" = 2');
+ assert.equal(reinstallEnrollmentFailure.status,0,reinstallEnrollmentFailure.stdout+reinstallEnrollmentFailure.stderr);
+ assert.match(reinstallEnrollmentFailure.stderr,/New private enrollment state was retained for recovery/);
+ const reinstallStartFailure=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; touch /tmp/fail-once.reladock-agent.service; if printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; then exit 9; fi; set -- /var/backups/reladock/agent-reinstall.*; test "$#" = 1; grep -q hk-01 "$1/etc/reladock/node-pki/node-id"; grep -q sg-02 /etc/reladock/node-pki/node-id; grep -q sg-02 /etc/reladock/agent.env; ! systemctl is-active --quiet reladock-agent.service; ! systemctl is-enabled --quiet reladock-agent-apply.service; test "$(wc -l < /tmp/enrollments)" = 2');
+ assert.equal(reinstallStartFailure.status,0,reinstallStartFailure.stdout+reinstallStartFailure.stderr);
+ assert.match(reinstallStartFailure.stderr,/New identity state remains at \/etc\/reladock/);
+ const reinstallApplyActive=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; systemctl stop reladock-agent.service; systemctl enable --now reladock-agent-apply.service; touch /tmp/fail-metadata; if printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; then exit 9; fi; grep -q hk-01 /etc/reladock/node-pki/node-id; test "$(wc -l < /tmp/enrollments)" = 1; test ! -d /var/backups/reladock');
+ assert.equal(reinstallApplyActive.status,0,reinstallApplyActive.stdout+reinstallApplyActive.stderr);
+ const reinstallApplyEnabled=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; systemctl stop reladock-agent.service; systemctl enable reladock-agent-apply.service; touch /tmp/fail-metadata; if printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; then exit 9; fi; grep -q hk-01 /etc/reladock/node-pki/node-id; test "$(wc -l < /tmp/enrollments)" = 1; test ! -d /var/backups/reladock');
+ assert.equal(reinstallApplyEnabled.status,0,reinstallApplyEnabled.stdout+reinstallApplyEnabled.stderr);
+ const reinstallApplyConfigured=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 0 | sh /installer https://console.example.com; printf "RELADOCK_STATE_DIR=/var/lib/reladock-agent/apply\\n" >> /etc/reladock/agent.env; touch /tmp/fail-metadata; if printf "%064d\\n" 9 | sh /installer https://console.example.com --existing-action reinstall; then exit 9; fi; grep -q hk-01 /etc/reladock/node-pki/node-id; test "$(wc -l < /tmp/enrollments)" = 1; test ! -d /var/backups/reladock');
+ assert.equal(reinstallApplyConfigured.status,0,reinstallApplyConfigured.stdout+reinstallApplyConfigured.stderr);
  const noninteractive=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 5 | sh /installer https://console.example.com; printf "old-agent" > /opt/reladock/reladock-agent; sh /installer https://console.example.com; grep -q old-agent /opt/reladock/reladock-agent; test "$(wc -l < /tmp/enrollments)" = 1');
  assert.equal(noninteractive.status,0,noninteractive.stdout+noninteractive.stderr);
  assert.match(noninteractive.stdout,/left unchanged because no interactive terminal is available/);
