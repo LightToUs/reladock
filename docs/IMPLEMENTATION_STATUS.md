@@ -6,7 +6,9 @@
 
 临时回环 TLS 捕获实际请求后确认根因：`main` 中 nil 的 `*NodeEngine` 赋给 `DataplaneInspector` 接口后接口值非 nil，资源采集器调用其只读 `Stable` 并把错误映射成 `dataplaneState=drifted`；控制端按安全约束拒绝 validation 模式携带 drifted。最小心跳与手工 `not-applicable` 资源心跳均返回 200。TDD 新增 `TestResourceCollectorTreatsTypedNilInspectorAsNotApplicable`，修复前准确失败为 `got drifted`，修复后与 `internal/agent` 全包通过；实现只把 typed-nil 指针视为未启用检查器，真实 apply 检查器语义不变。
 
-Linux amd64 修复候选 SHA256 为 `61facfcbc6ec7528a70006f1186e857186b6989eeea35aa0b75d071c2632c15b`。并行短运行在真实控制端无心跳错误且写入 validation/not-applicable 后，已备份旧二进制并替换 `/opt/reladock/reladock-agent`；旧 SHA256 `551c05b0136886067748fe495a608418582f4fe44c3c623b30559d249ad6e066` 保存在 `/var/backups/reladock/agent-heartbeat-hotfix-20261115/reladock-agent-551c05b`。正式服务重启后 active/enabled，apply 继续 inactive/disabled；控制端在 14:10:24 UTC 收到新进程持续心跳，判定 `hk-02` online，资源为 CPU 0%、内存 10%、根磁盘 10%、conntrack unknown、`not-applicable`。诊断临时私钥副本、证书、脚本和候选均已删除。本修复未启用转发、修改网络规则、账务或业务数据；online/validated 仍不等于 applied 或端到端健康。
+Linux amd64 修复候选 SHA256 为 `61facfcbc6ec7528a70006f1186e857186b6989eeea35aa0b75d071c2632c15b`。并行短运行在真实控制端无心跳错误且写入 validation/not-applicable 后，已备份旧二进制并替换 `/opt/reladock/reladock-agent`；旧 SHA256 `551c05b0136886067748fe495a608418582f4fe44c3c623b30559d249ad6e066` 保存在 `/var/backups/reladock/agent-heartbeat-hotfix-20261115/reladock-agent-551c05b`。候选验证后已发布正式 v0.9.11：公开 amd64 归档 SHA256 `dda7de932586de21c1db62397b7f65c580e9fab6afe8e5c9b60ae2c68c21f10c`，arm64 归档 SHA256 `91f4cc6205337ae13b708661290b5d5980240a5a3e9ff635f9a7694a8a2b04e0`，两者均从公开下载 URL 重新读取并核对；生产 `/api/node-bootstrap/release` 已固定到该版本和摘要，旧 `control.env` 备份在 `/var/backups/reladock/control-env-v0911-20261115/control.env`。
+
+`hk-02` 已从候选切换为正式 amd64 Agent，二进制 SHA256 `91c7c8dddde4bd5e44aeb56b894ed355d0159a78d1061afbadaf4e6a68c316b5`，切换前二进制保存在 `/var/backups/reladock/agent-v0911-20261115/`。2026-11-15 14:44:10 UTC 生产控制端收到 v0.9.11 新进程心跳并判定 online，资源状态为 `not-applicable`；Agent active/enabled，apply inactive/disabled，updater timer active/enabled，控制端与 Agent 自正式切换后的 warning 日志均为空。诊断临时私钥副本、证书、脚本和候选均已删除。本修复未启用转发、修改网络规则、账务或业务数据；online/validated 仍不等于 applied 或端到端健康。
 
 ## 2026-11-15 新增节点的专属企业搜索（生产静态覆盖已部署）
 
