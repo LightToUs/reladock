@@ -1,10 +1,14 @@
 # 当前实现状态与 AI 交接
 
-## 2026-11-15 新增节点的专属企业搜索（本地源码，未部署）
+## 2026-11-15 新增节点的专属企业搜索（生产静态覆盖已部署）
 
-平台管理员在新增或编辑企业专属/规则专属节点时，可在原企业 ID 字段按企业名称、owner 邮箱或 ID 搜索，候选项显示企业名、owner 邮箱及停用标记，选中后提交真实企业 ID。搜索接口仅平台管理员可用，最多返回 20 条；节点归属、存在规则时不可改归属等原有服务端约束未改变。
+平台管理员在新增或编辑企业专属/规则专属节点时，可在原企业 ID 字段按企业名称、owner 邮箱或 ID 搜索，候选项显示企业名、owner 邮箱及停用标记，选中后提交真实企业 ID。新控制端优先使用仅平台管理员可用的搜索接口；旧控制端返回 404 时，页面自动分页读取现有管理员企业列表，在浏览器缓存目录并过滤前 20 条。节点归属、存在规则时不可改归属等原有服务端约束未改变。
 
-聚焦 TDD 先确认旧节点编辑器不会发起搜索、旧后端返回 404，实现后 `public/node-editor.test.js` 7/7 通过，`TestPlatformAdminAPIAuthorizationNodeWritesAndConflict` 在独立临时 PostgreSQL 上通过。全量 `npm test` 通过：Go race 全包通过（`internal/platform` 509.357s、`internal/web` 76.339s），Node 113 项中 112 通过、1 个 opt-in Linux 安装测试跳过、0 失败；`npm run vet` 与 `git diff --check` 通过。本地 Playwright 使用真实登录会话验证：共享模式搜索框禁用，切换企业专属后必填且可用，输入“海外业务”后返回唯一真实企业 ID 及“海外业务公司 · search-owner-ui@example.com”候选，搜索请求均为 200。未部署生产。
+聚焦 TDD 先确认旧节点编辑器不会发起搜索、旧后端返回 404，再确认 404 时页面会读取所有现有企业分页并过滤。最终 `public/node-editor.test.js` 8/8 通过，`TestPlatformAdminAPIAuthorizationNodeWritesAndConflict` 在独立临时 PostgreSQL 上通过。全量 `npm test` 通过：Go race 无失败，`internal/web` 本轮重新执行用时 84.663s，Node 114 项中 113 通过、1 个 opt-in Linux 安装测试跳过、0 失败；`npm run vet` 与 `git diff --check` 通过。本地 Playwright 使用真实登录会话验证共享/专属模式联动与真实搜索候选；生产公开页另行验证字段、datalist、模块导出及 404→旧分页接口回退路径。本轮没有使用生产管理员凭据提交新节点，因此生产已登录的实际候选展开仍待操作者交互复核。
+
+首次部署候选错用了该隔离分支的 schema v33 控制二进制，生产数据库已是 v38；应用按设计拒绝较新 schema 并报 PostgreSQL startup failed，部署脚本在健康检查失败后自动恢复旧三份二进制和服务。回滚后已安装二进制 SHA256 恢复为 `5ecf29f...111fcae` / `32aff0d...3322e2` / `9874bd2...963b`，控制健康正常。为避免覆盖 v38 已有功能，最终仅以实际线上 v38 资源为基线发布精确静态覆盖：`/admin` SHA256 `cbd037d6e5d8a26beb3aaa43a603df1de477a4e347c0d3551d1f0cb323154749`，`/admin.js` 为 `e6fd4577a1b9b552c729952a7db9adb0807da7ea23acd2afb5ba2377ee50148a`，`/node-editor.js` 为 `c96f0be8237fabfa43db0393854b59b8d7066c59d87d670eb7d0fec08348aa4f`；Nginx 配置 SHA256 为 `f97849254d341efbd95f71b0f3275b3bc6ebc2d351bde24859b11718ed1bd45a`。公开资源返回 no-store、HSTS 及 nosniff，HTML 继续带 CSP/禁止 frame 等安全头。
+
+部署前与停服后 PostgreSQL custom dump、旧二进制、环境、service 和旧 Nginx 配置保存在 `/var/backups/reladock/20261115-tenant-search-predeploy-25fa06e`，两份 dump 均通过 `pg_restore --list`。最终控制二进制和 schema v38 未变，企业/成员/节点/规则/账本计数仍为 1/1/1/1/2，公开 Agent 安装脚本 SHA256 仍为 `c5ae037edaab8506cbc04fe5f72b4d7eba58a2a83d359aa1d64a15a6ed7ba4d7`，Nginx/控制服务 active 且 enabled，切换后无 warning 或 Nginx error。本轮未修改 Agent、节点网络规则、账务或业务数据。
 
 ## 2026-11-15 validation-only Agent 身份重装菜单（生产公开入口已部署）
 

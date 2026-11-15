@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { bindNodeEditor } from './node-editor.js';
+import * as nodeEditor from './node-editor.js';
+
+const { bindNodeEditor } = nodeEditor;
 
 class Control extends EventTarget {
   click() { this.dispatchEvent(new Event('click')); }
@@ -145,6 +147,37 @@ test('dedicated mode searches tenants by the entered company text', () => {
   assert.deepEqual(searches, ['', '海外业务']);
   assert.equal(ui.fields.dedicatedTenantId.disabled, false);
   assert.equal(ui.fields.dedicatedTenantId.required, true);
+});
+
+test('tenant search falls back to every existing admin tenant page', async () => {
+  const calls = [];
+  const request = async path => {
+    calls.push(path);
+    if (path.startsWith('/api/admin/tenant-options')) {
+      const error = new Error('not found');
+      error.status = 404;
+      throw error;
+    }
+    if (path.endsWith('page=1')) return { items: [
+      { id: '11111111-1111-4111-8111-111111111111', name: '平台运营', ownerEmail: 'operator@example.com', status: 'active' },
+      { id: '22222222-2222-4222-8222-222222222222', name: '海外业务公司', ownerEmail: 'owner@example.com', status: 'active' },
+    ], total: 3, page: 1, pageSize: 2 };
+    return { items: [
+      { id: '33333333-3333-4333-8333-333333333333', name: '备用海外公司', ownerEmail: 'backup@example.com', status: 'suspended' },
+    ], total: 3, page: 2, pageSize: 2 };
+  };
+
+  const options = await (nodeEditor.loadTenantOptions?.({ query: '海外', request }) ?? []);
+
+  assert.deepEqual(calls, [
+    '/api/admin/tenant-options?q=%E6%B5%B7%E5%A4%96',
+    '/api/admin/tenants?page=1',
+    '/api/admin/tenants?page=2',
+  ]);
+  assert.deepEqual(options.map(option => option.id), [
+    '22222222-2222-4222-8222-222222222222',
+    '33333333-3333-4333-8333-333333333333',
+  ]);
 });
 
 test('cancel closes the dialog and clears the edited node', () => {

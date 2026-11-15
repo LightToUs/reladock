@@ -1,5 +1,30 @@
 const fieldNames = ['id', 'name', 'region', 'listenAddress', 'publicAddress', 'capacityMbps', 'resourceMode', 'dedicatedTenantId'];
 
+export async function loadTenantDirectory(request) {
+  const tenants = [];
+  for (let page = 1; page <= 100000; page++) {
+    const result = await request(`/api/admin/tenants?page=${page}`);
+    if (!result || !Array.isArray(result.items) || !Number.isInteger(result.total) || !Number.isInteger(result.pageSize) || result.pageSize < 1) throw new Error('企业目录响应无效');
+    tenants.push(...result.items);
+    if (tenants.length >= result.total) return tenants;
+  }
+  throw new Error('企业目录分页超出限制');
+}
+
+export function filterTenantOptions(tenants, query) {
+  const needle = query.trim().toLocaleLowerCase();
+  return tenants.filter(tenant => !needle || [tenant.id, tenant.name, tenant.ownerEmail].some(value => String(value || '').toLocaleLowerCase().includes(needle))).slice(0, 20);
+}
+
+export async function loadTenantOptions({ query, request, loadDirectory = () => loadTenantDirectory(request) }) {
+  try {
+    return await request(`/api/admin/tenant-options?q=${encodeURIComponent(query)}`);
+  } catch (error) {
+    if (error.status !== 404) throw error;
+  }
+  return filterTenantOptions(await loadDirectory(), query);
+}
+
 export function bindNodeEditor({ dialog, form, title, save, status, createButton, cancelButton, searchTenants = () => {} }) {
   let editingNode = null;
   let session = 0;

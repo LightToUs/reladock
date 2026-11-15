@@ -4,7 +4,7 @@ import { bindConsoleNavigation } from './console-navigation.js';
 import { agentContactPresentation, certificatePresentation, configurationPresentation, probePresentation } from './node-contact-status.js';
 import { bindNodeActionDialog, createNodeActionRunner, nodeActionDescriptor } from './node-action-dialog.js';
 import { bindNodeContentDialog, bindNodeDeliveryDialog, runDialogSession } from './node-content-dialog.js';
-import { bindNodeEditor } from './node-editor.js';
+import { bindNodeEditor, loadTenantDirectory, loadTenantOptions } from './node-editor.js';
 import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation } from './node-monitoring.js';
 import { bindNodeVisibilityToggle, nodesForAdminList } from './node-visibility.js';
 import { resourceModeLabel } from './resource-mode.js';
@@ -180,10 +180,19 @@ const nodeActionDialog = bindNodeActionDialog({ dialog: $('#node-action-dialog')
 const offeringActionDialog = bindNodeActionDialog({ dialog: $('#offering-action-dialog'), title: $('#offering-action-title'), description: $('#offering-action-description'), status: $('#offering-action-status'), confirmButton: $('#offering-action-confirm'), cancelButton: $('#offering-action-cancel') });
 const deliveryDialog = bindNodeDeliveryDialog({ dialog: $('#node-delivery-dialog'), closeButton: $('#node-delivery-close'), title: $('#node-delivery-title'), status: $('#node-delivery-status'), load: id => api(`/api/admin/nodes/${encodeURIComponent(id)}/deliveries`), render: records => renderDeliveryRows($('#node-delivery-rows'), records) });
 let tenantSearchSequence = 0;
+let legacyTenantDirectoryPromise;
+async function legacyTenantDirectory() {
+  try {
+    return await (legacyTenantDirectoryPromise ||= loadTenantDirectory(path => api(path)));
+  } catch (error) {
+    legacyTenantDirectoryPromise = undefined;
+    throw error;
+  }
+}
 async function searchDedicatedTenants(query) {
   const sequence = ++tenantSearchSequence;
   try {
-    const tenants = await api(`/api/admin/tenant-options?q=${encodeURIComponent(query)}`);
+    const tenants = await loadTenantOptions({ query, request: path => api(path), loadDirectory: legacyTenantDirectory });
     if (sequence !== tenantSearchSequence) return;
     const options = $('#dedicated-tenant-options'); options.replaceChildren();
     for (const tenant of tenants) { const option = document.createElement('option'); option.value = tenant.id; option.label = `${tenant.name} · ${tenant.ownerEmail}${tenant.status === 'active' ? '' : ' · 已停用登录'}`; options.append(option); }
