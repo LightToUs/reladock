@@ -14,10 +14,15 @@ import (
 
 	"reladock/internal/buildinfo"
 	"reladock/internal/platform"
+	"reladock/internal/sourceflow"
 )
 
 type Applier interface {
 	Apply(context.Context, platform.NodeConfig) error
+}
+
+type sourceFlowManifestProvider interface {
+	SourceFlowManifest() (sourceflow.Manifest, string, error)
 }
 
 // SafeApplyFailure is an explicit proof supplied by an Applier that every
@@ -246,6 +251,20 @@ func (c *Client) apply(ctx context.Context, record *applyRecord) (bool, error) {
 	applyCtx, cancel := context.WithTimeout(ctx, c.applyTimeout())
 	applyErr := c.Applier.Apply(applyCtx, cfg)
 	cancel()
+	var appliedManifest *sourceflow.Manifest
+	var appliedManifestDigest string
+	if applyErr == nil && cfg.SchemaVersion == 3 {
+		provider, ok := c.Applier.(sourceFlowManifestProvider)
+		if !ok {
+			return false, errors.New("application fence retained: schema-3 manifest provider unavailable")
+		}
+		manifest, digest, manifestErr := provider.SourceFlowManifest()
+		if manifestErr != nil || sourceflow.ValidateManifest(manifest, digest) != nil || manifest.NodeID != cfg.NodeID || manifest.Generation != cfg.Generation {
+			return false, errors.New("application fence retained: schema-3 manifest unavailable or invalid")
+		}
+		appliedManifest = &manifest
+		appliedManifestDigest = digest
+	}
 	if applyErr != nil {
 		var safe *SafeApplyFailure
 		if !errors.As(applyErr, &safe) {
@@ -260,6 +279,10 @@ func (c *Client) apply(ctx context.Context, record *applyRecord) (bool, error) {
 	if applyErr != nil {
 		report.Outcome = "failed"
 		report.ErrorCode = "internal-error"
+	}
+	if appliedManifest != nil {
+		report.SourceFlowManifest = appliedManifest
+		report.SourceFlowManifestDigest = appliedManifestDigest
 	}
 	record.Report = &report
 	// Persist the exact result before sending it; ACK loss cannot rerun application.

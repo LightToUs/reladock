@@ -18,14 +18,16 @@ type Activity struct {
 }
 
 type RuntimeHooks struct {
-	RenewalRequests <-chan struct{}
-	Configuration   func(context.Context) error
-	Heartbeat       func(context.Context) error
-	Preflight       func(context.Context) error
-	MeterSample     func(context.Context) error
-	UsageUpload     func(context.Context) error
-	Probes          func(context.Context) error
-	Renewal         func(context.Context) error
+	RenewalRequests   <-chan struct{}
+	Configuration     func(context.Context) error
+	Heartbeat         func(context.Context) error
+	Preflight         func(context.Context) error
+	MeterSample       func(context.Context) error
+	UsageUpload       func(context.Context) error
+	Probes            func(context.Context) error
+	SourceFlowCapture func(context.Context) error
+	SourceFlowUpload  func(context.Context) error
+	Renewal           func(context.Context) error
 }
 
 func RuntimeActivities(hooks RuntimeHooks) ([]Activity, error) {
@@ -46,6 +48,15 @@ func RuntimeActivities(hooks RuntimeHooks) ([]Activity, error) {
 			Activity{Name: "meter-sample", Interval: 5 * time.Second, Run: hooks.MeterSample},
 			Activity{Name: "usage-upload", Interval: 5 * time.Second, Run: hooks.UsageUpload},
 			Activity{Name: "probes", Interval: 30 * time.Second, Run: hooks.Probes},
+		)
+	}
+	if hooks.SourceFlowCapture != nil || hooks.SourceFlowUpload != nil {
+		if hooks.SourceFlowCapture == nil || hooks.SourceFlowUpload == nil {
+			return nil, errors.New("incomplete source-flow runtime activities")
+		}
+		activities = append(activities,
+			Activity{Name: "source-flow-capture", Interval: time.Second, Run: hooks.SourceFlowCapture},
+			Activity{Name: "source-flow-upload", Interval: 5 * time.Second, Run: hooks.SourceFlowUpload},
 		)
 	}
 	return activities, nil

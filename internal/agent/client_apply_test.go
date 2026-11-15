@@ -18,6 +18,7 @@ import (
 	"reladock/internal/dataplane"
 	"reladock/internal/platform"
 	"reladock/internal/shaping"
+	"reladock/internal/sourceflow"
 )
 
 func TestClientReclaimsAfterUnbegunShortLeaseOrExplicitBeginConflict(t *testing.T) {
@@ -194,6 +195,16 @@ type applyFunc func(context.Context, platform.NodeConfig) error
 
 func (f applyFunc) Apply(ctx context.Context, c platform.NodeConfig) error { return f(ctx, c) }
 
+type sourceFlowApply struct {
+	manifest sourceflow.Manifest
+	digest   string
+}
+
+func (a sourceFlowApply) Apply(context.Context, platform.NodeConfig) error { return nil }
+func (a sourceFlowApply) SourceFlowManifest() (sourceflow.Manifest, string, error) {
+	return a.manifest, a.digest, nil
+}
+
 type transportFunc func(*http.Request) (*http.Response, error)
 
 func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
@@ -251,6 +262,63 @@ func TestClientApplyRequiresBeginThenAppliedReport(t *testing.T) {
 	done, e := c.Once(context.Background())
 	if e != nil || !done || strings.Join(steps, ",") != "claim,begin,apply,applied" {
 		t.Fatalf("steps=%v done=%v error=%v", steps, done, e)
+	}
+}
+
+func TestClientSourceFlowManifestIsDurableBeforeAppliedReport(t *testing.T) {
+	cfg := platform.NodeConfig{
+		SchemaVersion: 3, NodeID: "hk-01", Generation: 3, ListenAddress: "203.0.113.10",
+		Rules: []platform.ConfigRule{{
+			ID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", TenantID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+			RuleInput:  platform.RuleInput{Name: "Relay", Protocol: "tcp", TargetHost: "198.51.100.20", TargetPort: 443, BandwidthMbps: 100, NodeID: "hk-01"},
+			ListenPort: 24443, Version: 2, Status: "pending-agent", SourceLoggingEnabled: true,
+		}},
+		Allocations: []platform.ConfigAllocation{{ID: "11111111-1111-4111-8111-111111111111", RuleID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Protocol: "tcp", Address: "203.0.113.10", Port: 24443}},
+	}
+	manifest, digest, err := sourceflow.NewManifest("hk-01", 3, []sourceflow.AppliedRule{{
+		AllocationID: cfg.Allocations[0].ID, TenantID: cfg.Rules[0].TenantID, RuleID: cfg.Rules[0].ID,
+		RuleVersion: 2, SourceLoggingEnabled: true, Protocol: "tcp", RelayIP: "203.0.113.10", RelayPort: 24443,
+		TargetIP: "198.51.100.20", TargetPort: 443,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(cfg)
+	sum := sha256.Sum256(payload)
+	job := applyJob()
+	job.Generation = cfg.Generation
+	job.Payload = payload
+	job.Checksum = hex.EncodeToString(sum[:])
+	raw, _ := json.Marshal(job)
+	state, err := NewApplyState(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var applied platform.ConfigReport
+	c := Client{BaseURL: "https://control.test", NodeID: "hk-01", State: state, Applier: sourceFlowApply{manifest: manifest, digest: digest}}
+	c.HTTP = &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/claim"):
+			return agentResponse(http.StatusOK, string(raw)), nil
+		case strings.HasSuffix(r.URL.Path, "/begin"):
+			return agentResponse(http.StatusOK, `{}`), nil
+		case strings.HasSuffix(r.URL.Path, "/report"):
+			if err := json.NewDecoder(r.Body).Decode(&applied); err != nil {
+				t.Fatal(err)
+			}
+			pending, loadErr := state.load(context.Background())
+			if loadErr != nil || pending == nil || pending.Report == nil || pending.Report.SourceFlowManifestDigest != digest {
+				t.Fatalf("manifest was not durable before send: %+v %v", pending, loadErr)
+			}
+			return agentResponse(http.StatusOK, `{}`), nil
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+			return nil, nil
+		}
+	})}
+	done, err := c.Once(context.Background())
+	if err != nil || !done || applied.Outcome != "applied" || applied.SourceFlowManifest == nil || applied.SourceFlowManifestDigest != digest {
+		t.Fatalf("done=%v err=%v report=%+v", done, err, applied)
 	}
 }
 

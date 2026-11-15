@@ -21,6 +21,7 @@ import (
 	"reladock/internal/payments"
 	"reladock/internal/platform"
 	"reladock/internal/runtimeconfig"
+	"reladock/internal/tronpayments"
 	"reladock/internal/web"
 	assets "reladock/public"
 )
@@ -35,6 +36,17 @@ func main() {
 	paymentConfig, paymentEnabled, err := payments.ConfigFromEnv()
 	if err != nil {
 		log.Fatal("invalid optional payment configuration")
+	}
+	tronPaymentConfig, tronPaymentEnabled, err := tronpayments.ConfigFromEnv()
+	if err != nil {
+		log.Fatal("invalid optional TRON USDT payment configuration")
+	}
+	var tronPaymentClient *tronpayments.Client
+	if tronPaymentEnabled {
+		tronPaymentClient, err = tronpayments.NewClient(tronPaymentConfig)
+		if err != nil {
+			log.Fatal("TRON USDT payment connector invalid")
+		}
 	}
 	notificationSender, err := notify.New(notify.Config{URL: os.Getenv("NOTIFICATION_WEBHOOK_URL"), Secret: os.Getenv("NOTIFICATION_WEBHOOK_SECRET")})
 	if err != nil {
@@ -51,7 +63,7 @@ func main() {
 	var store *platform.Store
 	if !*checkOnly {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		store, err = platform.OpenWithOptions(ctx, os.Getenv("DATABASE_URL"), platform.StoreOptions{AllowUnentitledRules: cfg.AllowUnentitledRules})
+		store, err = platform.OpenWithOptions(ctx, os.Getenv("DATABASE_URL"), platform.StoreOptions{AllowUnentitledRules: cfg.AllowUnentitledRules, SourceFlowRetentionDays: cfg.SourceFlowRetentionDays})
 		cancel()
 		if err != nil {
 			log.Fatal("PostgreSQL startup failed; check DATABASE_URL and database availability")
@@ -91,6 +103,9 @@ func main() {
 		bootstrap = &web.BootstrapOptions{Config: cfg.Bootstrap, Signer: nodeSigner}
 	}
 	if *checkOnly {
+		if _, err := configureLightsailRuntime(context.Background(), true, cfg.Lightsail, nil, nil, defaultLightsailRuntimeFactories()); err != nil {
+			log.Fatal("Lightsail connector startup failed")
+		}
 		log.Print("Runtime configuration and TLS files validated; no database connection or listener opened")
 		return
 	}
@@ -108,9 +123,31 @@ func main() {
 		}
 		paymentHandler = web.NewPayments(store, provider, paymentConfig.WebhookSecret, cfg.Origin)
 	}
-	server := &http.Server{Addr: cfg.Address, Handler: web.NewWithOptions(store, assets.Files, cfg.Origin, web.Options{PersistentRateLimit: cfg.Production, Payments: paymentHandler, Bootstrap: bootstrap}), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	var tronPaymentHandler *web.TronPayments
+	if tronPaymentEnabled {
+		tronPaymentHandler = web.NewTronPayments(store, tronPaymentConfig.CollectionAddress)
+	}
+	lightsailStartup, lightsailCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	lightsailRuntime, err := configureLightsailRuntime(lightsailStartup, false, cfg.Lightsail, store, metrics, defaultLightsailRuntimeFactories())
+	lightsailCancel()
+	if err != nil {
+		log.Fatal("Lightsail connector startup failed")
+	}
+	var lightsailWeb *web.LightsailOptions
+	if lightsailRuntime != nil {
+		lightsailWeb = lightsailRuntime.web
+	}
+	server := &http.Server{Addr: cfg.Address, Handler: web.NewWithOptions(store, assets.Files, cfg.Origin, web.Options{PersistentRateLimit: cfg.Production, Payments: paymentHandler, TronPayments: tronPaymentHandler, Bootstrap: bootstrap, Lightsail: lightsailWeb}), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if lightsailRuntime != nil {
+		go lightsailRuntime.run(signals)
+	}
+	if tronPaymentEnabled {
+		go runTronPayments(signals, store, tronPaymentClient, tronPaymentClient, tronPaymentConfig.CollectionAddress,
+			func(runErr error) { _ = metrics.ObserveWorker(observability.WorkerTronPaymentConfirm, runErr) },
+			func(runErr error) { _ = metrics.ObserveWorker(observability.WorkerTronPaymentScan, runErr) })
+	}
 	if notificationSender.Enabled() {
 		go runNotifications(signals, store, notificationSender, metrics)
 	}
@@ -129,6 +166,11 @@ func main() {
 				log.Print("incident reconciliation failed")
 			}
 			_ = metrics.ObserveWorker(observability.WorkerIncidentReconcile, incidentErr)
+			if cfg.SourceFlowRetentionDays != 0 {
+				if _, retentionErr := store.PruneSourceFlows(maintenance, 1000); retentionErr != nil && maintenance.Err() == nil {
+					log.Print("source-flow retention cleanup failed")
+				}
+			}
 			done()
 			select {
 			case <-signals.Done():

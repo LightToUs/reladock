@@ -9,7 +9,7 @@ import (
 )
 
 func (s *Store) BeginApplication(ctx context.Context, nodeID, jobID string, report ConfigReport, credential ...string) error {
-	if report.Outcome != "applying" || report.ErrorCode != "" || len(report.LeaseToken) != 43 || !fingerprintPattern.MatchString(report.Checksum) {
+	if report.Outcome != "applying" || report.ErrorCode != "" || report.SourceFlowManifest != nil || report.SourceFlowManifestDigest != "" || len(report.LeaseToken) != 43 || !fingerprintPattern.MatchString(report.Checksum) {
 		return ErrInvalid
 	}
 	tx, e := s.pool.Begin(ctx)

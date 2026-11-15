@@ -312,34 +312,82 @@ func (s *Store) PurchasePlan(ctx context.Context, who Identity, key string, inpu
 		return RuleSubscription{}, err
 	}
 	defer tx.Rollback(ctx)
-	if err = tenantWriteAccess(ctx, tx, who); err != nil {
+	if err = s.AuthorizeWrite(ctx, tx, who); err != nil {
 		return RuleSubscription{}, err
 	}
-	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "reladock-subscription:"+who.TenantID+":"+key); err != nil {
+	prepared, err := s.preparePlanPurchase(ctx, tx, who, key, input)
+	if err != nil {
 		return RuleSubscription{}, err
+	}
+	if prepared.existing != nil {
+		return *prepared.existing, tx.Commit(ctx)
+	}
+	var balance int64
+	var frozen bool
+	err = tx.QueryRow(ctx, "SELECT balance_cents,spending_frozen FROM billing_wallets WHERE tenant_id=$1 FOR UPDATE", who.TenantID).Scan(&balance, &frozen)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && balance < prepared.plan.PriceCents {
+		return RuleSubscription{}, ErrInsufficientBalance
+	}
+	if err != nil {
+		return RuleSubscription{}, err
+	}
+	if frozen {
+		return RuleSubscription{}, ErrForbidden
+	}
+	result, err := s.finishPlanPurchase(ctx, tx, prepared, balance)
+	if err != nil {
+		return RuleSubscription{}, err
+	}
+	return result, tx.Commit(ctx)
+}
+
+var errPlanSaleUnavailable = fmt.Errorf("套餐当前不可销售: %w", ErrConflict)
+
+type preparedPlanPurchase struct {
+	who      Identity
+	key      string
+	input    PurchasePlanInput
+	plan     PlanPriceVersion
+	nodeID   string
+	oldID    string
+	up       int64
+	down     int64
+	existing *RuleSubscription
+}
+
+// preparePlanPurchase takes every non-wallet lock needed to revalidate a sale.
+// Callers must authorize who before entering. Keeping the wallet last preserves
+// the global node/rule/line -> wallet lock order used by corrections and renewals.
+func (s *Store) preparePlanPurchase(ctx context.Context, tx pgx.Tx, who Identity, key string, input PurchasePlanInput) (preparedPlanPurchase, error) {
+	prepared := preparedPlanPurchase{who: who, key: key, input: input}
+	var err error
+	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "reladock-subscription:"+who.TenantID+":"+key); err != nil {
+		return prepared, err
 	}
 	var previousID, previousRule, previousPrice string
 	err = tx.QueryRow(ctx, "SELECT id,COALESCE(rule_id::text,''),price_version_id FROM rule_subscriptions WHERE tenant_id=$1 AND idempotency_key=$2", who.TenantID, key).Scan(&previousID, &previousRule, &previousPrice)
 	if err == nil {
 		if previousRule != input.RuleID || previousPrice != input.PriceVersionID {
-			return RuleSubscription{}, ErrConflict
+			return prepared, ErrConflict
 		}
-		return readSubscription(ctx, tx, previousID)
+		existing, readErr := readSubscription(ctx, tx, previousID)
+		prepared.existing = &existing
+		return prepared, readErr
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return RuleSubscription{}, err
+		return prepared, err
 	}
 	var nodeID string
 	if input.RuleID != "" {
 		err = tx.QueryRow(ctx, "SELECT node_id FROM relay_rules WHERE id=$1 AND tenant_id=$2 AND status<>'deleted'", input.RuleID, who.TenantID).Scan(&nodeID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return RuleSubscription{}, ErrNotFound
+			return prepared, ErrNotFound
 		}
 		if err != nil {
-			return RuleSubscription{}, err
+			return prepared, err
 		}
 		if err = lockNode(ctx, tx, nodeID); err != nil {
-			return RuleSubscription{}, err
+			return prepared, err
 		}
 	}
 	var lockedNode, status string
@@ -349,60 +397,63 @@ func (s *Store) PurchasePlan(ctx context.Context, who Identity, key string, inpu
 	if input.RuleID != "" {
 		err = tx.QueryRow(ctx, "SELECT node_id,status FROM relay_rules WHERE id=$1 AND tenant_id=$2 FOR NO KEY UPDATE", input.RuleID, who.TenantID).Scan(&lockedNode, &status)
 		if errors.Is(err, pgx.ErrNoRows) || err == nil && status == "deleted" {
-			return RuleSubscription{}, ErrNotFound
+			return prepared, ErrNotFound
 		}
 		if err != nil {
-			return RuleSubscription{}, err
+			return prepared, err
 		}
 		if lockedNode != nodeID {
-			return RuleSubscription{}, ErrConflict
+			return prepared, ErrConflict
 		}
 	}
 	plan, err := scanPlan(tx.QueryRow(ctx, "SELECT "+planSelectColumns+planSelectFrom+" WHERE v.id=$1", input.PriceVersionID))
 	if err != nil {
-		return RuleSubscription{}, err
+		return prepared, err
 	}
 	if plan.Offering == nil {
-		return RuleSubscription{}, ErrConflict
+		return prepared, errPlanSaleUnavailable
 	}
 	var offeringNode string
 	var offeringState OfferingState
 	err = tx.QueryRow(ctx, "SELECT node_id,state FROM line_offerings WHERE id=$1 FOR SHARE", plan.OfferingID).Scan(&offeringNode, &offeringState)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return RuleSubscription{}, ErrConflict
+		return prepared, errPlanSaleUnavailable
 	}
 	if err != nil {
-		return RuleSubscription{}, err
+		return prepared, err
 	}
 	if offeringState != OfferingStatePublished || input.RuleID != "" && offeringNode != nodeID {
-		return RuleSubscription{}, ErrConflict
+		return prepared, errPlanSaleUnavailable
 	}
 	if input.RuleID == "" {
 		nodeID = offeringNode
 		if err = lockNode(ctx, tx, nodeID); err != nil {
-			return RuleSubscription{}, err
+			return prepared, err
+		}
+		if err = checkNodeAdmission(ctx, tx, nodeID, who.TenantID); err != nil {
+			return prepared, err
 		}
 	}
 	var capacity int
 	var resourceMode ResourceMode
 	var nodeStatus string
 	if err = tx.QueryRow(ctx, "SELECT capacity_mbps,resource_mode,status FROM nodes WHERE id=$1", nodeID).Scan(&capacity, &resourceMode, &nodeStatus); err != nil {
-		return RuleSubscription{}, err
+		return prepared, err
 	}
 	if plan.ResourceMode != resourceMode {
-		return RuleSubscription{}, ErrConflict
+		return prepared, errPlanSaleUnavailable
 	}
 	if !nodeAllowsSales(nodeStatus) {
-		return RuleSubscription{}, ErrNodeNotAllocatable
+		return prepared, ErrNodeNotAllocatable
 	}
 	if plan.BandwidthMbps > capacity {
-		return RuleSubscription{}, ErrInvalid
+		return prepared, ErrInvalid
 	}
 	var up, down int64
 	if input.RuleID != "" {
 		err = tx.QueryRow(ctx, "SELECT upload_bytes,download_bytes FROM billing_usage_totals WHERE rule_id=$1", input.RuleID).Scan(&up, &down)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return RuleSubscription{}, err
+			return prepared, err
 		}
 	}
 	var oldID string
@@ -411,49 +462,55 @@ func (s *Store) PurchasePlan(ctx context.Context, who Identity, key string, inpu
 		if err == nil {
 			old, e := readSubscription(ctx, tx, oldID)
 			if e != nil {
-				return RuleSubscription{}, e
+				return prepared, e
 			}
 			if old.Status == "active" {
-				return RuleSubscription{}, ErrConflict
+				return prepared, ErrConflict
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return RuleSubscription{}, err
+			return prepared, err
 		}
 	}
-	var balance int64
-	var frozen bool
-	err = tx.QueryRow(ctx, "SELECT balance_cents,spending_frozen FROM billing_wallets WHERE tenant_id=$1 FOR UPDATE", who.TenantID).Scan(&balance, &frozen)
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && balance < plan.PriceCents {
+	prepared.plan = plan
+	prepared.nodeID = nodeID
+	prepared.oldID = oldID
+	prepared.up = up
+	prepared.down = down
+	return prepared, nil
+}
+
+// finishPlanPurchase assumes preparePlanPurchase succeeded and the tenant wallet
+// row is locked. It performs every debit, subscription, delivery and audit write
+// in the caller's transaction.
+func (s *Store) finishPlanPurchase(ctx context.Context, tx pgx.Tx, prepared preparedPlanPurchase, balance int64) (RuleSubscription, error) {
+	who := prepared.who
+	input := prepared.input
+	plan := prepared.plan
+	var err error
+	if balance < plan.PriceCents {
 		return RuleSubscription{}, ErrInsufficientBalance
-	}
-	if err != nil {
-		return RuleSubscription{}, err
-	}
-	if frozen {
-		return RuleSubscription{}, ErrForbidden
 	}
 	balance -= plan.PriceCents
 	if _, err = tx.Exec(ctx, "UPDATE billing_wallets SET balance_cents=$2 WHERE tenant_id=$1", who.TenantID, balance); err != nil {
 		return RuleSubscription{}, err
 	}
 	var ledgerID int64
-	// A separate namespace prevents collisions with operator correction keys.
 	ledgerKey := "subscription:" + newID()
 	err = tx.QueryRow(ctx, `INSERT INTO billing_ledger(tenant_id,rule_id,kind,amount_cents,balance_after_cents,idempotency_key,reason,operator_name,price_version_id) VALUES($1,NULLIF($2,'')::uuid,'subscription-debit',$3,$4,$5,$6,$7,$8) RETURNING id`, who.TenantID, input.RuleID, -plan.PriceCents, balance, ledgerKey, fmt.Sprintf("Plan %s version %d", plan.Code, plan.Version), "member:"+who.MemberID, plan.ID).Scan(&ledgerID)
 	if err != nil {
 		return RuleSubscription{}, err
 	}
-	if oldID != "" {
-		if _, err = tx.Exec(ctx, "UPDATE rule_subscriptions SET final_upload_bytes=$2,final_download_bytes=$3 WHERE id=$1", oldID, up, down); err != nil {
+	if prepared.oldID != "" {
+		if _, err = tx.Exec(ctx, "UPDATE rule_subscriptions SET final_upload_bytes=$2,final_download_bytes=$3 WHERE id=$1", prepared.oldID, prepared.up, prepared.down); err != nil {
 			return RuleSubscription{}, err
 		}
 	}
 	id := newID()
-	if _, err = tx.Exec(ctx, `INSERT INTO rule_subscriptions(id,tenant_id,rule_id,price_version_id,ledger_id,idempotency_key,starts_at,ends_at,base_upload_bytes,base_download_bytes) SELECT $1,$2,NULLIF($3,'')::uuid,$4,$5,$6,t,t+make_interval(secs=>$7::double precision),$8,$9 FROM (SELECT clock_timestamp() AS t) clock`, id, who.TenantID, input.RuleID, plan.ID, ledgerID, key, plan.PeriodSeconds, up, down); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO rule_subscriptions(id,tenant_id,rule_id,price_version_id,ledger_id,idempotency_key,starts_at,ends_at,base_upload_bytes,base_download_bytes) SELECT $1,$2,NULLIF($3,'')::uuid,$4,$5,$6,t,t+make_interval(secs=>$7::double precision),$8,$9 FROM (SELECT clock_timestamp() AS t) clock`, id, who.TenantID, input.RuleID, plan.ID, ledgerID, prepared.key, plan.PeriodSeconds, prepared.up, prepared.down); err != nil {
 		return RuleSubscription{}, err
 	}
 	if input.RuleID != "" {
-		if _, err = tx.Exec(ctx, "INSERT INTO subscription_usage(subscription_id,rule_id,tenant_id,node_id) VALUES($1,$2,$3,$4)", id, input.RuleID, who.TenantID, nodeID); err != nil {
+		if _, err = tx.Exec(ctx, "INSERT INTO subscription_usage(subscription_id,rule_id,tenant_id,node_id) VALUES($1,$2,$3,$4)", id, input.RuleID, who.TenantID, prepared.nodeID); err != nil {
 			return RuleSubscription{}, err
 		}
 	}
@@ -461,7 +518,7 @@ func (s *Store) PurchasePlan(ctx context.Context, who Identity, key string, inpu
 		if _, err = tx.Exec(ctx, "UPDATE relay_rules SET bandwidth_mbps=$2,status='pending-agent',desired_version=desired_version+1,updated_at=now() WHERE id=$1", input.RuleID, plan.BandwidthMbps); err != nil {
 			return RuleSubscription{}, err
 		}
-		if err = s.enqueueConfig(ctx, tx, nodeID); err != nil {
+		if err = s.enqueueConfig(ctx, tx, prepared.nodeID); err != nil {
 			return RuleSubscription{}, err
 		}
 	}
@@ -472,7 +529,7 @@ func (s *Store) PurchasePlan(ctx context.Context, who Identity, key string, inpu
 	if err != nil {
 		return RuleSubscription{}, err
 	}
-	return result, tx.Commit(ctx)
+	return result, nil
 }
 
 // RuleSubscriptions lists at most 100 periods, newest first. before is an

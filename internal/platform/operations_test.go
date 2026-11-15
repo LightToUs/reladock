@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"sync"
@@ -230,7 +231,7 @@ func TestOperationsTenantVisibilityAndSupportIsolation(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `INSERT INTO node_resource_latest(node_id,sampled_at,cpu_percent,memory_percent,disk_percent,conntrack_percent,clock_skew_seconds,dataplane_state) VALUES('hk-01',clock_timestamp(),12,34,56,7,3,'in-sync')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$1,last_seen_at=clock_timestamp()-interval '1 hour' WHERE id='hk-01'`, strings.Repeat("b", 64)); err != nil {
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$1,public_address='192.0.2.20',last_seen_at=clock_timestamp()-interval '1 hour' WHERE id='hk-01'`, strings.Repeat("b", 64)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ReconcileIncidents(ctx, time.Minute); err != nil {
@@ -249,6 +250,10 @@ func TestOperationsTenantVisibilityAndSupportIsolation(t *testing.T) {
 		t.Fatalf("tenant node resources: %+v %v", nodes, err)
 	}
 	resource := nodes.Items[0]
+	encoded, err := json.Marshal(resource)
+	if err != nil || !strings.Contains(string(encoded), `"publicAddress":"192.0.2.20"`) {
+		t.Fatalf("tenant node address: %s %v", encoded, err)
+	}
 	if resource.ResourceStatus != "normal" || resource.ResourceObservedAt == nil || resource.CPUPercent == nil || *resource.CPUPercent != 12 || resource.MemoryPercent == nil || *resource.MemoryPercent != 34 || resource.DiskPercent == nil || *resource.DiskPercent != 56 || resource.ConntrackPercent == nil || *resource.ConntrackPercent != 7 || resource.ClockSkewSeconds == nil || *resource.ClockSkewSeconds != 3 || resource.DataPlaneState != "in-sync" {
 		t.Fatalf("resource facts: %+v", resource)
 	}

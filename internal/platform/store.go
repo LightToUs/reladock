@@ -13,23 +13,28 @@ import (
 )
 
 var (
-	ErrInvalid             = errors.New("输入参数无效")
-	ErrConflict            = errors.New("资源或幂等请求冲突")
-	ErrUnauthorized        = errors.New("邮箱或密码错误，或登录已失效")
-	ErrNotFound            = errors.New("资源不存在或无权访问")
-	ErrForbidden           = errors.New("没有操作权限")
-	ErrCapacity            = errors.New("节点可用端口不足")
-	ErrNodeNotAllocatable  = errors.New("对应入口节点当前不可销售")
-	ErrInsufficientBalance = errors.New("钱包余额不足，请先充值或联系平台管理员")
+	ErrInvalid                        = errors.New("输入参数无效")
+	ErrConflict                       = errors.New("资源或幂等请求冲突")
+	ErrUnauthorized                   = errors.New("邮箱或密码错误，或登录已失效")
+	ErrNotFound                       = errors.New("资源不存在或无权访问")
+	ErrForbidden                      = errors.New("没有操作权限")
+	ErrCapacity                       = errors.New("节点可用端口不足")
+	ErrNodeNotAllocatable             = errors.New("对应入口节点当前不可销售")
+	ErrInsufficientBalance            = errors.New("钱包余额不足，请先充值或联系平台管理员")
+	ErrSourceFlowRetentionUnavailable = fmt.Errorf("源地址记录不可用：未配置 30–365 天保留期: %w", ErrConflict)
+	ErrSourceFlowAgentUnsupported     = fmt.Errorf("源地址记录不可用：节点需要 apply 模式且 Agent 声明 schema 3 能力: %w", ErrConflict)
+	ErrSourceFlowAgentOffline         = fmt.Errorf("源地址记录不可用：节点 Agent 当前不在线: %w", ErrConflict)
 )
 
 type Store struct {
-	pool                 *pgxpool.Pool
-	allowUnentitledRules bool
+	pool                    *pgxpool.Pool
+	allowUnentitledRules    bool
+	sourceFlowRetentionDays int
 }
 
 type StoreOptions struct {
-	AllowUnentitledRules bool
+	AllowUnentitledRules    bool
+	SourceFlowRetentionDays int
 }
 
 //go:embed schema.sql
@@ -83,6 +88,24 @@ var migration32SQL string
 //go:embed migration33.sql
 var migration33SQL string
 
+//go:embed migration34.sql
+var migration34SQL string
+
+//go:embed migration35.sql
+var migration35SQL string
+
+//go:embed migration36.sql
+var migration36SQL string
+
+//go:embed migration37.sql
+var migration37SQL string
+
+//go:embed migration38.sql
+var migration38SQL string
+
+//go:embed migration39.sql
+var migration39SQL string
+
 //go:embed migration2.sql
 var migration2SQL string
 
@@ -122,7 +145,7 @@ var migration14SQL string
 //go:embed migration16.sql
 var migration16SQL string
 
-const SchemaVersion = 33
+const SchemaVersion = 39
 
 func Open(ctx context.Context, url string) (*Store, error) {
 	return OpenWithOptions(ctx, url, StoreOptions{})
@@ -131,6 +154,9 @@ func Open(ctx context.Context, url string) (*Store, error) {
 func OpenWithOptions(ctx context.Context, url string, options StoreOptions) (*Store, error) {
 	if url == "" {
 		return nil, errors.New("DATABASE_URL is required; no JSON or memory fallback")
+	}
+	if options.SourceFlowRetentionDays != 0 && (options.SourceFlowRetentionDays < 30 || options.SourceFlowRetentionDays > 365) {
+		return nil, errors.New("SourceFlowRetentionDays must be zero or between 30 and 365")
 	}
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -142,7 +168,7 @@ func OpenWithOptions(ctx context.Context, url string, options StoreOptions) (*St
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{pool: pool, allowUnentitledRules: options.AllowUnentitledRules}
+	s := &Store{pool: pool, allowUnentitledRules: options.AllowUnentitledRules, sourceFlowRetentionDays: options.SourceFlowRetentionDays}
 	if err = pool.Ping(ctx); err == nil {
 		err = s.Migrate(ctx)
 	}
@@ -486,6 +512,54 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("migration 33: %w", err)
 		}
 		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(33)"); err != nil {
+			return err
+		}
+	}
+	if version < 34 {
+		if _, err = tx.Exec(ctx, migration34SQL); err != nil {
+			return fmt.Errorf("migration 34: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(34)"); err != nil {
+			return err
+		}
+	}
+	if version < 35 {
+		if _, err = tx.Exec(ctx, migration35SQL); err != nil {
+			return fmt.Errorf("migration 35: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(35)"); err != nil {
+			return err
+		}
+	}
+	if version < 36 {
+		if _, err = tx.Exec(ctx, migration36SQL); err != nil {
+			return fmt.Errorf("migration 36: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(36)"); err != nil {
+			return err
+		}
+	}
+	if version < 37 {
+		if _, err = tx.Exec(ctx, migration37SQL); err != nil {
+			return fmt.Errorf("migration 37: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(37)"); err != nil {
+			return err
+		}
+	}
+	if version < 38 {
+		if _, err = tx.Exec(ctx, migration38SQL); err != nil {
+			return fmt.Errorf("migration 38: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(38)"); err != nil {
+			return err
+		}
+	}
+	if version < 39 {
+		if _, err = tx.Exec(ctx, migration39SQL); err != nil {
+			return fmt.Errorf("migration 39: %w", err)
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(39)"); err != nil {
 			return err
 		}
 	}

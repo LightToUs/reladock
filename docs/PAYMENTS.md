@@ -1,13 +1,98 @@
-# Optional Stripe payment connector
+# Optional payment connectors
+
+## Receive-only TRON USDT connector
+
+RelaDock includes a default-disabled funding path for official USDT on TRON
+mainnet. It is receive-only: the service stores no private key or seed, signs no
+transaction, performs no sweep/refund, and never asks a customer for a wallet
+credential. The configured collection address is
+`TU4x4apSvfu1NLx6ee11rM5PjtVCBbWssw`.
+
+| Variable | Requirement |
+| --- | --- |
+| `TRON_USDT_RPC_URL` | Exact HTTPS origin of a trusted TRON SolidityNode; no path, query, fragment or embedded credentials |
+| `TRON_USDT_COLLECTION_ADDRESS` | Valid TRON mainnet Base58Check collection address |
+| `TRON_API_KEY` | Optional server-only provider key; never returned or logged |
+
+All values absent disables the connector; partial or invalid configuration
+prevents startup. Only mainnet USDT contract
+`TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` is accepted. V1 uses the explicit quote
+policy `1 USDT = 1 USD`. For a wallet credit of N cents, the server assigns an
+exact six-decimal transfer amount of `N * 10,000 + suffix` USDT base units. The
+globally unique active-order suffix is 0–9,999 base units (less than one cent)
+and is an anti-collision verification tail; it is not credited to the USD
+wallet. Customers must transfer the full displayed amount. This is not a
+market-price oracle. The transfer window expires after 30 minutes. The browser
+uses the response `serverTime` and `expiresAt` to show a one-second countdown;
+at zero it removes the QR for new payments. The authenticated, no-store QR is
+generated locally and encodes the collection address only, because wallet
+amount URI support is not uniform. The exact six-decimal amount is shown and
+copied separately. A hash for a transfer made within the window may still be
+submitted for up to 24 hours as a collapsed recovery path. Submitting a
+transaction hash does not mean paid.
+
+Migration 38 adds a persistent, leased solid-block cursor. The worker reads
+`/walletsolidity/getnowblock`, then scans sequential blocks through
+`/walletsolidity/gettransactioninfobyblocknum`, initially looking back 1,200
+solid blocks and processing at most 20 per cycle. It advances only after the
+whole block succeeds; errors retry the same height and lease fencing prevents a
+stale worker from committing. Discovery requires one unambiguous official-USDT
+transfer to the collection address and matches a pending order by exact base
+units and the original transfer window. It only attaches the tx hash and moves
+the order to `confirming`; it cannot credit a wallet or ledger.
+
+The bounded per-transaction confirmation worker then uses
+`/walletsolidity/gettransactioninfobyid` and requires a solidified successful
+transaction plus exactly one matching `Transfer` log from the official contract
+to the configured address for the exact quoted amount. Pending transactions
+retry; malformed, failed, ambiguous or mismatched receipts never credit.
+
+The immutable receipt, wallet balance, `payment-credit` ledger row, order state
+and audit commit in one PostgreSQL transaction. Only verified immutable receipts
+own tx hashes globally; unverified claims cannot reserve a public transaction.
+Receipt uniqueness and idempotency stop replay/concurrent double credit. Package purchase runs only
+after credit commits; if it fails, verified funds remain in the USD wallet and
+the order reports the failure.
+
+On 2026-11-12 the connector was deployed and enabled on the production control
+server after a v33-to-v37 migration and read-only TronGrid connectivity checks.
+The v38 automatic scanner, QR and countdown were deployed on the production
+control server on 2026-11-12; the first 1,200-block lookback caught up without
+scan errors. Detailed evidence and remaining acceptance boundaries are recorded
+in `IMPLEMENTATION_STATUS.md`.
+The connector has not received real USDT or completed an authenticated production order,
+compliance, custody, provider high-availability, manual reconciliation, refund,
+API-key rotation, or production-recovery acceptance. Treat it as controlled
+small-value acceptance only, not general payment readiness.
+
+## Stripe connector
 
 Status: optional integration verified with deterministic provider substitutes and
-real local PostgreSQL tests. On 2026-11-06 the production control service was
-explicitly connected to the Stripe sandbox with a test secret key and a public
-test webhook at `https://console.reladock.com/api/payments/stripe/webhook`.
-No live key, live payment, signed end-to-end checkout/webhook credit, or real
-money movement has been activated or accepted. Configuration enables the test
-connector; it does not prove live merchant onboarding or payment acceptance.
-Browser success/cancel redirects never credit a wallet.
+real local PostgreSQL tests. On 2026-11-13 the production control service was
+switched from its 2026-11-06 sandbox configuration to a new standard live key
+and a dedicated enabled, `livemode=true` endpoint at
+`https://console.reladock.com/api/payments/stripe/webhook`. A read-back through
+the Stripe API confirmed exactly one endpoint for that URL and the 14 events
+handled by the current implementation. The local development endpoint remains
+an independent sandbox endpoint and signing secret.
+
+The live configuration has not yet created a live Checkout, charged a card, or
+accepted a genuine signed live webhook into a wallet or package purchase. It
+also has not exercised refunds, disputes, reconciliation, or unfreezing.
+Configuration and an unsigned 400 rejection prove neither money movement nor
+the end-to-end funding path. Browser success/cancel redirects never credit a
+wallet. The standard live key used for this activation was sent through the
+operator chat and must be rotated before treating credential handling as
+production-accepted.
+
+Persisted Checkout Sessions are mode-bound at reuse time. If the configured
+provider exposes `LiveMode()` and a stored `cs_test_` / `cs_live_` identifier
+does not match it, the server fails closed with a conflict and does not return
+the old Checkout URL or mutate the order, wallet, or ledger. During the
+2026-11-13 cutover, the two pre-existing pending test sessions were explicitly
+terminated with platform audit records before new live Checkout attempts were
+allowed. An already-open `cs_test_` browser page remains a test page; return to
+the console, refresh, and create a new Checkout.
 
 ## Parent integration contract
 
@@ -18,7 +103,11 @@ owns migration registration, server/options/main changes, status/UI integration.
 
 1. Migration 9 is registered in the locked full migration sequence, followed by
    period-attribution migration 10 and entitlement-snapshot migration 11. SQL is also exported as
-   `platform.PaymentMigrationSQL` for isolated connector tests.
+   `platform.PaymentMigrationSQL` for isolated connector tests. Migration 35
+   extends existing Stripe orders with `wallet-topup` / `plan-purchase`
+   purpose, immutable package selection, purchase outcome and subscription
+   reference fields; it also adds one partial unique pending selection per
+   tenant, rule-or-unbound and price version.
    Migration 9 preserves immutable ledger triggers and the exact v7
    `local-adjustment` and `subscription-debit` constraints, adding positive
    `payment-credit` and negative `payment-refund` entries with no rule/price.
@@ -33,8 +122,9 @@ owns migration registration, server/options/main changes, status/UI integration.
    `payments.NewStripe(config) (*payments.Stripe, error)`, then
    `web.NewPayments(store, provider, config.WebhookSecret, cfg.Origin)`.
 3. The exported web type is `*web.Payments`; its methods are
-   `Enabled() bool`, `Checkout(http.ResponseWriter, *http.Request, platform.Identity)`
-   and `Webhook(http.ResponseWriter, *http.Request)`. `Enabled` is nil-safe.
+   `Enabled() bool`, `Checkout(http.ResponseWriter, *http.Request, platform.Identity)`,
+   `PlanCheckout(http.ResponseWriter, *http.Request, platform.Identity)` and
+   `Webhook(http.ResponseWriter, *http.Request)`. `Enabled` is nil-safe.
    `NewPayments(store, provider, secret, origin ...string)` retains the three
    argument form; a configured origin is recommended and required behind TLS
    termination. No additional mode argument is needed: `*payments.Stripe`
@@ -53,19 +143,35 @@ owns migration registration, server/options/main changes, status/UI integration.
    Checkout independently requires exact Origin, matching Host,
    `X-Requested-With: RelaDock`, and a non-cross-site fetch; it rechecks current
    active tenant/member/key write permission inside both database transactions.
+   Dispatch `POST /api/payments/plan-checkout` through the same browser controls;
+   its JSON contains only `ruleId` and `priceVersionId`. Authenticated
+   `GET /api/payments/orders/:id` and
+   `GET /api/payments/orders?purpose=plan-purchase` are tenant-scoped recovery
+   reads and remain available even if the connector is later disabled.
 6. An authenticated `GET /api/payments/status` may return
    `{"enabled": payments.Enabled()}`. This means configured, not merchant activated.
    Parent UI should retain truthful pending/needs-review status and never infer
    wallet credit from the redirect or the checkout response.
 
-The enterprise package flow may present this connector as an alternative funding
-method after package confirmation, but it remains a wallet top-up. The checkout
-amount must equal the selected immutable package price, retries for the same
-selection must keep one tenant-scoped idempotency key across redirect/reload and
-selection changes, and the UI must require a verified webhook credit before the
-customer can complete the existing balance purchase. Browser pending state must
-not cross a logout or tenant boundary, and stale responses after leaving checkout
-must not redirect. Redirect success never creates a subscription period.
+The arbitrary-amount endpoint remains a wallet top-up. Its customer-facing form
+accepts USD 0.50–10,000.00 with at most two decimal places and converts the
+decimal string exactly to integer cents before calling the API; cents remain the
+only API, database, wallet and ledger fact. The enterprise package
+flow now uses a distinct direct-purchase order: the server revalidates the
+immutable package and current wallet, then charges
+`max(package price - wallet balance, 50 cents)`. The browser submits package
+identity, never the amount. If the Stripe minimum exceeds the shortfall, the
+remainder stays in the wallet after purchase. A verified paid callback credits
+the wallet and attempts the package purchase atomically; redirect success alone
+never proves either result. Unbound purchases recheck dedicated-node admission
+both before quoting and again during callback purchase. If the authoritative
+checkout amount differs from the browser's stale wallet estimate, the browser
+shows the new amount and requires renewed confirmation before redirecting.
+Browser pending state must not cross a logout or tenant boundary, stale
+responses after leaving checkout must not redirect, and the client reconciles
+only server order state. A refund/dispute `needs-review` state takes precedence
+over ordinary purchased presentation so the freeze and reconciliation need are
+not hidden.
 
 Environment variables (no defaults, no supplied credentials):
 
@@ -140,7 +246,14 @@ Concurrent retries attach the same session; saved sessions are returned without
 another provider request. If no session was saved and the order is older than
 23 hours, retry returns 409 and requires reconciliation: Stripe can discard keys
 after 24 hours. Do not blindly create a new order after an uncertain payment.
-Checkout currently has no automated expiration/cancellation reconciliation job.
+`POST /api/payments/plan-checkout` accepts strict
+`{"ruleId":"<optional uuid>","priceVersionId":"<uuid>"}` and derives the
+external amount after rechecking membership, rule ownership, published line,
+node sales/capacity/resource mode, active period and wallet freeze. A sufficient
+wallet returns 409 so the existing wallet-only purchase is used. Different
+browser keys recover the same pending tenant/rule-or-unbound/price order. Stripe
+terminal webhooks mark expired or asynchronous-failed orders and release that
+pending-selection guard. There is no polling cancellation job.
 
 ## Webhook accounting
 
@@ -159,6 +272,24 @@ verification. Timestamp changes on Stripe redelivery are accepted; provider even
 identity is the event ID, with a unique stored SHA256 of the original payload.
 An identical replay is a no-op; different bytes under the same ID return 409.
 Even different event IDs cannot credit/refund the same order twice.
+
+For a `plan-purchase` order, the callback loads the order creator's current
+membership and reuses the same transaction-scoped package preparation and
+finalization code as `PurchasePlan`. Node/rule/line and prior-period locks are
+taken before the wallet. The payment credit ledger, package debit ledger,
+subscription, optional rule config Outbox, order state and audits commit
+together. Duplicate/concurrent paid events create one credit and one
+subscription. Known business failures (`unavailable`, `unauthorized`,
+`insufficient-balance`, `wallet-frozen`, `conflict`) still commit the verified
+credit, mark `purchase_state=failed`, and retain the funds in the wallet for
+manual reuse. Unknown SQL, ledger or audit failures roll the provider event and
+all monetary writes back, returning non-2xx for Stripe retry.
+
+Exact `checkout.session.expired` and
+`checkout.session.async_payment_failed` events validate the bound session and
+metadata, write terminal `expired` / `failed` order states without credit, and
+set the plan purchase error to `payment-expired` / `payment-failed`. Browser
+success/cancel parameters are never consumed as accounting evidence.
 
 An advisory transaction lock serializes Stripe event handling, then the order and
 wallet rows are locked. Wallet update, append-only ledger entry, order state,

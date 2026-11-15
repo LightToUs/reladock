@@ -43,7 +43,7 @@ h3 { letter-spacing: -.01em; }
 
 aside { position: fixed; inset: 0 auto 0 0; z-index: 20; display: flex; width: var(--sidebar-width); min-height: 100dvh; padding: 30px 22px 24px; flex-direction: column; border-right: 2px solid var(--line); background: var(--sidebar); transition: width 180ms ease, transform 180ms ease, padding 180ms ease; }
 .brand { display: flex; align-items: center; gap: 12px; }
-.brand-mark { display: grid; width: 38px; height: 38px; place-items: center; border: 2px solid var(--accent); color: var(--accent); font-family: Georgia, serif; font-size: 21px; }
+.brand-mark { display: block; width: 38px; height: 38px; flex: 0 0 auto; border: 0; object-fit: contain; }
 .brand h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
 .brand-copy { min-width: 0; }
 .sidebar-collapse { width: 34px; min-width: 34px; min-height: 34px; margin: 0 0 0 auto; padding: 0; border-color: var(--line); background: #10233b; color: #9db2ca; font-size: 22px; line-height: 1; }
@@ -195,7 +195,7 @@ button.plan-filter-chip[aria-pressed="true"] { border-color: var(--accent); back
 .checkout-order-summary strong { display: block; margin-top: 8px; color: #dce8f6; font-size: 14px; line-height: 1.5; }
 .checkout-order-summary .checkout-total { background: #0d2038; }
 .checkout-order-summary .checkout-total strong { color: #60a5fa; font: 500 30px/1.2 Georgia, "Times New Roman", serif; }
-.payment-method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
+.payment-method-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 20px; }
 .payment-method { display: flex; min-height: 250px; padding: 22px; flex-direction: column; border: 1px solid var(--line-strong); background: #0a172b; }
 .payment-method > div span { color: #62a7f5; font-size: 10px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
 .payment-method h3 { margin: 6px 0 0; font-size: 21px; }
@@ -208,8 +208,52 @@ button.plan-filter-chip[aria-pressed="true"] { border-color: var(--accent); back
 .billing-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .billing-detail-heading span { color: #6f87a4; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 .billing-detail-heading h3 { margin: 4px 0 0; font-size: 17px; }
-.top-up-inline { grid-template-columns: minmax(0, 1fr) auto; align-items: end; margin: 14px 0; }
+.top-up-inline { grid-template-columns: minmax(0, 1fr) minmax(180px, .6fr) auto; align-items: end; margin: 14px 0; }
 .top-up-inline button { width: auto; }
+.tron-payment-dialog { width: min(560px, calc(100vw - 28px)); max-height: min(92dvh, 880px); padding: 0; overflow: auto; border: 0; border-radius: 18px; background: var(--surface); box-shadow: 0 30px 90px rgb(15 23 42 / 28%); }
+.tron-payment-heading { display: flex; padding: 25px 28px 18px; align-items: flex-start; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
+.tron-payment-heading span { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+.tron-payment-heading h2 { margin: 4px 0 3px; font-size: 24px; }
+.tron-payment-heading p { margin: 0; color: var(--muted); font-size: 12px; }
+.tron-payment-heading .icon-button { flex: 0 0 auto; margin: 0; }
+.tron-payment-primary { display: grid; padding: 26px 28px 24px; justify-items: center; text-align: center; background: #fbfdff; }
+.tron-payment-primary-address { display: grid; width: min(100%, 430px); margin-bottom: 16px; gap: 7px; }
+.tron-payment-primary-label { color: #52657c; font-size: 13px; font-weight: 760; }
+.tron-payment-primary-address > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 11px 10px 13px; border: 1px solid #d7e1ec; border-radius: 10px; background: #fff; text-align: left; }
+.tron-payment-primary-address code { overflow-wrap: anywhere; color: #223a55; font-size: 12px; line-height: 1.55; user-select: all; }
+.tron-payment-primary-address button { min-width: 78px; margin: 0; }
+.tron-payment-visual { position: relative; display: grid; width: 236px; height: 236px; place-items: center; }
+.tron-payment-qr-stage { width: 236px; height: 236px; padding: 10px; border: 1px solid #cdd9e7; border-radius: 16px; background: #fff; box-shadow: 0 10px 28px rgb(37 99 235 / 10%); }
+.tron-payment-qr-stage img { display: block; width: 214px; height: 214px; image-rendering: pixelated; }
+.tron-payment-result { display: grid; width: 236px; height: 236px; padding: 28px; place-items: center; align-content: center; gap: 8px; border: 1px solid #d7e1ec; border-radius: 16px; background: #f8fafc; }
+.tron-payment-result > span { display: grid; width: 62px; height: 62px; place-items: center; border-radius: 50%; background: #e8eef5; color: #536a84; font-size: 26px; font-weight: 850; }
+.tron-payment-result strong { color: #253b55; font-size: 22px; }
+.tron-payment-result p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.tron-payment-result-success { border-color: #a7e3ca; background: #f0fdf7; }
+.tron-payment-result-success > span { background: #d1fae5; color: var(--success); }
+.tron-payment-result-success strong { color: var(--success); }
+.tron-payment-amount-line { margin-top: 18px; }
+.tron-payment-amount-line strong { color: #10233f; font-size: 29px; font-weight: 820; letter-spacing: -.035em; }
+.tron-payment-primary[data-state="credited"] .tron-payment-amount-line strong { color: var(--success); }
+.tron-payment-network { margin: 8px 0 0; padding: 4px 9px; border-radius: 999px; background: #eef4fb; color: #4c6480; font-size: 12px; font-weight: 720; }
+.tron-payment-validity { display: flex; width: min(100%, 320px); margin-top: 17px; padding-top: 15px; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); color: #52657c; font-size: 13px; }
+.tron-payment-validity strong { color: var(--accent); font-size: 21px; font-variant-numeric: tabular-nums; letter-spacing: .03em; }
+.tron-payment-primary[data-state="credited"] .tron-payment-validity strong { color: var(--success); }
+.tron-payment-details { padding: 22px 28px 26px; }
+.tron-payment-status { padding: 13px 15px; border: 1px solid #dbe7f5; border-radius: 10px; background: #f5f9ff; }
+.tron-payment-status span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.tron-payment-status p { margin: 0; color: #304760; font-size: 13px; line-height: 1.6; }
+.tron-payment-safety { margin: 16px 0 0; padding: 12px 14px; border-left: 3px solid #f59e0b; border-radius: 0 8px 8px 0; background: #fff8e8; color: #6b5122; font-size: 12px; line-height: 1.65; }
+.tron-payment-disclosure { margin-top: 12px; padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfe; }
+.tron-payment-disclosure summary { color: #48617d; font-size: 13px; font-weight: 700; cursor: pointer; }
+.tron-payment-disclosure dl { display: grid; gap: 10px; margin: 14px 0 0; }
+.tron-payment-disclosure dl > div { display: grid; gap: 3px; }
+.tron-payment-disclosure dt { color: var(--muted); font-size: 11px; }
+.tron-payment-disclosure dd { margin: 0; color: #304760; font-size: 12px; }
+.tron-payment-disclosure code { overflow-wrap: anywhere; user-select: all; }
+.tron-payment-disclosure form { margin-top: 14px; }
+.tron-payment-actions { margin-top: 18px; }
+.tron-payment-actions button { min-width: 104px; }
 .error { min-height: 24px; margin: 12px 0 0; color: var(--warning); line-height: 1.6; white-space: pre-wrap; }
 #audit { font-size: 13px; }
 
@@ -339,7 +383,7 @@ button.plan-filter-chip[aria-pressed="true"] { border-color: var(--accent); back
 /* Harmonized enterprise shell and component hierarchy. */
 #console aside { padding: 24px 18px 22px; border-right: 0; box-shadow: none; }
 #console .brand { padding: 0 4px; }
-#console .brand-mark { width: 40px; height: 40px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; font-family: inherit; font-size: 18px; font-weight: 800; }
+#console .brand-mark { width: 40px; height: 40px; border: 0; border-radius: 10px; background: transparent; object-fit: contain; }
 #console .brand h2 { font-size: 18px; font-weight: 780; }
 #console nav { gap: 6px; margin-top: 46px; }
 #console nav a { padding: 11px 14px; border: 0; border-radius: 8px; color: #91a5be; font-size: 14px; font-weight: 650; }
@@ -489,6 +533,16 @@ button.plan-filter-chip[aria-pressed="true"] { border-color: var(--accent); back
   .checkout-order-summary, .payment-method-grid { grid-template-columns: 1fr; }
   .checkout-order-summary .checkout-total { grid-column: auto; }
   .payment-method { min-height: 0; }
+  .tron-payment-heading { padding: 20px 18px 15px; }
+  .tron-payment-primary { padding: 22px 18px 20px; }
+  .tron-payment-visual,
+  .tron-payment-qr-stage,
+  .tron-payment-result { width: 218px; height: 218px; }
+  .tron-payment-qr-stage img { width: 196px; height: 196px; }
+  .tron-payment-amount-line strong { font-size: 26px; }
+  .tron-payment-primary-address > div { grid-template-columns: 1fr; text-align: center; }
+  .tron-payment-primary-address button { width: 100%; }
+  .tron-payment-details { padding: 20px 18px 22px; }
   #console main .account { justify-content: space-between; }
   #console main .account-refresh { min-width: 82px; }
   #console main .account-menu-trigger { min-width: 0; max-width: 220px; }
@@ -538,6 +592,7 @@ button.plan-filter-chip[aria-pressed="true"] { border-color: var(--accent); back
 #console main .plan-purchase-card dl div { background: var(--surface); }
 #console main .plan-card-price strong { color: #10233f; }
 #console main .editor-dialog { border: 0; border-radius: 8px; padding: 28px; }
+#console main .editor-dialog.tron-payment-dialog { width: min(560px, calc(100vw - 28px)); max-height: min(92dvh, 880px); padding: 0; overflow: auto; border-radius: 18px; }
 #console main .editor-dialog label { font-size: 14px; }
 #console main .dialog-actions { margin-top: 24px; }
 #console main .traffic-trend { background: #f5f7fa; }

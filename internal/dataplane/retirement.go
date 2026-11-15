@@ -84,7 +84,7 @@ func sameKernelGuard(a, b AllocationGuard) bool {
 }
 
 func matchingRetirement(config platform.NodeConfig, identity RetirementIdentity) bool {
-	if config.SchemaVersion != 2 || config.NodeID != identity.NodeID || config.Generation < identity.QuarantineGeneration {
+	if !allocationSchema(config.SchemaVersion) || config.NodeID != identity.NodeID || config.Generation < identity.QuarantineGeneration {
 		return false
 	}
 	for _, item := range config.Retirements {

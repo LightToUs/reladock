@@ -1,5 +1,12 @@
 import { formatBytes, formatRate } from './telemetry.js';
 
+export function formatEntryAddress(publicAddress, port) {
+  const address = typeof publicAddress === 'string' ? publicAddress.trim() : '';
+  if (!address) return '入口地址待交付';
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return address;
+  return `${address.includes(':') ? `[${address}]` : address}:${port}`;
+}
+
 function validDate(value) {
   const date = value ? new Date(value) : null;
   return date && Number.isFinite(date.valueOf()) ? date : null;

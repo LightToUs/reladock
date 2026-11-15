@@ -107,9 +107,10 @@ func TestDockerIntegration(t *testing.T) {
 		}
 		return ip
 	}
-	relay, target := address(names[0]), address(names[1])
+	relay, target, client := address(names[0]), address(names[1]), address(names[2])
 	r := &containerRunner{docker: docker, name: names[0]}
 	must("", "exec", names[0], "nft", "--version")
+	must("", "exec", names[0], "conntrack", "-V")
 	must("", "exec", names[1], "python3", "--version")
 	must("", "exec", names[2], "python3", "--version")
 	// Echo server startup is readiness-checked with a direct client, not sleep.
@@ -162,6 +163,10 @@ func TestDockerIntegration(t *testing.T) {
 	echo("20000", "tcp")
 	echo("20000", "udp")
 	echo("20001", "tcp")
+	conntrackTable := string(must("", "exec", names[0], "conntrack", "-L", "-p", "tcp"))
+	if !strings.Contains(conntrackTable, "src="+client) || !strings.Contains(conntrackTable, "dst="+relay) || !strings.Contains(conntrackTable, "dport=20000") {
+		t.Fatalf("conntrack original tuple did not preserve client source before SNAT: client=%s relay=%s table=%s", client, relay, conntrackTable)
+	}
 	raw := must("", "exec", names[0], "nft", "-j", "list", "table", "ip", Table)
 	var doc struct {
 		NFTables []struct {

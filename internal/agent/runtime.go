@@ -18,6 +18,7 @@ import (
 	"reladock/internal/platform"
 	retirementexec "reladock/internal/retirement"
 	"reladock/internal/shaping"
+	"reladock/internal/sourceflow"
 )
 
 type RuntimeOptions struct {
@@ -26,6 +27,7 @@ type RuntimeOptions struct {
 	SNATAddress      string
 	ShapingInterface string
 	WALDir           string
+	SourceFlowWALDir string
 	NFTBinary        string
 	TCBinary         string
 	IPBinary         string
@@ -54,6 +56,9 @@ func validateRuntimeOptions(o RuntimeOptions, goos string) error {
 	}
 	if !privatePath(o.WALDir) {
 		return errors.New("--apply requires an explicit absolute --metering-wal-dir")
+	}
+	if o.SourceFlowWALDir != "" && (!privatePath(o.SourceFlowWALDir) || o.SourceFlowWALDir == o.WALDir) {
+		return errors.New("--source-flow-wal-dir must be a distinct private absolute path")
 	}
 	if !privatePath(o.NFTBinary) {
 		return errors.New("--apply requires an absolute --nft-binary")
@@ -156,7 +161,24 @@ func PrepareApply(o RuntimeOptions, nodeID string) (*ApplyState, Applier, error)
 		wal.Close()
 		return nil, nil, errors.Join(err, stopErr)
 	}
-	return state, &NodeEngine{NodeID: nodeID, Adapter: adapter, WAL: wal, Meter: meter}, nil
+	engine := &NodeEngine{NodeID: nodeID, Adapter: adapter, WAL: wal, Meter: meter}
+	if o.SourceFlowWALDir != "" {
+		engine.SourceFlowWAL, err = sourceflow.Open(o.SourceFlowWALDir, sourceflow.Options{NodeID: nodeID})
+		if err != nil {
+			wal.Close()
+			return nil, nil, err
+		}
+		engine.sourceFlowSource = sourceflow.NewConntrackEventSource()
+		manifest, digest, loadErr := adapter.LoadSourceFlowManifest(preflight)
+		if loadErr != nil {
+			engine.SourceFlowWAL.Close()
+			wal.Close()
+			return nil, nil, loadErr
+		}
+		engine.sourceFlowManifest = manifest
+		engine.sourceFlowManifestDigest = digest
+	}
+	return state, engine, nil
 }
 
 func readShapingLease(path string) (shaping.Lease, error) {

@@ -4,8 +4,20 @@ import "testing"
 
 func TestLocalDefaults(t *testing.T) {
 	c, err := Load(func(string) string { return "" })
-	if err != nil || c.Address != "127.0.0.1:3001" || c.Origin != "http://127.0.0.1:3001" || c.AgentAddress != "127.0.0.1:3002" || c.AllowUnentitledRules {
+	if err != nil || c.Address != "127.0.0.1:3001" || c.Origin != "http://127.0.0.1:3001" || c.AgentAddress != "127.0.0.1:3002" || c.AllowUnentitledRules || c.Lightsail.Enabled {
 		t.Fatalf("local defaults: %+v %v", c, err)
+	}
+}
+
+func TestLoadRejectsInvalidLightsailConfiguration(t *testing.T) {
+	_, err := Load(func(key string) string {
+		if key == "LIGHTSAIL_ENABLED" {
+			return "true"
+		}
+		return ""
+	})
+	if err == nil {
+		t.Fatal("runtime config accepted incomplete Lightsail configuration")
 	}
 }
 

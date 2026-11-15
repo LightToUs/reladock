@@ -111,6 +111,32 @@ func TestWorkerCountersAreConcurrentAndRejectUnknown(t *testing.T) {
 	}
 }
 
+func TestLightsailLifecycleMetricHasFixedSafeLabels(t *testing.T) {
+	r := New("dev", func(context.Context) (platform.OperationalMetrics, error) { return fixture(), nil })
+	if err := r.ObserveWorker(WorkerLightsailLifecycle, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ObserveWorker(WorkerLightsailLifecycle, errors.New("provider account 123456789012 instance i-secret in us-east-1")); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := rec.Body.String()
+	for _, want := range []string{
+		`reladock_worker_runs_total{worker="lightsail-lifecycle",result="success"} 1`,
+		`reladock_worker_runs_total{worker="lightsail-lifecycle",result="error"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q in %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"123456789012", "i-secret", "us-east-1", "instance_id", "region="} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("Lightsail metric leaked %q", forbidden)
+		}
+	}
+}
+
 func TestMetricsAllowsOnlyOneDatabaseScrapeAtATime(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})

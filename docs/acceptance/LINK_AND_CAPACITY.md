@@ -15,6 +15,8 @@
 - 入口使用与生产相同的 systemd apply 单元、专用 egress 租约、SNAT、nftables/tc/conntrack 工具和 offload 策略。不要在验收中临时放宽 RelaDock 的安全门禁。
 - 每条规则独立设置带宽和流量额度。不得把两条规则的总和当成共享套餐，也不得用节点声明容量冒充保证带宽。
 
+如验收逐规则来源记录，必须使用隔离测试地址而非客户生产流量：开启一条 schema-3 TCP 和一条 UDP 规则，从不同客户端源地址/端口建立新流，核对平台记录的是 SNAT 前 original source，而落地只看到入口 SNAT 地址。随后分别注入 netlink overrun、队列/WAL 满和上传中断，证明 gap 可见、转发与计费仍继续、恢复后 ACK 不重复。记录短连接/UDP 每秒新流量和资源占用的实测值，不外推容量承诺；未完成本项时保持 `productionReady=false`。
+
 ## 验收前记录
 
 保存以下非密钥信息：发行版本和 SHA-256、三台主机提供商/地区/规格、内核和 iproute2/nft/conntrack 版本、入口接口名/ifindex/namespace/alias/MTU、shaping 租约摘要、云安全组摘要、测试规则 ID/协议/入口端口/目标、每规则带宽/额度/周期、开始时间和操作者。不得记录客户 UUID、Reality 私钥、密码、Agent 私钥、会话或安装凭证。

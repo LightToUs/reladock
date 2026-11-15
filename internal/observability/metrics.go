@@ -20,9 +20,12 @@ const (
 	WorkerSubscriptionReconcile Worker = "subscription-reconcile"
 	WorkerIncidentReconcile     Worker = "incident-reconcile"
 	WorkerNotificationDelivery  Worker = "notification-delivery"
+	WorkerTronPaymentConfirm    Worker = "tron-payment-confirmation"
+	WorkerTronPaymentScan       Worker = "tron-payment-scan"
+	WorkerLightsailLifecycle    Worker = "lightsail-lifecycle"
 )
 
-var workers = []Worker{WorkerSubscriptionReconcile, WorkerIncidentReconcile, WorkerNotificationDelivery}
+var workers = []Worker{WorkerSubscriptionReconcile, WorkerIncidentReconcile, WorkerNotificationDelivery, WorkerTronPaymentConfirm, WorkerTronPaymentScan, WorkerLightsailLifecycle}
 
 type SnapshotFunc func(context.Context) (platform.OperationalMetrics, error)
 type workerCounts struct {
@@ -32,7 +35,7 @@ type workerCounts struct {
 type Registry struct {
 	version      string
 	snapshot     SnapshotFunc
-	worker       [3]workerCounts
+	worker       [6]workerCounts
 	scrapeErrors atomic.Uint64
 	scrapeGate   chan struct{}
 }

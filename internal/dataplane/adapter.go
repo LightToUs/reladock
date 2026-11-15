@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"reladock/internal/platform"
+	"reladock/internal/sourceflow"
 )
 
 var ErrStale = errors.New("generation must exceed persisted high-water mark")
@@ -199,6 +200,29 @@ func (a *Adapter) load(ctx context.Context) (State, error) {
 	return s, e
 }
 
+// LoadSourceFlowManifest returns the exact durable last-good mapping. It never
+// exposes a candidate or recovery plan that has not been promoted to Good.
+func (a *Adapter) LoadSourceFlowManifest(ctx context.Context) (*sourceflow.Manifest, string, error) {
+	unlock, err := a.lock.Lock(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	defer unlock()
+	state, err := a.load(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	if state.Good == nil || state.Good.SourceFlowManifest == nil || state.Good.SourceFlowManifestDigest == "" {
+		return nil, "", nil
+	}
+	manifest := *state.Good.SourceFlowManifest
+	manifest.Rules = append([]sourceflow.AppliedRule(nil), manifest.Rules...)
+	if err = sourceflow.ValidateManifest(manifest, state.Good.SourceFlowManifestDigest); err != nil {
+		return nil, "", err
+	}
+	return &manifest, state.Good.SourceFlowManifestDigest, nil
+}
+
 func persistedPlanOptions(p Plan) Options {
 	nativeForward := map[string]bool{}
 	for _, allocation := range p.Config.Allocations {
@@ -337,7 +361,7 @@ func configAllocationIdentities(cfg platform.NodeConfig) (map[string]allocationI
 }
 
 func validateAllocationTransition(old, next platform.NodeConfig) error {
-	if old.SchemaVersion == 1 && next.SchemaVersion == 2 {
+	if old.SchemaVersion == 1 && allocationSchema(next.SchemaVersion) {
 		oldRules := activeAllocationRules(old)
 		for _, allocation := range next.Allocations {
 			tuple := Allocation{allocation.Address, allocation.Protocol, allocation.Port}
@@ -347,7 +371,7 @@ func validateAllocationTransition(old, next platform.NodeConfig) error {
 		}
 		return nil
 	}
-	if old.SchemaVersion != 2 || next.SchemaVersion != 2 {
+	if !allocationSchema(old.SchemaVersion) || !allocationSchema(next.SchemaVersion) {
 		return nil
 	}
 	oldByID, oldByTuple := configAllocationIdentities(old)
@@ -710,7 +734,7 @@ func (a *Adapter) restore(ctx context.Context, s State) error {
 			blocked[v] = true
 		}
 	}
-	if s.Candidate.Config.SchemaVersion == 2 && cfg.SchemaVersion == 2 {
+	if allocationSchema(s.Candidate.Config.SchemaVersion) && allocationSchema(cfg.SchemaVersion) {
 		goodIDs := map[string]bool{}
 		if s.Good != nil {
 			for _, guard := range s.Good.ForwardGuards {

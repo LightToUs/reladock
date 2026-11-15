@@ -34,13 +34,17 @@ type server struct {
 	limits           map[string]window
 	persistentLimits bool
 	payments         *Payments
+	tronPayments     *TronPayments
 	bootstrap        *BootstrapOptions
+	lightsail        *LightsailOptions
 }
 
 type Options struct {
 	PersistentRateLimit bool
 	Payments            *Payments
+	TronPayments        *TronPayments
 	Bootstrap           *BootstrapOptions
+	Lightsail           *LightsailOptions
 }
 
 var uuid = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -54,7 +58,7 @@ func NewWithOptions(store *platform.Store, assets fs.FS, origin string, options 
 	if err != nil || parsed.Host == "" {
 		panic("invalid local origin")
 	}
-	s := &server{store: store, assets: assets, origin: origin, host: parsed.Host, limits: make(map[string]window), persistentLimits: options.PersistentRateLimit, payments: options.Payments}
+	s := &server{store: store, assets: assets, origin: origin, host: parsed.Host, limits: make(map[string]window), persistentLimits: options.PersistentRateLimit, payments: options.Payments, tronPayments: options.TronPayments, lightsail: options.Lightsail}
 	s.bootstrap = options.Bootstrap
 	return http.HandlerFunc(s.serve)
 }
@@ -91,12 +95,20 @@ func failure(w http.ResponseWriter, err error) {
 	respond(w, status, map[string]string{"error": message})
 }
 func decode(w http.ResponseWriter, r *http.Request, value any) bool {
+	return decodeLimit(w, r, value, 8192)
+}
+
+func decodeLimit(w http.ResponseWriter, r *http.Request, value any, limit int64) bool {
 	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" {
 		respond(w, 415, map[string]string{"error": "需要 application/json"})
 		return false
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	if limit < 1 || limit > 2*1024*1024 {
+		failure(w, platform.ErrInvalid)
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	err = decoder.Decode(value)
@@ -109,7 +121,7 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			respond(w, 413, map[string]string{"error": "请求超过 8 KiB"})
+			respond(w, 413, map[string]string{"error": "请求超过允许的大小"})
 		} else {
 			failure(w, platform.ErrInvalid)
 		}
@@ -206,7 +218,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin.js" || r.URL.Path == "/auth-session.js" || r.URL.Path == "/account-menu.js" || r.URL.Path == "/console-navigation.js" || r.URL.Path == "/admin.css" || r.URL.Path == "/app.js" || r.URL.Path == "/app.css" || r.URL.Path == "/workspace-summary.js" || r.URL.Path == "/telemetry.js" || r.URL.Path == "/node-monitoring.js" || r.URL.Path == "/rule-submission.js" || r.URL.Path == "/rule-editor.js" || r.URL.Path == "/account-tools.js" || r.URL.Path == "/business-tools.js" || r.URL.Path == "/operations-tools.js" || r.URL.Path == "/resource-mode.js" || r.URL.Path == "/plan-catalog.js" || r.URL.Path == "/node-action-dialog.js" || r.URL.Path == "/node-contact-status.js" || r.URL.Path == "/node-content-dialog.js" || r.URL.Path == "/node-editor.js" || r.URL.Path == "/node-visibility.js" || r.URL.Path == "/node-withdrawal.js" {
+	if r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin.js" || r.URL.Path == "/auth-session.js" || r.URL.Path == "/account-menu.js" || r.URL.Path == "/console-navigation.js" || r.URL.Path == "/admin.css" || r.URL.Path == "/app.js" || r.URL.Path == "/app.css" || r.URL.Path == "/workspace-summary.js" || r.URL.Path == "/telemetry.js" || r.URL.Path == "/node-monitoring.js" || r.URL.Path == "/rule-submission.js" || r.URL.Path == "/rule-editor.js" || r.URL.Path == "/account-tools.js" || r.URL.Path == "/business-tools.js" || r.URL.Path == "/operations-tools.js" || r.URL.Path == "/resource-mode.js" || r.URL.Path == "/plan-catalog.js" || r.URL.Path == "/source-flow-logging.js" || r.URL.Path == "/lightsail-admin.js" || r.URL.Path == "/node-action-dialog.js" || r.URL.Path == "/node-contact-status.js" || r.URL.Path == "/node-content-dialog.js" || r.URL.Path == "/node-editor.js" || r.URL.Path == "/node-visibility.js" || r.URL.Path == "/node-withdrawal.js" || r.URL.Path == "/reladock-mark.svg" {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			respond(w, 405, map[string]string{"error": "方法不支持"})
 			return
@@ -223,7 +235,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		contentType := map[string]string{"index.html": "text/html; charset=utf-8", "admin.html": "text/html; charset=utf-8", "admin.js": "text/javascript; charset=utf-8", "admin.css": "text/css; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "rule-submission.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8"}
+		contentType := map[string]string{"index.html": "text/html; charset=utf-8", "admin.html": "text/html; charset=utf-8", "admin.js": "text/javascript; charset=utf-8", "admin.css": "text/css; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "rule-submission.js": "text/javascript; charset=utf-8", "app.css": "text/css; charset=utf-8", "reladock-mark.svg": "image/svg+xml"}
 		contentType["account-tools.js"] = "text/javascript; charset=utf-8"
 		contentType["account-menu.js"] = "text/javascript; charset=utf-8"
 		contentType["auth-session.js"] = "text/javascript; charset=utf-8"
@@ -231,10 +243,12 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		contentType["operations-tools.js"] = "text/javascript; charset=utf-8"
 		contentType["resource-mode.js"] = "text/javascript; charset=utf-8"
 		contentType["plan-catalog.js"] = "text/javascript; charset=utf-8"
+		contentType["source-flow-logging.js"] = "text/javascript; charset=utf-8"
 		contentType["rule-editor.js"] = "text/javascript; charset=utf-8"
 		contentType["workspace-summary.js"] = "text/javascript; charset=utf-8"
 		contentType["telemetry.js"] = "text/javascript; charset=utf-8"
 		contentType["node-monitoring.js"] = "text/javascript; charset=utf-8"
+		contentType["lightsail-admin.js"] = "text/javascript; charset=utf-8"
 		contentType["node-action-dialog.js"] = "text/javascript; charset=utf-8"
 		contentType["node-contact-status.js"] = "text/javascript; charset=utf-8"
 		contentType["node-content-dialog.js"] = "text/javascript; charset=utf-8"
@@ -344,8 +358,21 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 	if s.serveSubscriptions(w, r, who) || s.serveOperations(w, r, who) || s.serveCosts(w, r, who) || s.serveNotifications(w, r, who) {
 		return
 	}
+	if servePaymentOrders(w, r, s.store, who) {
+		return
+	}
 	if r.URL.Path == "/api/payments/status" && r.Method == "GET" {
-		respond(w, 200, map[string]bool{"enabled": s.payments.Enabled()})
+		stripeEnabled := s.payments != nil && s.payments.Enabled()
+		tronEnabled := s.tronPayments != nil && s.tronPayments.Enabled()
+		respond(w, 200, map[string]bool{"enabled": stripeEnabled || tronEnabled, "stripe": stripeEnabled, "tron": tronEnabled})
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/payments/tron/orders") {
+		if s.tronPayments == nil {
+			respond(w, 503, map[string]string{"error": "TRON USDT 支付连接器未配置"})
+			return
+		}
+		s.tronPayments.Serve(w, r, who)
 		return
 	}
 	if r.URL.Path == "/api/payments/checkout" {
@@ -356,7 +383,18 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		s.payments.Checkout(w, r, who)
 		return
 	}
+	if r.URL.Path == "/api/payments/plan-checkout" {
+		if s.payments == nil {
+			respond(w, 503, map[string]string{"error": "支付连接器未配置"})
+			return
+		}
+		s.payments.PlanCheckout(w, r, who)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/admin/") {
+		if s.serveLightsail(w, r, who) {
+			return
+		}
 		s.serveAdmin(w, r, who)
 		return
 	}

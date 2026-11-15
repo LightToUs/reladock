@@ -272,3 +272,122 @@ func TestPaymentHTTPCheckoutAndSignedWebhookEndToEnd(t *testing.T) {
 		t.Fatalf("revoked checkout %d", rec.Code)
 	}
 }
+
+func TestPlanPaymentHTTPCheckoutRecoveryAndTenantReads(t *testing.T) {
+	s, pool := subscriptionHTTPStore(t)
+	ctx := context.Background()
+	admin, _, err := s.Register(ctx, "Plan Operator", "plan-http-admin@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetPlatformAdmin(ctx, admin.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	admin, _, err = s.Login(ctx, admin.Email, "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, "UPDATE nodes SET status='ready' WHERE id='hk-01'"); err != nil {
+		t.Fatal(err)
+	}
+	offering, err := s.AdminCreateOffering(ctx, admin, platform.LineOfferingInput{Code: "plan-pay-http", Name: "Plan payment", NodeID: "hk-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	offering, err = s.AdminSetOfferingState(ctx, admin, offering.ID, platform.OfferingStateInput{ExpectedRevision: offering.Revision, State: platform.OfferingStatePublished})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := s.AdminCreatePlan(ctx, admin, platform.PlanInput{OfferingID: offering.ID, Code: "plan-pay-http", Name: "Direct package", PriceCents: 1999, QuotaBytes: 5_000_000, BandwidthMbps: 100, PeriodSeconds: 86400, ResourceMode: platform.ResourceModeShared})
+	if err != nil {
+		t.Fatal(err)
+	}
+	who, token, err := s.Register(ctx, "Plan Buyer", "plan-http@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, foreignToken, err := s.Register(ctx, "Other Buyer", "plan-http-other@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := NewPayments(s, httpPaymentFake{}, "test-secret", "http://127.0.0.1:3001")
+	handler := NewWithOptions(s, fstest.MapFS{}, "http://127.0.0.1:3001", Options{Payments: p})
+	cookie := &http.Cookie{Name: cookieName, Value: token}
+	foreignCookie := &http.Cookie{Name: cookieName, Value: foreignToken}
+	call := func(method, path, body, key string, actor *http.Cookie) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, "http://127.0.0.1:3001"+path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", "http://127.0.0.1:3001")
+		r.Header.Set("X-Requested-With", "RelaDock")
+		r.Header.Set("Idempotency-Key", key)
+		if actor != nil {
+			r.AddCookie(actor)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	body := `{"priceVersionId":"` + plan.ID + `"}`
+	created := call(http.MethodPost, "/api/payments/plan-checkout", body, "plan-http-checkout-a", cookie)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("plan checkout: %d %s", created.Code, created.Body.String())
+	}
+	var order platform.PaymentOrder
+	if err = json.Unmarshal(created.Body.Bytes(), &order); err != nil {
+		t.Fatal(err)
+	}
+	if order.AmountCents != 1999 || order.Purpose != "plan-purchase" || order.PriceVersionID != plan.ID || order.CheckoutURL == "" || strings.Contains(created.Body.String(), "tenantId") || strings.Contains(created.Body.String(), "sessionId") || strings.Contains(created.Body.String(), "createdBy") {
+		t.Fatalf("plan checkout response: %s", created.Body.String())
+	}
+	recovered := call(http.MethodPost, "/api/payments/plan-checkout", body, "plan-http-checkout-b", cookie)
+	if recovered.Code != http.StatusCreated || !strings.Contains(recovered.Body.String(), order.ID) {
+		t.Fatalf("selection recovery: %d %s", recovered.Code, recovered.Body.String())
+	}
+	if exact := call(http.MethodGet, "/api/payments/orders/"+order.ID, "", "", cookie); exact.Code != http.StatusOK || !strings.Contains(exact.Body.String(), order.ID) {
+		t.Fatalf("exact order: %d %s", exact.Code, exact.Body.String())
+	}
+	if exact := call(http.MethodGet, "/api/payments/orders/"+order.ID, "", "", foreignCookie); exact.Code != http.StatusNotFound {
+		t.Fatalf("foreign exact: %d %s", exact.Code, exact.Body.String())
+	}
+	if recent := call(http.MethodGet, "/api/payments/orders?purpose=plan-purchase", "", "", cookie); recent.Code != http.StatusOK || !strings.Contains(recent.Body.String(), order.ID) {
+		t.Fatalf("recent orders: %d %s", recent.Code, recent.Body.String())
+	}
+	if recent := call(http.MethodGet, "/api/payments/orders?purpose=plan-purchase", "", "", foreignCookie); recent.Code != http.StatusOK || strings.Contains(recent.Body.String(), order.ID) {
+		t.Fatalf("foreign recent: %d %s", recent.Code, recent.Body.String())
+	}
+
+	for name, response := range map[string]*httptest.ResponseRecorder{
+		"unknown body":    call(http.MethodPost, "/api/payments/plan-checkout", strings.TrimSuffix(body, "}")+`,"amountCents":1}`, "plan-http-invalid-a", cookie),
+		"checkout query":  call(http.MethodPost, "/api/payments/plan-checkout?x=1", body, "plan-http-invalid-b", cookie),
+		"checkout method": call(http.MethodGet, "/api/payments/plan-checkout", "", "", cookie),
+		"missing purpose": call(http.MethodGet, "/api/payments/orders", "", "", cookie),
+		"extra purpose":   call(http.MethodGet, "/api/payments/orders?purpose=plan-purchase&x=1", "", "", cookie),
+	} {
+		if response.Code != http.StatusBadRequest && response.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s accepted: %d %s", name, response.Code, response.Body.String())
+		}
+	}
+
+	sufficient, sufficientToken, err := s.Register(ctx, "Funded Buyer", "plan-http-funded@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdjustWalletFromCLI(ctx, platform.WalletAdjustment{TenantID: sufficient.TenantID, Key: "plan-http-sufficient", AmountCents: 1999, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if response := call(http.MethodPost, "/api/payments/plan-checkout", body, "plan-http-funded", &http.Cookie{Name: cookieName, Value: sufficientToken}); response.Code != http.StatusConflict {
+		t.Fatalf("sufficient wallet: %d %s", response.Code, response.Body.String())
+	}
+	disabled := NewWithOptions(s, fstest.MapFS{}, "http://127.0.0.1:3001", Options{})
+	if response := request(disabled, http.MethodPost, "/api/payments/plan-checkout", body, cookie); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("disabled connector: %d %s", response.Code, response.Body.String())
+	}
+
+	// The ordinary arbitrary wallet top-up endpoint remains compatible.
+	topup := call(http.MethodPost, "/api/payments/checkout", `{"amountCents":500}`, "plan-http-topup", cookie)
+	if topup.Code != http.StatusCreated || !strings.Contains(topup.Body.String(), `"purpose":"wallet-topup"`) {
+		t.Fatalf("top-up compatibility: %d %s", topup.Code, topup.Body.String())
+	}
+	_ = who
+}

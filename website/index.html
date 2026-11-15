@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="RelaDock 为跨境电商企业与 ERP / SaaS 服务商提供指定公网 IP、域名和端口的应用级 TCP / UDP 连接。">
+    <meta name="theme-color" content="#101210">
+    <title>RelaDock — 指定公网应用的跨境连接</title>
+    <link rel="icon" href="reladock-mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="css/style.css">
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主要内容</a>
+
+    <header class="site-header" data-header>
+      <a class="brand" href="#top" aria-label="RelaDock 首页">
+        <img class="brand-mark" src="reladock-mark.svg" alt="">
+        <span>RelaDock</span>
+      </a>
+      <nav class="site-nav" aria-label="主要导航">
+        <a href="#customers">适用场景</a>
+        <a href="#boundary">服务边界</a>
+        <a href="#delivery">交付方式</a>
+        <a href="#faq">常见问题</a>
+      </nav>
+      <a class="header-console" href="https://console.reladock.com/">企业后台</a>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="hero-copy" data-reveal>
+          <h1>只连接指定应用</h1>
+          <p>
+            为跨境电商企业与 ERP / SaaS 服务商，把明确的公网入口连接到明确的公网目标。只做 TCP / UDP
+            转发，不碰业务数据与企业内网。
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#scope-check">检查你的需求</a>
+            <a class="text-link" href="https://console.reladock.com/">进入企业后台 <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+
+        <div class="hero-stage" aria-label="一条指定连接的示意" data-reveal>
+          <div class="route-copy">
+            <span>公网入口</span>
+            <strong>TCP / 443</strong>
+          </div>
+          <div class="connector-path" aria-hidden="true">
+            <span class="connector-start"></span>
+            <span class="connector-line"></span>
+            <span class="connector-end"></span>
+          </div>
+          <div class="route-copy route-copy-target">
+            <span>指定目标</span>
+            <strong>api.example.com</strong>
+          </div>
+          <p class="stage-note">一条规则，只对应一个协议、端口与目标。</p>
+        </div>
+
+        <div class="hero-band" aria-hidden="true">
+          <span>应用级连接</span>
+          <span>公网目标</span>
+          <span>独立规则</span>
+        </div>
+      </section>
+
+      <section class="customer-section" id="customers">
+        <div class="section-heading" data-reveal>
+          <h2>需要这条连接的人</h2>
+          <p>业务系统已经存在，只缺一条到指定公网服务的稳定连接。</p>
+        </div>
+
+        <div class="customer-composition">
+          <div class="customer-list" role="list" aria-label="适用客户">
+            <button class="customer-row is-active" type="button" data-customer="commerce" aria-pressed="true">
+              <span>跨境电商企业</span>
+              <small>店铺系统 · 订单接口</small>
+            </button>
+            <button class="customer-row" type="button" data-customer="saas" aria-pressed="false">
+              <span>ERP / SaaS 服务商</span>
+              <small>客户连接 · 公开 API</small>
+            </button>
+            <button class="customer-row" type="button" data-customer="warehouse" aria-pressed="false">
+              <span>海外仓与业务系统</span>
+              <small>仓储接口 · 公网服务</small>
+            </button>
+          </div>
+
+          <div class="customer-preview" aria-live="polite" data-preview>
+            <div class="preview-route" aria-hidden="true">
+              <span></span><i></i><b></b>
+            </div>
+            <p class="preview-title">访问海外公开 API</p>
+            <p class="preview-detail">境内业务系统通过指定端口，连接一个已确认的海外公网域名。</p>
+            <p class="preview-fit">适合：订单、库存、物流等公开接口</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="boundary-section" id="boundary">
+        <div class="boundary-statement" data-reveal>
+          <h2>公网到公网，边界要明确。</h2>
+          <p>
+            RelaDock 连接指定公网 IP 或域名、协议和端口。不接企业内网，不管理 ERP 账号，不分发 VPN
+            订阅，也不提供通用代理出口。
+          </p>
+        </div>
+        <dl class="boundary-list" data-reveal>
+          <div>
+            <dt>我们连接</dt>
+            <dd>指定公网 IP / 域名</dd>
+          </div>
+          <div>
+            <dt>我们识别</dt>
+            <dd>TCP / UDP + 端口</dd>
+          </div>
+          <div>
+            <dt>我们计量</dt>
+            <dd>每条规则独立用量</dd>
+          </div>
+          <div>
+            <dt>我们不处理</dt>
+            <dd>业务账号与数据内容</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="rule-section" aria-labelledby="rule-title">
+        <div class="rule-intro" data-reveal>
+          <h2 id="rule-title">一条规则，一套独立边界</h2>
+          <p>以下是产品状态的真实表达方式。示例数据仅说明字段，不代表生产性能或承诺。</p>
+        </div>
+
+        <div class="rule-fields">
+          <article class="rule-field field-route" data-ui data-reveal>
+            <h3>先固定目标</h3>
+            <div class="ui-fragment">
+              <p class="ui-caption">转发规则 · 示例</p>
+              <strong>api.example.com</strong>
+              <dl>
+                <div><dt>协议</dt><dd>TCP</dd></div>
+                <div><dt>端口</dt><dd>443</dd></div>
+              </dl>
+            </div>
+            <p>入口、协议、端口和目标必须明确。</p>
+          </article>
+
+          <article class="rule-field field-budget" data-ui data-reveal>
+            <h3>再设独立额度</h3>
+            <div class="ui-fragment">
+              <p class="ui-caption">规则额度 · 示例</p>
+              <strong>2.4 / 5 TB</strong>
+              <div class="usage-track" aria-label="示例流量使用 48%"><span></span></div>
+              <dl>
+                <div><dt>速率上限</dt><dd>300 Mbps</dd></div>
+              </dl>
+            </div>
+            <p>带宽和月流量按每条规则分别设置。</p>
+          </article>
+
+          <article class="rule-field field-delivery" data-ui data-reveal>
+            <h3>确认交付状态</h3>
+            <div class="ui-fragment">
+              <p class="ui-caption">配置状态 · 示例</p>
+              <strong class="status-chip">已应用</strong>
+              <dl>
+                <div><dt>期望修订</dt><dd>r104</dd></div>
+                <div><dt>节点确认</dt><dd>r104</dd></div>
+              </dl>
+            </div>
+            <p>只有节点确认后，才显示配置已应用。</p>
+          </article>
+
+          <article class="rule-field field-truth" data-ui data-reveal>
+            <h3>区分可达与健康</h3>
+            <div class="ui-fragment">
+              <p class="ui-caption">检查结果 · 示例</p>
+              <strong>目标 TCP 可达</strong>
+              <p class="ui-warning">端到端业务健康：未验证</p>
+            </div>
+            <p>端口可达不等于业务端到端正常。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="delivery-section" id="delivery">
+        <div class="section-heading" data-reveal>
+          <h2>从需求到可用规则</h2>
+          <p>先确认边界，再交付配置；不拿模糊的“加速”代替验收。</p>
+        </div>
+        <div class="delivery-flow">
+          <article data-reveal>
+            <h3>说清目标与业务窗口</h3>
+            <p>提供连接方向、公网目标、TCP / UDP、端口、预估流量、峰值速率和期望时间。</p>
+          </article>
+          <article data-reveal>
+            <h3>测清可达性与资源</h3>
+            <p>在开通前确认目标可达、端口资源和节点容量。没有测试，不做性能承诺。</p>
+          </article>
+          <article data-reveal>
+            <h3>交清规则与状态</h3>
+            <p>交付入口信息、独立额度与期限；持续记录用量、配置状态、告警和续费节点。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="scope-section" id="scope-check">
+        <div class="scope-copy" data-reveal>
+          <h2>先检查需求边界</h2>
+          <p>选择连接方式并填写目标。这个检查只判断产品范围，不代表目标已经可达或可以立即交付。</p>
+        </div>
+
+        <form class="scope-form" data-scope-form data-reveal>
+          <div class="form-grid">
+            <label>
+              <span>连接方向</span>
+              <select name="direction">
+                <option value="cn-to-global">中国大陆 → 海外</option>
+                <option value="global-to-cn">海外 → 中国大陆</option>
+              </select>
+            </label>
+            <label>
+              <span>目标类型</span>
+              <select name="targetType">
+                <option value="domain">公网域名</option>
+                <option value="ip">公网 IP</option>
+                <option value="internal">企业内网 / 私网地址</option>
+              </select>
+            </label>
+            <label class="field-wide">
+              <span>指定目标</span>
+              <input name="target" type="text" value="api.example.com" placeholder="api.example.com" autocomplete="off" required>
+            </label>
+            <label>
+              <span>协议</span>
+              <select name="protocol">
+                <option value="TCP">TCP</option>
+                <option value="UDP">UDP</option>
+              </select>
+            </label>
+            <label>
+              <span>端口</span>
+              <input name="port" type="number" min="1" max="65535" value="443" required>
+            </label>
+          </div>
+          <button class="button button-dark" type="submit">检查范围</button>
+        </form>
+
+        <div class="scope-result" data-scope-result aria-live="polite" hidden>
+          <div>
+            <strong data-result-title></strong>
+            <p data-result-detail></p>
+            <pre class="scope-summary" data-result-summary hidden></pre>
+          </div>
+          <div class="scope-result-actions">
+            <button class="button button-dark" type="button" data-copy-summary hidden>复制需求摘要</button>
+            <a class="button button-dark" data-console-link href="https://console.reladock.com/" hidden>开通企业账户</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="faq-section" id="faq">
+        <div class="faq-heading" data-reveal>
+          <h2>常见问题</h2>
+          <p>把适用和不适用先说清楚。</p>
+        </div>
+        <div class="faq-list" data-reveal>
+          <details name="faq">
+            <summary>什么情况真正需要 RelaDock？</summary>
+            <p>已有业务系统需要长期访问一个明确的跨境公网 API、服务器或端口，而且普通公网连接在稳定性、路径或运维上无法满足业务要求。</p>
+          </details>
+          <details name="faq">
+            <summary>可以连接企业内网 ERP 吗？</summary>
+            <p>不可以。当前服务只接指定公网 IP 或公网域名，不部署客户端 Connector，不做内网穿透、站点互联、路由或 ACL 管理。</p>
+          </details>
+          <details name="faq">
+            <summary>这是 SD-WAN 或企业组网吗？</summary>
+            <p>不是。当前产品是应用级公网连接。企业组网是后续独立产品，不与这条转发规则混在一起销售或交付。</p>
+          </details>
+          <details name="faq">
+            <summary>支持 VPN 或代理协议吗？</summary>
+            <p>可以透传客户自己的 TCP / UDP 业务流量，但 RelaDock 不终结协议、不管理终端账号或 UUID，也不代管订阅和消费者 VPN App。</p>
+          </details>
+          <details name="faq">
+            <summary>目标可达是否代表业务正常？</summary>
+            <p>不代表。目标端口可达、节点确认配置与端到端业务健康是不同状态；真实业务仍需客户结合应用层结果验收。</p>
+          </details>
+          <details name="faq">
+            <summary>多久可以交付？</summary>
+            <p>取决于方向、目标、协议、容量和测试窗口。范围明确的标准需求可更快评估；没有完成可达性与资源确认前，不承诺固定周期。</p>
+          </details>
+        </div>
+      </section>
+
+      <section class="closing-section">
+        <div class="closing-copy" data-reveal>
+          <h2>先判断，能不能接。</h2>
+          <p>邮件中写明方向、目标、协议、端口、预计月流量和峰值速率，我们会先确认范围与测试条件。</p>
+          <div class="closing-actions">
+            <a class="button button-primary" href="https://console.reladock.com/">开通企业账户</a>
+            <a class="text-link text-link-light" href="https://console.reladock.com/">已有账户，进入后台 <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <div class="closing-mark" aria-hidden="true">
+          <span></span><i></i><b></b>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-wordmark" aria-hidden="true">
+        <span>Rela</span><span>Dock</span>
+      </div>
+      <div class="footer-meta">
+        <p>指定公网应用的跨境连接。</p>
+        <nav aria-label="页脚导航">
+          <a href="#customers">适用场景</a>
+          <a href="#boundary">服务边界</a>
+          <a href="#delivery">交付方式</a>
+          <a href="#scope-check">检查需求</a>
+          <a href="https://console.reladock.com/">企业后台 ↗</a>
+        </nav>
+      </div>
+      <div class="footer-bottom">
+        <span>© <span data-year>2026</span> RelaDock</span>
+        <span>仅限合法企业业务用途</span>
+      </div>
+    </footer>
+  </body>
+</html>

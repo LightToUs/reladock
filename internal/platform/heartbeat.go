@@ -13,6 +13,7 @@ var agentVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+:-]{0,79
 type AgentHeartbeat struct {
 	// Negotiated via HTTP header so older strict JSON decoders keep accepting heartbeats.
 	CertificateRotationSupported bool                `json:"-"`
+	SourceFlowSupported          bool                `json:"-"`
 	Version                      string              `json:"version"`
 	Mode                         string              `json:"mode"`
 	StartedAt                    time.Time           `json:"startedAt"`
@@ -22,6 +23,7 @@ type AgentHeartbeat struct {
 	KernelBootID                 string              `json:"kernelBootId,omitempty"`
 	JournalSequence              int64               `json:"journalSequence,omitempty"`
 	Resources                    ResourceObservation `json:"resources"`
+	SourceFlows                  *SourceFlowStatus   `json:"sourceFlows,omitempty"`
 }
 
 type ResourceObservation struct {
@@ -78,6 +80,15 @@ func validateAgentHeartbeat(h AgentHeartbeat, now time.Time) error {
 	if err := validateResourceObservation(h.Resources, h.Mode, now); err != nil {
 		return err
 	}
+	if h.SourceFlows != nil {
+		s := h.SourceFlows
+		if h.Mode != "apply" || !h.SourceFlowSupported || s.NodeID == "" || (s.CollectorStatus != "normal" && s.CollectorStatus != "degraded" && s.CollectorStatus != "unavailable") || s.BacklogCount < 0 || s.WALBytesUsed < 0 || s.WALBytesLimit < 1 || s.WALBytesUsed > s.WALBytesLimit || s.DroppedTotal < 0 || !upgradeIDPattern.MatchString(s.CollectorEpoch) || s.CollectorSequence < 0 || s.ObservedAt.IsZero() || s.ObservedAt.After(now.Add(time.Minute)) || s.ObservedAt.Before(now.Add(-366*24*time.Hour)) || (s.BacklogCount == 0) != (s.OldestBacklogAt == nil) {
+			return ErrInvalid
+		}
+		if s.OldestBacklogAt != nil && s.OldestBacklogAt.After(s.ObservedAt) {
+			return ErrInvalid
+		}
+	}
 	switch h.RotationState {
 	case "idle", "pending":
 		if h.RotationErrorCode != "" {
@@ -118,7 +129,8 @@ agent_rotation_error_since=CASE WHEN $6='error' AND (agent_rotation_state<>'erro
 agent_rotation_state=$6,agent_rotation_error_code=$7
 		,agent_kernel_boot_id=NULLIF($8,'')::uuid,agent_journal_sequence=$9
 		,agent_certificate_rotation_supported=$10
-WHERE id=$1 AND agent_journal_sequence<=$9`, nodeID, heartbeat.Version, heartbeat.Mode, heartbeat.StartedAt, heartbeat.CertificateNotAfter, heartbeat.RotationState, heartbeat.RotationErrorCode, heartbeat.KernelBootID, heartbeat.JournalSequence, heartbeat.CertificateRotationSupported)
+		,agent_source_flow_supported=$11
+WHERE id=$1 AND agent_journal_sequence<=$9`, nodeID, heartbeat.Version, heartbeat.Mode, heartbeat.StartedAt, heartbeat.CertificateNotAfter, heartbeat.RotationState, heartbeat.RotationErrorCode, heartbeat.KernelBootID, heartbeat.JournalSequence, heartbeat.CertificateRotationSupported, heartbeat.SourceFlowSupported)
 	if err != nil {
 		return err
 	}
@@ -145,6 +157,24 @@ ON CONFLICT(node_id) DO UPDATE SET
  conntrack_high_since=CASE WHEN EXCLUDED.conntrack_percent>=80 THEN COALESCE(node_resource_latest.conntrack_high_since,EXCLUDED.received_at) END,
  clock_skew_since=CASE WHEN EXCLUDED.clock_skew_seconds>120 THEN COALESCE(node_resource_latest.clock_skew_since,EXCLUDED.received_at) END,
  dataplane_drift_since=CASE WHEN EXCLUDED.dataplane_state='drifted' THEN COALESCE(node_resource_latest.dataplane_drift_since,EXCLUDED.received_at) END`, nodeID, r.SampledAt, r.CPUPercent, r.MemoryPercent, r.DiskPercent, r.ConntrackPercent, r.DataplaneState)
+		if err != nil {
+			return err
+		}
+	}
+	if heartbeat.SourceFlows != nil {
+		observation := heartbeat.SourceFlows
+		if observation.NodeID != nodeID {
+			return ErrInvalid
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO node_source_flow_latest(node_id,collector_status,subscription_alive,backlog_count,oldest_backlog_at,wal_bytes_used,wal_bytes_limit,dropped_total,open_gap,collector_epoch,collector_sequence,observed_at,received_at,degraded_since,normal_since)
+VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,clock_timestamp(),CASE WHEN $2 IN ('degraded','unavailable') THEN clock_timestamp() END,CASE WHEN $2='normal' THEN clock_timestamp() END)
+ON CONFLICT(node_id) DO UPDATE SET
+ collector_status=CASE WHEN EXCLUDED.dropped_total>node_source_flow_latest.dropped_total THEN 'degraded' ELSE EXCLUDED.collector_status END,
+ subscription_alive=EXCLUDED.subscription_alive,backlog_count=EXCLUDED.backlog_count,oldest_backlog_at=EXCLUDED.oldest_backlog_at,
+ wal_bytes_used=EXCLUDED.wal_bytes_used,wal_bytes_limit=EXCLUDED.wal_bytes_limit,dropped_total=GREATEST(node_source_flow_latest.dropped_total,EXCLUDED.dropped_total),
+ open_gap=EXCLUDED.open_gap,collector_epoch=EXCLUDED.collector_epoch,collector_sequence=EXCLUDED.collector_sequence,observed_at=EXCLUDED.observed_at,received_at=EXCLUDED.received_at,
+ degraded_since=CASE WHEN (CASE WHEN EXCLUDED.dropped_total>node_source_flow_latest.dropped_total THEN 'degraded' ELSE EXCLUDED.collector_status END) IN ('degraded','unavailable') THEN COALESCE(node_source_flow_latest.degraded_since,EXCLUDED.received_at) END,
+ normal_since=CASE WHEN (CASE WHEN EXCLUDED.dropped_total>node_source_flow_latest.dropped_total THEN 'degraded' ELSE EXCLUDED.collector_status END)='normal' THEN COALESCE(node_source_flow_latest.normal_since,EXCLUDED.received_at) END`, nodeID, observation.CollectorStatus, observation.SubscriptionAlive, observation.BacklogCount, observation.OldestBacklogAt, observation.WALBytesUsed, observation.WALBytesLimit, observation.DroppedTotal, observation.OpenGap, observation.CollectorEpoch, observation.CollectorSequence, observation.ObservedAt)
 		if err != nil {
 			return err
 		}

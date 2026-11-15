@@ -12,6 +12,7 @@ import (
 	"reladock/internal/nodeauth"
 	"reladock/internal/platform"
 	"reladock/internal/probe"
+	"reladock/internal/sourceflow"
 )
 
 // Agent requests use a distinct mTLS-only listener, never a tenant cookie.
@@ -95,6 +96,7 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 				return
 			}
 			heartbeat.CertificateRotationSupported = r.Header.Get("X-RelaDock-Certificate-Rotation") == "1"
+			heartbeat.SourceFlowSupported = r.Header.Get("X-RelaDock-Source-Flow") == "1"
 			// Certificate expiry is observed from the verified TLS peer rather than
 			// accepted as an Agent claim.
 			if !heartbeat.CertificateNotAfter.Equal(cert.NotAfter) {
@@ -114,6 +116,19 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 				OK                            bool   `json:"ok"`
 				CertificateRenewalFingerprint string `json:"certificateRenewalFingerprint,omitempty"`
 			}{true, desired})
+			return
+		}
+		if r.URL.Path == "/agent/source-flows" {
+			var batch sourceflow.Batch
+			if !decodeLimit(w, r, &batch, 512*1024) {
+				return
+			}
+			receipt, ingestErr := store.IngestSourceFlows(ctx, id, batch)
+			if ingestErr != nil {
+				failure(w, ingestErr)
+				return
+			}
+			respond(w, http.StatusOK, receipt)
 			return
 		}
 		if r.URL.Path == "/agent/drain-status" {
@@ -295,7 +310,7 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 				return
 			}
 			var report platform.ConfigReport
-			if !decode(w, r, &report) {
+			if !decodeLimit(w, r, &report, 2*1024*1024) {
 				return
 			}
 			if suffix == "/begin" {

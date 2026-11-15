@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"reladock/internal/cloud/lightsail"
 	"strconv"
 	"strings"
 )
@@ -17,6 +18,8 @@ type Config struct {
 	MetricsAddress                     string
 	Bootstrap                          BootstrapConfig
 	ManagedPKIDir                      string
+	SourceFlowRetentionDays            int
+	Lightsail                          lightsail.Config
 }
 
 func Load(get func(string) string) (Config, error) {
@@ -26,7 +29,19 @@ func Load(get func(string) string) (Config, error) {
 		return Config{}, managedErr
 	}
 	c := Config{Address: get("LISTEN_ADDRESS"), Origin: get("PUBLIC_ORIGIN"), CertFile: get("TLS_CERT_FILE"), KeyFile: get("TLS_KEY_FILE"), AgentAddress: get("AGENT_LISTEN_ADDRESS"), AgentTLSDir: get("AGENT_TLS_DIR"), MetricsAddress: get("METRICS_LISTEN_ADDRESS")}
+	lightsailConfig, err := lightsail.ConfigFromEnv(get)
+	if err != nil {
+		return c, err
+	}
+	c.Lightsail = lightsailConfig
 	c.ManagedPKIDir = get("NODE_MANAGED_PKI_DIR")
+	if retention := get("SOURCE_FLOW_RETENTION_DAYS"); retention != "" {
+		days, parseErr := strconv.Atoi(retention)
+		if parseErr != nil || days < 30 || days > 365 || strconv.Itoa(days) != retention {
+			return c, errors.New("SOURCE_FLOW_RETENTION_DAYS must be an integer from 30 through 365")
+		}
+		c.SourceFlowRetentionDays = days
+	}
 	allowUnentitled, err := LoadDevelopmentEntitlementBypass(get)
 	if err != nil {
 		return c, err

@@ -192,7 +192,7 @@ func ReadbackVerifier(r Runner) Verifier {
 				chains[c.Name] = true
 				switch c.Name {
 				case "quarantine":
-					if p.Config.SchemaVersion != 2 || c.Type != "filter" || c.Hook != "prerouting" || c.Prio != -300 || c.Policy != "accept" {
+					if !allocationSchema(p.Config.SchemaVersion) || c.Type != "filter" || c.Hook != "prerouting" || c.Prio != -300 || c.Policy != "accept" {
 						return bad
 					}
 				case "prerouting":
@@ -226,7 +226,7 @@ func ReadbackVerifier(r Runner) Verifier {
 				if v.Rule.Family != "ip" || v.Rule.Table != Table {
 					return bad
 				}
-				if p.Config.SchemaVersion == 2 && (v.Rule.Chain == "quarantine" || v.Rule.Chain == "forward") {
+				if allocationSchema(p.Config.SchemaVersion) && (v.Rule.Chain == "quarantine" || v.Rule.Chain == "forward") {
 					expected := forwardGuards
 					quarantine := false
 					if v.Rule.Chain == "quarantine" {
@@ -255,13 +255,13 @@ func ReadbackVerifier(r Runner) Verifier {
 			}
 		}
 		expectedChains := 4
-		if p.Config.SchemaVersion == 2 {
+		if allocationSchema(p.Config.SchemaVersion) {
 			expectedChains = 5
 		}
 		if tableComment != owner || relayComment != planToken(p) || tables != 1 || len(chains) != expectedChains || len(counters) != len(p.Counters) {
 			return bad
 		}
-		if p.Config.SchemaVersion == 2 && (len(quarantineGuards) != 0 || len(forwardGuards) != 0) {
+		if allocationSchema(p.Config.SchemaVersion) && (len(quarantineGuards) != 0 || len(forwardGuards) != 0) {
 			return bad
 		}
 		for _, c := range p.Counters {
@@ -271,7 +271,7 @@ func ReadbackVerifier(r Runner) Verifier {
 		}
 		n := len(p.Counters) / 2
 		expectedRules := map[string]int{"prerouting": n, "postrouting": n, "forward": len(p.Allocations), "relay": 2*n + 1}
-		if p.Config.SchemaVersion == 2 {
+		if allocationSchema(p.Config.SchemaVersion) {
 			expectedRules["forward"] = len(p.ForwardGuards)
 			expectedRules["quarantine"] = len(p.Quarantines)
 		}

@@ -31,16 +31,23 @@ func ValidateConfig(nodeID string, job platform.ConfigJob) error {
 		return invalid
 	}
 	listen := net.ParseIP(cfg.ListenAddress)
-	if (cfg.SchemaVersion != 1 && cfg.SchemaVersion != 2) || cfg.NodeID != nodeID || cfg.Generation != job.Generation || cfg.Generation < 1 || listen == nil {
+	if (cfg.SchemaVersion != 1 && cfg.SchemaVersion != 2 && cfg.SchemaVersion != 3) || cfg.NodeID != nodeID || cfg.Generation != job.Generation || cfg.Generation < 1 || listen == nil {
 		return invalid
 	}
 	ids := map[string]bool{}
 	ports := map[string]map[int]bool{"tcp": {}, "udp": {}}
+	loggingRules := 0
 	for _, r := range cfg.Rules {
 		if !configIdentifier.MatchString(r.ID) || !configIdentifier.MatchString(r.TenantID) || ids[r.ID] || r.NodeID != nodeID || r.Version < 1 || (r.Status != "pending-agent" && r.Status != "paused") || r.TargetPort < 1 || r.TargetPort > 65535 || r.ListenPort < 20000 || r.ListenPort > 60000 || r.BandwidthMbps < 1 || r.BandwidthMbps > 1000 || len(r.TargetHost) > 253 || (net.ParseIP(r.TargetHost) == nil && !destination.MatchString(r.TargetHost)) {
 			return invalid
 		}
 		ids[r.ID] = true
+		if r.SourceLoggingEnabled {
+			loggingRules++
+			if cfg.SchemaVersion != 3 || r.Status != "pending-agent" {
+				return invalid
+			}
+		}
 		protocols := []string{r.Protocol}
 		if r.Protocol == "both" {
 			protocols = []string{"tcp", "udp"}
@@ -54,6 +61,9 @@ func ValidateConfig(nodeID string, job platform.ConfigJob) error {
 			}
 			ports[protocol][r.ListenPort] = true
 		}
+	}
+	if cfg.SchemaVersion == 3 && loggingRules == 0 {
+		return invalid
 	}
 	if cfg.SchemaVersion == 1 {
 		if len(cfg.Allocations) != 0 || len(cfg.Retirements) != 0 {

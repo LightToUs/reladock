@@ -15,6 +15,7 @@ import (
 
 	"reladock/internal/platform"
 	"reladock/internal/shaping"
+	"reladock/internal/sourceflow"
 )
 
 const Table = "reladock"
@@ -72,19 +73,21 @@ type Counter struct {
 // Plan freezes DNS answers. Script is diagnostic output, never accepted as an
 // application input; Apply compiles a NodeConfig itself.
 type Plan struct {
-	NodeID        string
-	Generation    int64
-	Incarnation   string
-	BuiltAt       time.Time
-	QuotaUsed     map[string]int64
-	SNATAddress   string
-	Config        platform.NodeConfig
-	Shaping       *shaping.Options
-	Script        string
-	Counters      []Counter
-	Allocations   []Allocation
-	Quarantines   []AllocationGuard
-	ForwardGuards []AllocationGuard
+	NodeID                   string
+	Generation               int64
+	Incarnation              string
+	BuiltAt                  time.Time
+	QuotaUsed                map[string]int64
+	SNATAddress              string
+	Config                   platform.NodeConfig
+	Shaping                  *shaping.Options
+	Script                   string
+	Counters                 []Counter
+	Allocations              []Allocation
+	Quarantines              []AllocationGuard
+	ForwardGuards            []AllocationGuard
+	SourceFlowManifest       *sourceflow.Manifest
+	SourceFlowManifestDigest string
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$`)
@@ -141,13 +144,15 @@ func protocols(p string) []string {
 	return []string{p}
 }
 
+func allocationSchema(version int) bool { return version == 2 || version == 3 }
+
 func guardTuple(address, protocol string, port int) string {
 	return fmt.Sprintf("%s/%s/%d", address, protocol, port)
 }
 
 func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, error) {
 	fail := func(msg string) (Plan, error) { return Plan{}, fmt.Errorf("invalid dataplane config: %s", msg) }
-	if (cfg.SchemaVersion != 1 && cfg.SchemaVersion != 2) || cfg.Generation < 1 || !identifier.MatchString(cfg.NodeID) || cfg.NodeID != o.NodeID {
+	if (cfg.SchemaVersion != 1 && !allocationSchema(cfg.SchemaVersion)) || cfg.Generation < 1 || !identifier.MatchString(cfg.NodeID) || cfg.NodeID != o.NodeID {
 		return fail("schema, generation or node identity")
 	}
 	listen, e := ipv4(cfg.ListenAddress)
@@ -165,6 +170,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 	ids := map[string]bool{}
 	ports := map[string]bool{}
 	ruleStatus := map[string]string{}
+	loggingRules := 0
 	for i := range cfg.Rules {
 		r := &cfg.Rules[i]
 		if !identifier.MatchString(r.ID) || !identifier.MatchString(r.TenantID) || ids[r.ID] || r.NodeID != cfg.NodeID || r.Version < 1 {
@@ -172,6 +178,12 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		}
 		ids[r.ID] = true
 		ruleStatus[r.ID] = r.Status
+		if r.SourceLoggingEnabled {
+			loggingRules++
+			if cfg.SchemaVersion != 3 || r.Status != "pending-agent" {
+				return fail("source logging schema or rule status")
+			}
+		}
 		if r.Status != "pending-agent" && r.Status != "paused" {
 			return fail("rule status")
 		}
@@ -207,6 +219,9 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 			return fail("target equals ingress or SNAT address")
 		}
 		r.TargetHost = ip
+	}
+	if cfg.SchemaVersion == 3 && loggingRules == 0 {
+		return fail("schema-v3 source logging absent")
 	}
 	sort.Slice(cfg.Rules, func(i, j int) bool { return cfg.Rules[i].ID < cfg.Rules[j].ID })
 	var forwardGuards, quarantines []AllocationGuard
@@ -349,6 +364,28 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		sort.Slice(cfg.Allocations, func(i, j int) bool { return cfg.Allocations[i].ID < cfg.Allocations[j].ID })
 		sort.Slice(cfg.Retirements, func(i, j int) bool { return cfg.Retirements[i].ID < cfg.Retirements[j].ID })
 	}
+	var sourceManifest *sourceflow.Manifest
+	var sourceManifestDigest string
+	if cfg.SchemaVersion == 3 {
+		rulesByID := make(map[string]platform.ConfigRule, len(cfg.Rules))
+		for _, rule := range cfg.Rules {
+			rulesByID[rule.ID] = rule
+		}
+		manifestRules := make([]sourceflow.AppliedRule, 0)
+		for _, allocation := range cfg.Allocations {
+			rule := rulesByID[allocation.RuleID]
+			if !rule.SourceLoggingEnabled {
+				continue
+			}
+			manifestRules = append(manifestRules, sourceflow.AppliedRule{AllocationID: allocation.ID, TenantID: rule.TenantID, RuleID: rule.ID, RuleVersion: rule.Version, SourceLoggingEnabled: true, Protocol: allocation.Protocol, RelayIP: allocation.Address, RelayPort: allocation.Port, TargetIP: rule.TargetHost, TargetPort: rule.TargetPort})
+		}
+		manifest, digest, err := sourceflow.NewManifest(cfg.NodeID, cfg.Generation, manifestRules)
+		if err != nil {
+			return fail("source-flow manifest")
+		}
+		sourceManifest = &manifest
+		sourceManifestDigest = digest
+	}
 	marks := map[string]string{}
 	if o.Shaping != nil {
 		sp, err := shaping.Compile(cfg, *o.Shaping)
@@ -364,7 +401,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 	}
 	sort.Slice(forwardGuards, func(i, j int) bool { return forwardGuards[i].ID < forwardGuards[j].ID })
 	sort.Slice(quarantines, func(i, j int) bool { return quarantines[i].ID < quarantines[j].ID })
-	p := Plan{NodeID: cfg.NodeID, Generation: cfg.Generation, Incarnation: o.incarnation, SNATAddress: snat.String(), Config: cfg, Shaping: o.Shaping, ForwardGuards: forwardGuards, Quarantines: quarantines}
+	p := Plan{NodeID: cfg.NodeID, Generation: cfg.Generation, Incarnation: o.incarnation, SNATAddress: snat.String(), Config: cfg, Shaping: o.Shaping, ForwardGuards: forwardGuards, Quarantines: quarantines, SourceFlowManifest: sourceManifest, SourceFlowManifestDigest: sourceManifestDigest}
 	allocations := map[Allocation]bool{}
 	for _, v := range o.retired {
 		if _, e := ipv4(v.Address); e != nil || v.Address != listen.String() || (v.Protocol != "tcp" && v.Protocol != "udp") || v.Port < 20000 || v.Port > 60000 {
@@ -377,7 +414,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 			allocations[Allocation{listen.String(), proto, r.ListenPort}] = true
 		}
 	}
-	if cfg.SchemaVersion == 2 {
+	if allocationSchema(cfg.SchemaVersion) {
 		for _, v := range p.ForwardGuards {
 			allocations[Allocation{v.Address, v.Protocol, v.Port}] = true
 		}
@@ -501,7 +538,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 	// add is idempotent, delete + recreate is in the same nft transaction. Only
 	// this table is replaced, including named counters and all chain objects.
 	quarantineChain := ""
-	if cfg.SchemaVersion == 2 {
+	if allocationSchema(cfg.SchemaVersion) {
 		quarantineChain = fmt.Sprintf(" chain quarantine {\n  type filter hook prerouting priority raw; policy accept;\n%s }\n", quarantineRules.String())
 	}
 	p.Script = fmt.Sprintf("add table ip %s\ndelete table ip %s\ntable ip %s {\n comment \"%s\"\n%s%s chain prerouting {\n  type nat hook prerouting priority dstnat; policy accept;\n%s }\n chain postrouting {\n  type nat hook postrouting priority srcnat; policy accept;\n%s }\n chain forward {\n  type filter hook forward priority filter; policy accept;\n%s }\n chain relay {\n%s  drop\n }\n}\n", Table, Table, Table, owner, definitions.String(), quarantineChain, nat.String(), snatRules.String(), guards.String(), forward.String())

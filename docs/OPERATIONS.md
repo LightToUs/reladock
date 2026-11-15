@@ -2,6 +2,8 @@
 
 This subsystem persists control-channel incidents and support conversations. It does not turn target probes into forwarding health, send email, or measure revenue, costs, or profit. A recent Agent contact or validated configuration never establishes data-plane health.
 
+`source-flow-collector-degraded` 与节点联系告警分离：新 drop/open gap 立即显示退化，订阅失活、WAL 达到 80% 或最老积压超过 90 秒同样退化；连续两分钟才打开事件，连续正常两分钟才解除。安静但订阅存活、无客户新连接的采集器是 normal。该事件表示来源记录可能不完整，不表示转发或计费失败；无事件也不能证明时间段完整。
+
 ## Prometheus operational metrics
 
 Set `METRICS_LISTEN_ADDRESS=127.0.0.1:9090` to enable a separate loopback-only listener. The value must be a literal loopback IP with a non-zero port and must differ from the browser and Agent listeners. Only `GET /metrics` and `HEAD /metrics` exist; connect Prometheus or a local collector directly rather than publishing this listener through the customer-facing reverse proxy.
@@ -9,6 +11,15 @@ Set `METRICS_LISTEN_ADDRESS=127.0.0.1:9090` to enable a separate loopback-only l
 The endpoint exports aggregate, low-cardinality facts: database availability, node lifecycle, authenticated Agent contact recency, latest bounded node-resource state, rule state, current desired-generation delivery state, open incident kind, notification state, Agent upgrade state, endpoint retirement state, frozen-wallet count, and fixed worker success/error counters. `reladock_node_resources{state=...}` has only `normal`, `pressure`, `drifted`, `unknown`, and `stale`; it is not a per-node series and is not end-to-end health. The endpoint never emits tenant, node, rule, target, IP, certificate, email, token, raw error or protocol payload labels. A PostgreSQL failure emits `reladock_database_up 0` in a valid body and increments `reladock_metrics_scrape_errors_total`; it does not return a cached success snapshot.
 
 Conservative alerts include `reladock_database_up == 0`, any increase in worker errors, stale Agent contacts, failed current deliveries, open incidents, exhausted notifications, failed/rolled-back upgrades and failed retirement jobs. Alerting on `applied`, `recent` or target reachability as “service healthy” is incorrect. Production thresholds, Prometheus retention, Grafana dashboards and alert routing still require environment acceptance.
+
+`reladock_worker_runs_total{worker="lightsail-lifecycle",result=...}` 只统计固定 success/error 结果，不包含 AWS 账户、区域、实例、IP 或任务标签。错误增长表示生命周期轮询需要调查，不表示某个实例一定失败，也不表示转发健康。
+
+## Lightsail 人工介入
+
+- 创建长时间停在 provider 阶段：先查看 AWS 控制台中确定名称的实例/静态 IP 与 `reladock-managed=true`、`reladock-id=<本地 UUID>` 标签，不要另建同名资源；恢复 provider 可达性后让租约 worker 协调。
+- 部署结果为 `unknown`：脚本已经跨越最多一次边界，正文已清除。不要改数据库、重新入队或复制原脚本重跑；先通过受控方式检查主机实际副作用，再决定保留或在关机后销毁。
+- `manual-review` 或销毁归属不一致：保持实例和静态 IP 原状，核对名称、标签、ARN 与 attachment。系统没有强制销毁路径；若需在 AWS 控制台人工处理，先记录平台与 AWS 证据并明确授权。
+- 关机只停止实例，静态 IP 保留。销毁必须从 stopped 开始并精确输入 AWS 实例名；完成状态仍只代表云资源生命周期，不代表 RelaDock 节点退役、端口回收或数据面健康。
 
 ## Parent integration
 

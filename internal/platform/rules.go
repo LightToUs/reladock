@@ -34,13 +34,23 @@ type RuleUpdateInput struct {
 type Rule struct {
 	ID string `json:"id"`
 	RuleInput
-	ListenPort     int       `json:"listenPort"`
-	Status         string    `json:"status"`
-	DesiredVersion int64     `json:"desiredVersion"`
-	AppliedVersion int64     `json:"appliedVersion"`
-	AppliedStatus  string    `json:"appliedStatus"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	ListenPort                     int       `json:"listenPort"`
+	Status                         string    `json:"status"`
+	DesiredVersion                 int64     `json:"desiredVersion"`
+	AppliedVersion                 int64     `json:"appliedVersion"`
+	AppliedStatus                  string    `json:"appliedStatus"`
+	SourceLoggingEnabled           bool      `json:"sourceLoggingEnabled"`
+	SourceLoggingAppliedEnabled    bool      `json:"sourceLoggingAppliedEnabled"`
+	SourceLoggingAppliedVersion    int64     `json:"sourceLoggingAppliedVersion"`
+	SourceLoggingAppliedGeneration int64     `json:"sourceLoggingAppliedGeneration"`
+	SourceLoggingSupported         bool      `json:"sourceLoggingSupported"`
+	SourceLoggingAgentMode         string    `json:"sourceLoggingAgentMode"`
+	SourceLoggingHeartbeatFresh    bool      `json:"sourceLoggingHeartbeatFresh"`
+	SourceLoggingStatusFresh       bool      `json:"sourceLoggingStatusFresh"`
+	SourceLoggingCollectorStatus   string    `json:"sourceLoggingCollectorStatus"`
+	SourceLoggingUnsupported       bool      `json:"sourceLoggingUnsupported"`
+	CreatedAt                      time.Time `json:"createdAt"`
+	UpdatedAt                      time.Time `json:"updatedAt"`
 }
 type AuditLog struct {
 	ID         int64     `json:"id"`
@@ -74,11 +84,11 @@ func validateRule(input RuleInput) (RuleInput, error) {
 	return input, nil
 }
 
-const ruleColumns = "id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,status,desired_version,applied_version,created_at,updated_at,applied_status"
+const ruleColumns = "id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,status,desired_version,applied_version,created_at,updated_at,applied_status,source_logging_enabled,source_logging_applied_enabled,source_logging_applied_version,source_logging_applied_generation"
 
 func scanRule(row pgx.Row) (Rule, error) {
 	var r Rule
-	err := row.Scan(&r.ID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.Status, &r.DesiredVersion, &r.AppliedVersion, &r.CreatedAt, &r.UpdatedAt, &r.AppliedStatus)
+	err := row.Scan(&r.ID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.Status, &r.DesiredVersion, &r.AppliedVersion, &r.CreatedAt, &r.UpdatedAt, &r.AppliedStatus, &r.SourceLoggingEnabled, &r.SourceLoggingAppliedEnabled, &r.SourceLoggingAppliedVersion, &r.SourceLoggingAppliedGeneration)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -270,17 +280,26 @@ func checkNodeAdmission(ctx context.Context, tx pgx.Tx, nodeID, tenantID string)
 }
 
 func (s *Store) ListRules(ctx context.Context, who Identity) ([]Rule, error) {
-	rows, err := s.pool.Query(ctx, "SELECT "+ruleColumns+" FROM relay_rules WHERE tenant_id=$1 AND status<>'deleted' ORDER BY created_at DESC,id", who.TenantID)
+	columns := []string{}
+	for _, column := range strings.Split(ruleColumns, ",") {
+		columns = append(columns, "r."+column)
+	}
+	rows, err := s.pool.Query(ctx, `SELECT `+strings.Join(columns, ",")+`,n.agent_source_flow_supported,n.agent_mode,
+COALESCE(n.agent_heartbeat_at>=$2,false),COALESCE(sf.received_at>=$2,false),
+CASE WHEN sf.received_at>=$2 THEN sf.collector_status ELSE 'unavailable' END
+FROM relay_rules r JOIN nodes n ON n.id=r.node_id LEFT JOIN node_source_flow_latest sf ON sf.node_id=r.node_id
+WHERE r.tenant_id=$1 AND r.status<>'deleted' ORDER BY r.created_at DESC,r.id`, who.TenantID, time.Now().UTC().Add(-AgentHeartbeatStaleAfter))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	rules := []Rule{}
 	for rows.Next() {
-		r, err := scanRule(rows)
-		if err != nil {
+		var r Rule
+		if err = rows.Scan(&r.ID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.Status, &r.DesiredVersion, &r.AppliedVersion, &r.CreatedAt, &r.UpdatedAt, &r.AppliedStatus, &r.SourceLoggingEnabled, &r.SourceLoggingAppliedEnabled, &r.SourceLoggingAppliedVersion, &r.SourceLoggingAppliedGeneration, &r.SourceLoggingSupported, &r.SourceLoggingAgentMode, &r.SourceLoggingHeartbeatFresh, &r.SourceLoggingStatusFresh, &r.SourceLoggingCollectorStatus); err != nil {
 			return nil, err
 		}
+		r.SourceLoggingUnsupported = !r.SourceLoggingSupported || r.SourceLoggingAgentMode != "apply" || !r.SourceLoggingHeartbeatFresh
 		rules = append(rules, r)
 	}
 	return rules, rows.Err()

@@ -57,6 +57,37 @@ func TestAgentHeartbeatPersistsOnlyAfterExactCredentialCheck(t *testing.T) {
 	}
 }
 
+func TestSourceFlowCapabilityUsesOnlyAuthenticatedLatestHeartbeat(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	fingerprint := strings.Repeat("c", 64)
+	if err := s.EnrollNode(ctx, "hk-01", fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := validAgentHeartbeat(time.Now().UTC())
+	heartbeat.SourceFlowSupported = true
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", strings.Repeat("d", 64), heartbeat); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("wrong credential capability: %v", err)
+	}
+	var supported bool
+	if err := s.pool.QueryRow(ctx, `SELECT agent_source_flow_supported FROM nodes WHERE id='hk-01'`).Scan(&supported); err != nil || supported {
+		t.Fatalf("unauthorized capability persisted=%v err=%v", supported, err)
+	}
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT agent_source_flow_supported FROM nodes WHERE id='hk-01'`).Scan(&supported); err != nil || !supported {
+		t.Fatalf("authenticated capability persisted=%v err=%v", supported, err)
+	}
+	heartbeat.SourceFlowSupported = false
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT agent_source_flow_supported FROM nodes WHERE id='hk-01'`).Scan(&supported); err != nil || supported {
+		t.Fatalf("latest heartbeat did not clear capability=%v err=%v", supported, err)
+	}
+}
+
 func TestAgentHeartbeatCannotReduceJournalSequence(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

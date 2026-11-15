@@ -3,11 +3,12 @@ import { createRuleEditor } from './rule-editor.js';
 import { workspaceSummary, ruleStatusPresentation } from './workspace-summary.js';
 import { createLatestRequestGate, loadWorkspaceData, telemetryInteractionState, telemetryPresentation, trendBars, formatBytes } from './telemetry.js';
 import { resourcePresentation } from './node-contact-status.js';
-import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation } from './node-monitoring.js';
+import { createAdaptivePoller, formatEntryAddress, loadAllOperationNodes, nodeMonitoringPresentation } from './node-monitoring.js';
 import { bindAccountTools,refreshAccountTools,clearCredential } from './account-tools.js';
 import { bindBusinessTools,businessViewChanged,refreshBusinessTools,resetBusinessTools } from './business-tools.js';
 import { bindOperations } from './operations-tools.js';
 import { bindConsoleNavigation } from './console-navigation.js';
+import { sourceLoggingPresentation } from './source-flow-logging.js';
 import { bindAccountMenu } from './account-menu.js';
 import { createLogoutGuard, bindPasswordVisibility } from './auth-session.js';
 const $ = selector => document.querySelector(selector);
@@ -171,7 +172,7 @@ function renderEnterpriseNodeMonitoring(items, { error = '', refreshedAt = new D
   for (const node of items) {
     const view = nodeMonitoringPresentation(node, refreshedAt);
     const row = root.insertRow(); row.dataset.nodeId = node.id;
-    const identityCell = row.insertCell(); appendNodeFact(identityCell, node.name, node.id);
+    const identityCell = row.insertCell(); appendNodeFact(identityCell, node.name, `${node.id} · ${formatEntryAddress(node.publicAddress)}`);
     const stateCell = row.insertCell();
     const badge = document.createElement('span'); badge.className = `badge badge-${view.contact.tone}`; badge.textContent = view.contact.label;
     const plane = document.createElement('small'); plane.textContent = `配置：${view.dataPlane.state}`; plane.title = view.dataPlane.detail; stateCell.append(badge, plane);
@@ -336,6 +337,7 @@ async function refresh() {
   const editable = ['owner', 'admin'].includes(identity.role); $('#rule-create').disabled = !editable;
   const nodeRoot = $('#nodes'); nodeRoot.replaceChildren();
   const selector = $('#node-select'); const selected = selector.value; selector.replaceChildren();
+  const nodesByID = new Map(data.nodes.map(node => [node.id, node]));
   let unboundPackages = [];
   try { unboundPackages = await api('/api/subscriptions?unbound=true'); }
   catch (error) { $('#refresh-message').textContent = `待绑定套餐加载失败：${error.message}`; }
@@ -344,14 +346,16 @@ async function refresh() {
     item.value = period.id;
     item.dataset.nodeId = period.plan.offering?.nodeId || '';
     item.dataset.bandwidth = String(period.plan.bandwidthMbps || 0);
-    item.textContent = `${item.dataset.nodeId || '未知节点'} · ${period.plan.name} · ${(period.plan.quotaBytes / 1e9).toLocaleString()} GB · ${period.plan.bandwidthMbps} Mbps`;
+    const packageNode = nodesByID.get(item.dataset.nodeId);
+    item.textContent = `${item.dataset.nodeId || '未知节点'} · ${formatEntryAddress(packageNode?.publicAddress)} · ${period.plan.name} · ${(period.plan.quotaBytes / 1e9).toLocaleString()} GB · ${period.plan.bandwidthMbps} Mbps`;
     selector.append(item);
   }
   for (const node of data.nodes) {
     const label = node.status === 'maintenance' ? '维护中' : node.appliedGeneration > 0 ? '已有应用确认 · 健康未知' : '尚未部署';
     const row = nodeRoot.insertRow();
     const delivery = node.deliveryState === 'failed' && node.deliveryAttempts >= 5 ? '重试已耗尽 · 待运维处理' : deliveryStates[node.deliveryState] || '未知';
-    for (const value of [node.name, node.region, label, `${node.desiredGeneration} / ${node.validatedGeneration} / ${node.appliedGeneration}`, delivery, node.lastSeenAt ? `${new Date(node.lastSeenAt).toLocaleString()}（控制通道）` : '尚无联系记录']) cell(row, value);
+    const identityCell = row.insertCell(); appendNodeFact(identityCell, node.name, `${node.id} · ${formatEntryAddress(node.publicAddress)}`);
+    for (const value of [node.region, label, `${node.desiredGeneration} / ${node.validatedGeneration} / ${node.appliedGeneration}`, delivery, node.lastSeenAt ? `${new Date(node.lastSeenAt).toLocaleString()}（控制通道）` : '尚无联系记录']) cell(row, value);
   }
   if ([...selector.options].some(option => option.value === selected && !option.disabled)) selector.value = selected;
   else { const available = [...selector.options].find(option => !option.disabled); selector.value = available?.value || ''; }
@@ -362,7 +366,8 @@ async function refresh() {
   if (!data.rules.length) { const c = root.insertRow().insertCell(); c.colSpan = 10; c.className = 'table-empty'; c.textContent = '暂无规则，请填写客户的目标服务器。'; }
   for (const rule of data.rules) {
     const row = root.insertRow(); const target = rule.targetHost.includes(':') ? `[${rule.targetHost}]:${rule.targetPort}` : `${rule.targetHost}:${rule.targetPort}`;
-    for (const value of [`${rule.name} / ${rule.nodeId}`, rule.listenPort, rule.protocol.toUpperCase(), target,`${rule.bandwidthMbps} Mbps`]) cell(row, value);
+    const identityCell = row.insertCell(); appendNodeFact(identityCell, rule.name, `${rule.nodeId} · ${formatEntryAddress(nodesByID.get(rule.nodeId)?.publicAddress, rule.listenPort)}`);
+    for (const value of [rule.listenPort, rule.protocol.toUpperCase(), target,`${rule.bandwidthMbps} Mbps`]) cell(row, value);
     const telemetryView = workspace.telemetryAvailable
       ? telemetryPresentation(telemetry.find(item => item.ruleId === rule.id))
       : { total: '遥测不可用', upload: '未知', download: '未知', rate: '未知', rateDetail: '本次加载失败，不表示没有流量。' };
@@ -374,6 +379,7 @@ async function refresh() {
     const statusCell = row.insertCell();
     const badge = document.createElement('span'); badge.className = `badge badge-${presentation.tone}`; badge.textContent = presentation.label; statusCell.append(badge);
     const detail = document.createElement('small'); detail.className = 'status-detail'; detail.textContent = presentation.detail; statusCell.append(detail);
+    const sourceLogging = document.createElement('small'); sourceLogging.className = 'status-detail'; sourceLogging.textContent = sourceLoggingPresentation(rule).label; statusCell.append(sourceLogging);
     const probeButton = document.createElement('button'); probeButton.className = 'secondary'; probeButton.textContent = '目标可达性';
     probeButton.addEventListener('click', async () => {
       probeButton.disabled = true;

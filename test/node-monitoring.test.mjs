@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation } from '../public/node-monitoring.js';
+import * as nodeMonitoring from '../public/node-monitoring.js';
+
+const { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation } = nodeMonitoring;
+
+test('entry address formats IPv4 and IPv6 endpoints and keeps missing addresses pending', () => {
+  assert.equal(typeof nodeMonitoring.formatEntryAddress, 'function');
+  assert.equal(nodeMonitoring.formatEntryAddress('203.0.113.20'), '203.0.113.20');
+  assert.equal(nodeMonitoring.formatEntryAddress('203.0.113.20', 20003), '203.0.113.20:20003');
+  assert.equal(nodeMonitoring.formatEntryAddress('2001:db8::20', 20003), '[2001:db8::20]:20003');
+  assert.equal(nodeMonitoring.formatEntryAddress('', 20003), '入口地址待交付');
+});
 
 test('node monitoring presents fresh traffic, resources and Agent runtime independently', () => {
   const now = new Date('2026-11-01T12:00:00Z');

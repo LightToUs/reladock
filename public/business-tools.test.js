@@ -52,6 +52,19 @@ test('finance actions report into the visible finance status region', () => {
   assert.equal(business.businessStatusSelector('finance'), '#finance-message');
 });
 
+test('wallet top-up accepts USD input and converts it to integer cents exactly', () => {
+  assert.equal(typeof business.usdInputToCents, 'function');
+  for (const [input, cents] of [['0.50', 50], ['5', 500], ['10.01', 1001], ['10000.00', 1000000]]) {
+    assert.equal(business.usdInputToCents(input), cents);
+  }
+  for (const input of ['', '0.49', '1.001', '1e2', '-1', '10000.01']) {
+    assert.throws(() => business.usdInputToCents(input), /USD/);
+  }
+  assert.equal(business.signedUsd(500), '+$5.00');
+  assert.equal(business.signedUsd(-125), '-$1.25');
+  assert.equal(business.signedUsd(0), '$0.00');
+});
+
 test('purchase cards expose route, independent limits, period, and USD price', () => {
   assert.equal(typeof business.planPurchaseCard, 'function');
   assert.deepEqual(business.planPurchaseCard(plan), {
@@ -105,22 +118,40 @@ test('payment page offers balance purchase and only enables a configured externa
   assert.deepEqual(business.paymentCheckoutPresentation(selection, { initialized: true, balanceCents: 2500, spendingFrozen: false }, { enabled: false }), {
     amount: '$19.99',
     balance: '$25.00',
+    walletContribution: '$19.99',
     balanceAfter: '$5.01',
+    externalAmount: '$0.00',
+    externalAmountCents: 0,
+    externalRemainder: '$0.00',
     balanceEnabled: true,
     balanceDetail: '支付后钱包余额 $5.01',
     externalEnabled: false,
-    externalDetail: '尚未启用其他支付方式。',
+    externalDetail: '钱包余额足够，可直接完成购买。',
   });
 
   assert.deepEqual(business.paymentCheckoutPresentation(selection, { initialized: true, balanceCents: 500, spendingFrozen: false }, { enabled: true }), {
     amount: '$19.99',
     balance: '$5.00',
+    walletContribution: '$5.00',
     balanceAfter: '$0.00',
+    externalAmount: '$14.99',
+    externalAmountCents: 1499,
+    externalRemainder: '$0.00',
     balanceEnabled: false,
     balanceDetail: '余额不足，还差 $14.99',
     externalEnabled: true,
-    externalDetail: '前往 Stripe 完成充值；只有验签回调到账后才能使用余额购买套餐。',
+    externalDetail: '将使用钱包 $5.00，Stripe 支付 $14.99；验签到账后自动购买套餐。',
   });
+});
+
+test('direct checkout explains Stripe minimum-charge excess retained in wallet', () => {
+  const selection = business.purchaseDialogSelection(plan);
+  const view = business.paymentCheckoutPresentation(selection, { initialized: true, balanceCents: 1998, spendingFrozen: false }, { enabled: true });
+  assert.equal(view.walletContribution, '$19.98');
+  assert.equal(view.externalAmount, '$0.50');
+  assert.equal(view.externalRemainder, '$0.49');
+  assert.equal(view.externalEnabled, true);
+  assert.equal(view.externalDetail, 'Stripe 最低支付 $0.50，其中 $0.01 补足套餐，剩余 $0.49 留在钱包。');
 });
 
 test('payment page blocks every payment method while wallet spending is frozen', () => {
@@ -131,6 +162,97 @@ test('payment page blocks every payment method while wallet spending is frozen',
   assert.equal(view.externalEnabled, false);
   assert.equal(view.balanceDetail, '钱包支出已冻结，请联系平台完成对账。');
   assert.equal(view.externalDetail, '钱包支出已冻结，不能发起新的支付。');
+});
+
+test('TRON invoice renders exact network, address, amount and truthful server state', () => {
+  assert.equal(typeof business.tronInvoicePresentation, 'function');
+  const base = {
+    id: 'order-1', network: 'TRON', asset: 'USDT', amountBaseUnits: 19990000,
+    collectionAddress: 'TU4x4apSvfu1NLx6ee11rM5PjtVCBbWssw', state: 'pending', purchaseState: 'pending',
+		expiresAt: '2026-11-12T13:30:00.000Z', serverTime: '2026-11-12T13:00:00.000Z',
+  };
+  assert.deepEqual(business.tronInvoicePresentation(base), {
+    id: 'order-1', network: 'TRON (TRC-20)', asset: 'USDT', amount: '19.990000 USDT',
+    amountValue: '19.990000', address: 'TU4x4apSvfu1NLx6ee11rM5PjtVCBbWssw', canClaim: true,
+		qrPath: '/api/payments/tron/orders/order-1/qr',
+    headline: '等待付款', success: false,
+    status: '等待链上转账；固化后将自动识别并入账。', terminal: false,
+  });
+  assert.equal(business.tronInvoicePresentation({ ...base, state: 'confirming' }).status, '交易已提交，正在等待 TRON 固化确认。');
+  assert.equal(business.tronInvoicePresentation({ ...base, state: 'needs-review' }).status, '交易需要人工核对，钱包尚未入账。');
+  assert.equal(business.tronInvoicePresentation({ ...base, state: 'credited', purchaseState: 'failed' }).status, '充值已入账；套餐购买未完成，金额保留在钱包。');
+  const credited = business.tronInvoicePresentation({ ...base, state: 'credited', purchaseState: 'purchased' });
+  assert.equal(credited.status, '充值已入账，套餐购买完成。');
+  assert.equal(credited.headline, '充值成功');
+  assert.equal(credited.success, true);
+});
+
+test('TRON status polling stops after the server confirms wallet credit', async () => {
+  assert.equal(typeof business.createTronStatusPoller, 'function');
+  const scheduled = [];
+  const observed = [];
+  const responses = [
+    { id: 'order-1', state: 'confirming' },
+    { id: 'order-1', state: 'credited', amountBaseUnits: 19990000 },
+  ];
+  const poller = business.createTronStatusPoller({
+    load: async () => responses.shift(),
+    onOrder: async order => observed.push(order.state),
+    schedule: callback => { scheduled.push(callback); return callback; },
+    cancel: () => {},
+    delay: 5000,
+  });
+  poller.start({ id: 'order-1', state: 'pending' });
+  assert.equal(scheduled.length, 1);
+  await scheduled.shift()();
+  assert.deepEqual(observed, ['confirming']);
+  assert.equal(scheduled.length, 1);
+  await scheduled.shift()();
+  assert.deepEqual(observed, ['confirming', 'credited']);
+  assert.equal(scheduled.length, 0);
+});
+
+test('closing TRON payment invalidates an in-flight status response', async () => {
+  let scheduled;
+  let resolveLoad;
+  const observed = [];
+  const poller = business.createTronStatusPoller({
+    load: () => new Promise(resolve => { resolveLoad = resolve; }),
+    onOrder: order => observed.push(order.state),
+    schedule: callback => { scheduled = callback; return callback; },
+    cancel: () => {},
+  });
+  poller.start({ id: 'order-1', state: 'pending' });
+  const pending = scheduled();
+  poller.stop();
+  resolveLoad({ id: 'order-1', state: 'credited' });
+  await pending;
+  assert.deepEqual(observed, []);
+});
+
+test('TRON countdown uses server time, clamps at zero and disables new payment', () => {
+	assert.equal(typeof business.tronExpiryPresentation, 'function');
+	const order = { state: 'pending', expiresAt: '2026-11-12T13:30:00.000Z', serverTime: '2026-11-12T13:00:00.000Z' };
+	assert.deepEqual(business.tronExpiryPresentation(order, 0), { label: '30:00', seconds: 1800, expired: false, qrEnabled: true, copyEnabled: true });
+	assert.deepEqual(business.tronExpiryPresentation(order, 1000), { label: '29:59', seconds: 1799, expired: false, qrEnabled: true, copyEnabled: true });
+	assert.deepEqual(business.tronExpiryPresentation(order, 1800500), { label: '00:00', seconds: 0, expired: true, qrEnabled: false, copyEnabled: false });
+	assert.deepEqual(business.tronExpiryPresentation({ ...order, state: 'credited' }, 0), { label: '30:00', seconds: 1800, expired: false, qrEnabled: false, copyEnabled: false });
+});
+
+test('TRON requests are fenced across close, logout and tenant changes', () => {
+  const gate = business.createTronRequestGate();
+  gate.setTenant('tenant-a');
+  const tenantA = gate.begin();
+  assert.equal(gate.isCurrent(tenantA), true);
+  gate.invalidate();
+  assert.equal(gate.isCurrent(tenantA), false);
+  const closed = gate.begin();
+  gate.setTenant('tenant-b');
+  assert.equal(gate.isCurrent(closed), false);
+  const tenantB = gate.begin();
+  assert.equal(gate.isCurrent(tenantB), true);
+  gate.reset();
+  assert.equal(gate.isCurrent(tenantB), false);
 });
 
 test('checkout preparation refreshes payment availability and reports a refresh failure without blocking', async () => {
@@ -152,7 +274,7 @@ test('authorized customers can inspect checkout even when wallet spending is fro
   assert.equal(business.canOpenPackageCheckout({ role: 'admin' }, [], { spendingFrozen: false }), true);
 });
 
-test('external payment uses the exact package price and keeps one idempotency key on retry', async () => {
+test('external payment submits the selected package and keeps one idempotency key on retry', async () => {
   assert.equal(typeof business.createExternalCheckoutSession, 'function');
   const calls = [];
   let attempts = 0;
@@ -170,8 +292,8 @@ test('external payment uses the exact package price and keeps one idempotency ke
   await assert.rejects(() => checkout.submit(selection), /result unknown/);
   assert.deepEqual(await checkout.submit(selection), { checkoutUrl: 'https://checkout.stripe.com/c/pay/test' });
   assert.deepEqual(calls, [
-    { body: { amountCents: 1999 }, key: 'external-key-1' },
-    { body: { amountCents: 1999 }, key: 'external-key-1' },
+    { body: { ruleId: 'rule-01', priceVersionId: 'plan-hk-1000' }, key: 'external-key-1' },
+    { body: { ruleId: 'rule-01', priceVersionId: 'plan-hk-1000' }, key: 'external-key-1' },
   ]);
 });
 
@@ -223,6 +345,59 @@ test('external payment marks a response stale after checkout navigation is inval
   request.resolve({ checkoutUrl: 'https://checkout.stripe.com/c/pay/stale' });
   assert.deepEqual(await pending, { stale: true });
   assert.equal(checkout.isSubmitting(), false);
+});
+
+test('external checkout reconciles exact and recent tenant orders without trusting return parameters', async () => {
+  assert.equal(typeof business.planPaymentOrderPresentation, 'function');
+  assert.deepEqual(business.planPaymentOrderPresentation({ state: 'pending', purchaseState: 'pending' }), {
+    complete: false,
+    clear: false,
+    message: '支付处理中，请等待 Stripe 验签回调。',
+  });
+  assert.match(business.planPaymentOrderPresentation({ state: 'credited', purchaseState: 'failed', purchaseError: 'unavailable' }).message, /已留在企业钱包/);
+  assert.equal(business.planPaymentOrderPresentation({ state: 'credited', purchaseState: 'purchased', subscriptionId: 'sub-1' }).complete, true);
+  assert.match(business.planPaymentOrderPresentation({ state: 'needs-review', purchaseState: 'pending' }).message, /人工对账/);
+  const purchasedReview = business.planPaymentOrderPresentation({ state: 'needs-review', purchaseState: 'purchased', subscriptionId: 'sub-1' });
+  assert.equal(purchasedReview.complete, false);
+  assert.equal(purchasedReview.clear, false);
+  assert.match(purchasedReview.message, /套餐仍已购买/);
+  assert.match(purchasedReview.message, /人工对账/);
+  assert.match(business.planPaymentOrderPresentation({ state: 'expired', purchaseState: 'failed', purchaseError: 'payment-expired' }).message, /已过期/);
+
+  const storage = memoryStorage();
+  const selection = business.purchaseDialogSelection(plan);
+  const checkout = business.createExternalCheckoutSession({
+    createKey: () => 'reconcile-key',
+    submit: async () => ({ id: 'order-local', checkoutUrl: 'https://checkout.stripe.com/c/pay/test' }),
+    storage,
+    tenantId: 'tenant-a',
+  });
+  await checkout.submit(selection);
+  const exactCalls = [];
+  const exact = await checkout.reconcile(async id => {
+    exactCalls.push(id);
+    return { id, state: 'pending', purchaseState: 'pending', ruleId: '', priceVersionId: plan.id };
+  }, async () => []);
+  assert.deepEqual(exactCalls, ['order-local']);
+  assert.equal(exact.order.id, 'order-local');
+  assert.deepEqual(exact.selection, selection);
+
+  const crossDevice = business.createExternalCheckoutSession({ createKey: () => 'unused-key', submit: async () => ({}), storage: memoryStorage(), tenantId: 'tenant-a' });
+  const recent = await crossDevice.reconcile(async () => { throw new Error('no local id'); }, async () => [{ id: 'order-recent', state: 'credited', purchaseState: 'purchased', priceVersionId: plan.id }]);
+  assert.equal(recent.order.id, 'order-recent');
+  assert.equal(recent.selection, undefined);
+});
+
+test('Stripe redirect requires renewed confirmation when the server amount exceeds the stale wallet quote', () => {
+  assert.equal(typeof business.stripeCheckoutConfirmation, 'function');
+  const selection = business.purchaseDialogSelection(plan);
+  const staleView = business.paymentCheckoutPresentation(selection, { balanceCents: 500, spendingFrozen: false }, { stripe: true });
+  assert.deepEqual(business.stripeCheckoutConfirmation(staleView, { amountCents: 1499 }), { required: false, displayed: '$14.99', actual: '$14.99', message: '' });
+  const changed = business.stripeCheckoutConfirmation(staleView, { amountCents: 1999 });
+  assert.equal(changed.required, true);
+  assert.equal(changed.displayed, '$14.99');
+  assert.equal(changed.actual, '$19.99');
+  assert.match(changed.message, /服务端重新计算/);
 });
 
 test('latest plan load wins when an older request fails later', async () => {

@@ -45,6 +45,15 @@ func TestApplyOptionsFailBeforeUnconnectedDependencies(t *testing.T) {
 	if e := validateRuntimeOptions(good, "linux"); e != nil {
 		t.Fatal(e)
 	}
+	source := good
+	source.SourceFlowWALDir = source.WALDir
+	if e := validateRuntimeOptions(source, "linux"); e == nil {
+		t.Fatal("shared metering/source-flow WAL path accepted")
+	}
+	source.SourceFlowWALDir = "/var/lib/reladock/source-flow"
+	if e := validateRuntimeOptions(source, "linux"); e != nil {
+		t.Fatalf("distinct source-flow WAL rejected: %v", e)
+	}
 	if e := validateRuntimeOptions(RuntimeOptions{}, "darwin"); e != nil {
 		t.Fatalf("default validation mode gated: %v", e)
 	}

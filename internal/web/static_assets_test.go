@@ -88,7 +88,7 @@ func TestAdminNodeVisibilityHasARecoverablePresentation(t *testing.T) {
 
 func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
-	for _, path := range []string{"/admin.js", "/auth-session.js", "/account-menu.js", "/console-navigation.js", "/node-action-dialog.js", "/node-bootstrap.js", "/node-contact-status.js", "/node-content-dialog.js", "/node-editor.js", "/node-visibility.js", "/node-withdrawal.js", "/operations-tools.js", "/resource-mode.js"} {
+	for _, path := range []string{"/admin.js", "/auth-session.js", "/account-menu.js", "/console-navigation.js", "/lightsail-admin.js", "/node-action-dialog.js", "/node-bootstrap.js", "/node-contact-status.js", "/node-content-dialog.js", "/node-editor.js", "/node-visibility.js", "/node-withdrawal.js", "/operations-tools.js", "/resource-mode.js", "/source-flow-logging.js"} {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001"+path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -101,6 +101,66 @@ func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 		if rec.Body.Len() == 0 {
 			t.Fatalf("GET %s returned an empty module", path)
 		}
+	}
+}
+
+func TestSharedBrandMarkIsServedOverHTTP(t *testing.T) {
+	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		req := httptest.NewRequest(method, "http://127.0.0.1:3001/reladock-mark.svg", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s /reladock-mark.svg status=%d body=%q", method, rec.Code, rec.Body.String())
+		}
+		if contentType := rec.Header().Get("Content-Type"); contentType != "image/svg+xml" {
+			t.Fatalf("%s /reladock-mark.svg content-type=%q", method, contentType)
+		}
+		if method == http.MethodGet && !strings.Contains(rec.Body.String(), "#2563EB") {
+			t.Fatal("GET /reladock-mark.svg did not return the blue brand mark")
+		}
+		if method == http.MethodHead && rec.Body.Len() != 0 {
+			t.Fatal("HEAD /reladock-mark.svg returned a response body")
+		}
+	}
+}
+
+func TestTronAutomaticPaymentPresentationIsServed(t *testing.T) {
+	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / status=%d", rec.Code)
+	}
+	page := rec.Body.String()
+	for _, required := range []string{"tron-payment-address-label", "tron-payment-address", "tron-payment-qr", "tron-payment-amount", "tron-payment-network", "tron-payment-countdown", "tron-payment-success", "tron-payment-copy-address", "未自动到账？", "自动识别", "网络与代币信息"} {
+		if !strings.Contains(page, required) {
+			t.Errorf("TRON automatic payment UI missing %q", required)
+		}
+	}
+	if strings.Contains(page, "tron-payment-copy-amount") || strings.Contains(page, "复制金额") {
+		t.Fatal("TRON payment UI still offers amount copying")
+	}
+	if strings.Contains(page, "tron-payment-expiry") || strings.Contains(page, "订单截止时间") {
+		t.Fatal("TRON payment UI repeats an absolute deadline below the validity countdown")
+	}
+	if strings.Count(page, `id="tron-payment-address"`) != 1 {
+		t.Fatal("TRON payment UI must render the collection address exactly once")
+	}
+	ordered := []string{`id="tron-payment-address-label"`, `id="tron-payment-address"`, `id="tron-payment-copy-address"`, `id="tron-payment-qr"`, `id="tron-payment-amount"`, `id="tron-payment-network"`, `id="tron-payment-countdown"`}
+	previous := -1
+	for _, marker := range ordered {
+		current := strings.Index(page, marker)
+		if current <= previous {
+			t.Fatalf("TRON primary payment hierarchy is out of order at %q", marker)
+		}
+		previous = current
+	}
+	contract := strings.Index(page, "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
+	countdown := strings.Index(page, `id="tron-payment-countdown"`)
+	if contract < countdown {
+		t.Fatal("official USDT contract appears before the payment validity block")
 	}
 }
 
@@ -236,8 +296,8 @@ func TestEnterpriseBillingUsesPurchaseCardsAndConfirmationDialog(t *testing.T) {
 		`id="purchase-dialog"`, `id="purchase-form"`, `id="purchase-dialog-status"`,
 		`data-pane="checkout"`, `id="checkout-balance-pay"`, `id="checkout-external-pay"`,
 		"购买套餐", "planPurchaseCard", "purchaseDialogSelection", "先购买套餐",
-		"余额支付", "其他支付方式", "paymentCheckoutPresentation", "await preparePaymentCheckout(refresh", "支付状态刷新失败", "workspaceNavigation.select", "resetBusinessTools", "workspaceRefreshGate", "authSessionGate", "logoutGuard",
-		"付款后立即计时", "节点未部署时等待交付", "外部支付返回不代表到账",
+		"余额支付", "差额支付", "paymentCheckoutPresentation", "planPaymentOrderPresentation", "await preparePaymentCheckout(refresh", "支付状态刷新失败", "workspaceNavigation.select", "resetBusinessTools", "workspaceRefreshGate", "authSessionGate", "logoutGuard",
+		"/api/payments/plan-checkout", "/api/payments/orders?purpose=plan-purchase", "验签并成功购买后才开始计时", "节点未部署时等待交付", "外部页面返回不代表成功", "资金会保留在企业钱包",
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("card purchase flow missing %q", required)
@@ -320,7 +380,7 @@ func TestEnterpriseWorkspaceRemovesDecorativeCopyAndKeepsOperationalBoundaries(t
 		"配置已应用、节点在线和目标可达均不代表端到端健康。",
 		"暂停保留端口",
 		"邀请令牌只显示一次", "节点未部署时等待交付",
-		"外部支付必须经验签回调入账",
+		"最终状态只以服务端验签、钱包账本和套餐订单为准",
 	} {
 		if !strings.Contains(pageSource, boundary) {
 			t.Errorf("enterprise workspace removed required operational boundary %q", boundary)
@@ -385,11 +445,15 @@ func TestEnterpriseWorkspaceExposesLiveNodeStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	combined := string(page) + string(app)
+	monitoring, err := fs.ReadFile(assets.Files, "node-monitoring.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(app) + string(monitoring)
 	for _, required := range []string{
 		`href="#/node-status"`, `id="node-status-section"`, `id="node-status-rows"`, `id="node-status-message"`,
 		"节点状态", "实时速率", "累计流量", "Agent 运行", "连接跟踪", "nodeMonitoringPresentation", "createAdaptivePoller",
-		"/api/operations/nodes?staleAfterSeconds=90", "renderEnterpriseNodeMonitoring", "loadAllOperationNodes", "cycle.isCurrent()",
+		"/api/operations/nodes?staleAfterSeconds=90", "renderEnterpriseNodeMonitoring", "loadAllOperationNodes", "formatEntryAddress", "node.publicAddress", "入口地址待交付", "cycle.isCurrent()",
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("enterprise live node status missing %q", required)
@@ -525,6 +589,39 @@ func TestEnterpriseOverviewOwnsFinanceStatusMessages(t *testing.T) {
 	}
 }
 
+func TestEnterpriseTopUpUsesUSDInput(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	business, err := fs.ReadFile(assets.Files, "business-tools.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	financeStart := strings.Index(string(page), `<section class="finance-center" data-pane="overview"`)
+	if financeStart < 0 {
+		t.Fatal("overview finance section is missing")
+	}
+	financeEnd := strings.Index(string(page)[financeStart:], `</section>`)
+	if financeEnd < 0 {
+		t.Fatal("finance pane is not closed")
+	}
+	finance := string(page)[financeStart : financeStart+financeEnd]
+	for _, required := range []string{`充值金额 / USD`, `name="amountUSD"`, `min="0.50"`, `max="10000.00"`, `step="0.01"`} {
+		if !strings.Contains(finance, required) {
+			t.Errorf("USD top-up contract missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{`充值金额 / 美分`, `name="amountCents"`} {
+		if strings.Contains(finance, forbidden) {
+			t.Errorf("customer-facing top-up still exposes cents: %q", forbidden)
+		}
+	}
+	if !strings.Contains(string(business), `usdInputToCents(new FormData(event.target).get('amountUSD'))`) {
+		t.Fatal("top-up handler must convert the USD field to integer cents before the API request")
+	}
+}
+
 func TestEnterpriseRuleManagementUsesOneCreateEditDialog(t *testing.T) {
 	page, err := fs.ReadFile(assets.Files, "index.html")
 	if err != nil {
@@ -637,6 +734,37 @@ func TestAdminConsoleUsesRoutedPagesAndCollapsibleSidebar(t *testing.T) {
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("admin routed navigation missing %q", required)
+		}
+	}
+}
+
+func TestLightsailAdminPresentationIsSeparateAndExplicitlyAtMostOnce(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJS, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lightsailJS, err := fs.ReadFile(assets.Files, "lightsail-admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(page) + string(adminJS) + string(lightsailJS)
+	for _, required := range []string{
+		`data-view="lightsail"`, `data-pane="lightsail"`, `id="lightsail-create-dialog"`,
+		`id="lightsail-stop-dialog"`, `id="lightsail-destroy-dialog"`, `name="script"`,
+		`maxlength="65536"`, "只执行一次", "未知", "不代表 RelaDock 转发或端到端健康",
+		"./lightsail-admin.js", "bindLightsailAdmin", "createAdaptivePoller",
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("Lightsail admin presentation missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", `name="privateKey"`, `name="awsAccessKey"`, `name="awsSecretKey"`} {
+		if strings.Contains(combined, forbidden) {
+			t.Errorf("Lightsail admin presentation exposes forbidden credential field %q", forbidden)
 		}
 	}
 }

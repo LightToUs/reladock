@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,21 +58,7 @@ func (p *Payments) Checkout(w http.ResponseWriter, r *http.Request, who platform
 		respond(w, 405, map[string]string{"error": "方法不支持"})
 		return
 	}
-	if who.MemberID == "" || who.TenantID == "" {
-		failure(w, platform.ErrUnauthorized)
-		return
-	}
-	origin := p.origin
-	if origin == "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		origin = scheme + "://" + r.Host
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Host != r.Host || r.Header.Get("Origin") != origin || r.Header.Get("X-Requested-With") != "RelaDock" || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-		failure(w, platform.ErrForbidden)
+	if !p.browserRequestAllowed(w, r, who) {
 		return
 	}
 	if len(r.URL.Query()) != 0 {
@@ -96,6 +83,102 @@ func (p *Payments) Checkout(w http.ResponseWriter, r *http.Request, who platform
 		return
 	}
 	respond(w, 201, order)
+}
+
+func (p *Payments) browserRequestAllowed(w http.ResponseWriter, r *http.Request, who platform.Identity) bool {
+	if who.MemberID == "" || who.TenantID == "" {
+		failure(w, platform.ErrUnauthorized)
+		return false
+	}
+	origin := p.origin
+	if origin == "" {
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		origin = scheme + "://" + r.Host
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host != r.Host || r.Header.Get("Origin") != origin || r.Header.Get("X-Requested-With") != "RelaDock" || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		failure(w, platform.ErrForbidden)
+		return false
+	}
+	return true
+}
+
+func (p *Payments) PlanCheckout(w http.ResponseWriter, r *http.Request, who platform.Identity) {
+	if !p.available(w) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		respond(w, http.StatusMethodNotAllowed, map[string]string{"error": "方法不支持"})
+		return
+	}
+	if !p.browserRequestAllowed(w, r, who) {
+		return
+	}
+	if len(r.URL.Query()) != 0 {
+		failure(w, platform.ErrInvalid)
+		return
+	}
+	var in platform.PurchasePlanInput
+	if !decode(w, r, &in) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	order, err := p.store.CheckoutPlanPayment(ctx, who, r.Header.Get("Idempotency-Key"), in, p.provider)
+	if errors.Is(err, payments.ErrProvider) {
+		respond(w, 503, map[string]string{"error": "支付渠道暂时不可用，请使用相同请求键重试"})
+		return
+	}
+	if err != nil {
+		failure(w, err)
+		return
+	}
+	respond(w, 201, order)
+}
+
+func servePaymentOrders(w http.ResponseWriter, r *http.Request, store *platform.Store, who platform.Identity) bool {
+	const root = "/api/payments/orders"
+	if r.URL.Path != root && !strings.HasPrefix(r.URL.Path, root+"/") {
+		return false
+	}
+	if r.Method != http.MethodGet {
+		respond(w, http.StatusMethodNotAllowed, map[string]string{"error": "方法不支持"})
+		return true
+	}
+	if r.URL.Path == root {
+		values := r.URL.Query()
+		purpose, ok := values["purpose"]
+		if len(values) != 1 || !ok || len(purpose) != 1 || purpose[0] != "plan-purchase" {
+			failure(w, platform.ErrInvalid)
+			return true
+		}
+		orders, err := store.PlanPaymentOrders(r.Context(), who)
+		if err != nil {
+			failure(w, err)
+			return true
+		}
+		respond(w, http.StatusOK, orders)
+		return true
+	}
+	if len(r.URL.Query()) != 0 {
+		failure(w, platform.ErrInvalid)
+		return true
+	}
+	id := strings.TrimPrefix(r.URL.Path, root+"/")
+	if !uuid.MatchString(id) {
+		respond(w, http.StatusNotFound, map[string]string{"error": "接口不存在"})
+		return true
+	}
+	order, err := store.PaymentOrder(r.Context(), who, id)
+	if err != nil {
+		failure(w, err)
+		return true
+	}
+	respond(w, http.StatusOK, order)
+	return true
 }
 func (p *Payments) Webhook(w http.ResponseWriter, r *http.Request) {
 	if !p.available(w) {

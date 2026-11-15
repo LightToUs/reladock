@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"reladock/internal/buildinfo"
 	"reladock/internal/platform"
@@ -31,6 +32,24 @@ func (s *server) serveAdmin(w http.ResponseWriter, r *http.Request, who platform
 	ctx := r.Context()
 	path := strings.TrimPrefix(r.URL.Path, "/api/admin/")
 	switch {
+	case r.Method == "GET" && path == "source-flows":
+		page, err := adminPage(r)
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		from, fromErr := time.Parse(time.RFC3339, r.URL.Query().Get("from"))
+		to, toErr := time.Parse(time.RFC3339, r.URL.Query().Get("to"))
+		if fromErr != nil || toErr != nil {
+			failure(w, platform.ErrInvalid)
+			return
+		}
+		value, err := s.store.AdminSourceFlows(ctx, who, platform.SourceFlowQuery{From: from, To: to, RuleID: r.URL.Query().Get("ruleId"), NodeID: r.URL.Query().Get("nodeId"), Protocol: r.URL.Query().Get("protocol"), SourceIP: r.URL.Query().Get("sourceIp"), Page: page})
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		respond(w, http.StatusOK, value)
 	case r.Method == "GET" && path == "overview":
 		value, err := s.store.AdminOverview(ctx, who)
 		if err != nil {
@@ -287,6 +306,30 @@ func (s *server) serveAdmin(w http.ResponseWriter, r *http.Request, who platform
 			return
 		}
 		respond(w, 200, value)
+	case r.Method == http.MethodPatch && strings.HasPrefix(path, "rules/"):
+		parts := strings.Split(strings.TrimPrefix(path, "rules/"), "/")
+		if len(parts) != 2 || !uuid.MatchString(parts[0]) || parts[1] != "source-logging" {
+			failure(w, platform.ErrNotFound)
+			return
+		}
+		var input struct {
+			TenantID       string `json:"tenantId"`
+			DesiredVersion int64  `json:"desiredVersion"`
+			Enabled        *bool  `json:"enabled"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		if !uuid.MatchString(input.TenantID) || input.Enabled == nil {
+			failure(w, platform.ErrInvalid)
+			return
+		}
+		value, err := s.store.AdminSetRuleSourceLogging(ctx, who, input.TenantID, parts[0], input.DesiredVersion, *input.Enabled)
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		respond(w, http.StatusOK, value)
 	case r.Method == "POST" && strings.HasPrefix(path, "rules/"):
 		parts := strings.Split(strings.TrimPrefix(path, "rules/"), "/")
 		if len(parts) != 2 || !uuid.MatchString(parts[0]) {

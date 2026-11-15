@@ -21,14 +21,99 @@ let purchaseRules = [];
 let selectedOffering = '';
 let catalogRuleId = '';
 let walletState = { initialized: false, balanceCents: 0, spendingFrozen: false };
-let paymentState = { enabled: false };
+let paymentState = { enabled: false, stripe: false, tron: false };
 let planCatalogAPI;
 let planCatalogLoader;
 let purchaseSession;
 let externalCheckoutSession;
+let tronCheckout;
+let activeTronOrder;
+let tronStatusPoller;
+let tronCountdownTimer;
+let tronCountdownStartedAt = 0;
+let tronExpiryRefreshRequested = false;
 let navigateWorkspace = view => { location.hash = `#/${view}`; };
 let suppressPurchaseDialogClose = false;
 const businessRefreshGate = createTenantRefreshGate();
+const tronRequestGate = createTronRequestGate();
+
+function beginTronRequest() { return tronRequestGate.begin(); }
+function currentTronRequest(request) { return tronRequestGate.isCurrent(request); }
+function tronMonotonicNow() { return globalThis.performance?.now?.() ?? Date.now(); }
+function stopTronCountdown() {
+  if (tronCountdownTimer) clearInterval(tronCountdownTimer);
+  tronCountdownTimer = undefined;
+}
+function invalidateTronRequests(close = false) {
+	tronRequestGate.invalidate();
+  stopTronCountdown();
+  tronStatusPoller?.stop();
+  if (close) {
+    activeTronOrder = undefined;
+    const dialog = typeof document === 'undefined' ? undefined : $('#tron-payment-dialog');
+    if (dialog?.open) dialog.close();
+  }
+}
+
+export function createTronRequestGate() {
+  let generation = 0;
+  let tenantId = '';
+  return {
+    setTenant(nextTenantId) {
+      nextTenantId ||= '';
+      if (tenantId === nextTenantId) return false;
+      tenantId = nextTenantId;
+      generation += 1;
+      return true;
+    },
+    begin() { return { generation: ++generation, tenantId }; },
+    isCurrent(request) { return Boolean(tenantId) && request?.generation === generation && request.tenantId === tenantId; },
+    invalidate() { generation += 1; },
+    reset() { tenantId = ''; generation += 1; },
+  };
+}
+
+export function createTronStatusPoller({
+  load,
+  onOrder = async () => {},
+  onError = () => {},
+  schedule = globalThis.setTimeout,
+  cancel = globalThis.clearTimeout,
+  delay = 5000,
+}) {
+  let generation = 0;
+  let timer;
+  const watchable = order => ['pending', 'confirming'].includes(order?.state) && Boolean(order?.id);
+  const clear = () => {
+    if (timer !== undefined) cancel(timer);
+    timer = undefined;
+  };
+  const stop = () => {
+    generation += 1;
+    clear();
+  };
+  const start = order => {
+    stop();
+    if (!watchable(order)) return;
+    const current = ++generation;
+    const orderID = order.id;
+    const poll = async () => {
+      timer = undefined;
+      try {
+        const next = await load(orderID);
+        if (current !== generation) return;
+        await onOrder(next);
+        if (current !== generation || !watchable(next)) return;
+      } catch (error) {
+        if (current !== generation) return;
+        onError(error);
+      }
+      if (current === generation) timer = schedule(poll, delay);
+    };
+    timer = schedule(poll, delay);
+  };
+  return { start, stop };
+}
 
 export function createLatestPlanLoader({ load, onLoading = () => {}, onSuccess = () => {}, onError = () => {} }) {
   let generation = 0;
@@ -183,27 +268,222 @@ function usd(cents) {
   return `$${(Math.max(0, Number(cents) || 0) / 100).toFixed(2)}`;
 }
 
+export function usdInputToCents(value) {
+  const input = String(value ?? '').trim();
+  if (!/^\d+(?:\.\d{1,2})?$/.test(input)) {
+    throw new Error('充值金额必须是最多两位小数的 USD 金额。');
+  }
+  const [whole, fraction = ''] = input.split('.');
+  const cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+  if (cents < 50n || cents > 1000000n) {
+    throw new Error('充值金额必须在 USD 0.50–10,000.00 之间。');
+  }
+  return Number(cents);
+}
+
+export function signedUsd(cents) {
+  const amount = Number(cents) || 0;
+  const sign = amount > 0 ? '+' : amount < 0 ? '-' : '';
+  return `${sign}$${(Math.abs(amount) / 100).toFixed(2)}`;
+}
+
 export function paymentCheckoutPresentation(selection, wallet, payment) {
   const priceCents = Math.max(0, Number(selection?.priceCents) || 0);
   const balanceCents = Math.max(0, Number(wallet?.balanceCents) || 0);
   const frozen = wallet?.spendingFrozen === true;
   const enough = balanceCents >= priceCents;
+  const stripeEnabled = payment?.stripe === true || (payment?.stripe === undefined && payment?.enabled === true);
+  const walletContributionCents = Math.min(balanceCents, priceCents);
+  const shortfallCents = Math.max(0, priceCents - balanceCents);
+  const externalAmountCents = shortfallCents > 0 ? Math.max(50, shortfallCents) : 0;
+  const externalRemainderCents = externalAmountCents - shortfallCents;
+  let externalDetail = '尚未启用其他支付方式。';
+  if (enough) {
+    externalDetail = '钱包余额足够，可直接完成购买。';
+  } else if (stripeEnabled && externalRemainderCents > 0) {
+    externalDetail = `Stripe 最低支付 ${usd(externalAmountCents)}，其中 ${usd(shortfallCents)} 补足套餐，剩余 ${usd(externalRemainderCents)} 留在钱包。`;
+  } else if (stripeEnabled) {
+    externalDetail = `将使用钱包 ${usd(walletContributionCents)}，Stripe 支付 ${usd(externalAmountCents)}；验签到账后自动购买套餐。`;
+  }
   return {
     amount: usd(priceCents),
     balance: usd(balanceCents),
+    walletContribution: usd(walletContributionCents),
     balanceAfter: usd(enough ? balanceCents - priceCents : 0),
+    externalAmount: usd(externalAmountCents),
+    externalAmountCents,
+    externalRemainder: usd(externalRemainderCents),
     balanceEnabled: !frozen && priceCents > 0 && enough,
     balanceDetail: frozen
       ? '钱包支出已冻结，请联系平台完成对账。'
       : enough
         ? `支付后钱包余额 ${usd(balanceCents - priceCents)}`
         : `余额不足，还差 ${usd(priceCents - balanceCents)}`,
-    externalEnabled: !frozen && priceCents > 0 && payment?.enabled === true,
+    externalEnabled: !frozen && priceCents > 0 && !enough && stripeEnabled,
     externalDetail: frozen
       ? '钱包支出已冻结，不能发起新的支付。'
-      : payment?.enabled
-        ? '前往 Stripe 完成充值；只有验签回调到账后才能使用余额购买套餐。'
-        : '尚未启用其他支付方式。',
+      : externalDetail,
+  };
+}
+
+export function tronInvoicePresentation(order) {
+  const state = order?.state || '';
+  const purchaseState = order?.purchaseState || 'none';
+  const headline = ({ pending: '等待付款', confirming: '正在确认', credited: '充值成功', 'needs-review': '待人工核对', expired: '订单已过期' })[state] || '订单状态未知';
+  let status = '订单状态未知，请刷新。';
+  if (state === 'pending') status = '等待链上转账；固化后将自动识别并入账。';
+  if (state === 'confirming') status = '交易已提交，正在等待 TRON 固化确认。';
+  if (state === 'needs-review') status = '交易需要人工核对，钱包尚未入账。';
+  if (state === 'expired') status = order?.claimAllowed
+    ? '转账窗口已过期；若已在有效期内转账，仍可提交交易哈希核验。'
+    : '订单及核验宽限期均已结束，请联系平台人工核对。';
+  if (state === 'credited') status = purchaseState === 'purchased'
+    ? '充值已入账，套餐购买完成。'
+    : purchaseState === 'failed'
+      ? '充值已入账；套餐购买未完成，金额保留在钱包。'
+      : '充值已入账。';
+  return {
+    id: order?.id || '',
+    network: 'TRON (TRC-20)',
+    asset: 'USDT',
+    amount: `${(Math.max(0, Number(order?.amountBaseUnits) || 0) / 1e6).toFixed(6)} USDT`,
+    amountValue: (Math.max(0, Number(order?.amountBaseUnits) || 0) / 1e6).toFixed(6),
+    address: order?.collectionAddress || '',
+    canClaim: order?.claimAllowed ?? state === 'pending',
+    qrPath: order?.id ? `/api/payments/tron/orders/${order.id}/qr` : '',
+    headline,
+    success: state === 'credited',
+    status,
+    terminal: ['credited', 'needs-review', 'expired'].includes(state),
+  };
+}
+
+export function tronExpiryPresentation(order, elapsedMs = 0) {
+  const expiresAt = Date.parse(order?.expiresAt || '');
+  const parsedServerTime = Date.parse(order?.serverTime || '');
+  const serverTime = Number.isFinite(parsedServerTime) ? parsedServerTime : Date.now();
+  const remainingMs = Number.isFinite(expiresAt) ? expiresAt - serverTime - Math.max(0, Number(elapsedMs) || 0) : 0;
+  const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  const minutesPart = Math.floor(seconds / 60);
+  const secondsPart = seconds % 60;
+  const expired = seconds === 0;
+  return {
+    label: `${String(minutesPart).padStart(2, '0')}:${String(secondsPart).padStart(2, '0')}`,
+    seconds,
+    expired,
+    qrEnabled: order?.state === 'pending' && !expired,
+    copyEnabled: order?.state === 'pending' && !expired,
+  };
+}
+
+function updateTronCountdown() {
+  if (!activeTronOrder) return stopTronCountdown();
+  const expiry = tronExpiryPresentation(activeTronOrder, tronMonotonicNow() - tronCountdownStartedAt);
+  const countdown = $('#tron-payment-countdown');
+  const stage = $('#tron-payment-qr-stage');
+  const image = $('#tron-payment-qr');
+  if (countdown) countdown.textContent = expiry.label;
+  if (stage) stage.hidden = !expiry.qrEnabled;
+  const copyAddress = $('#tron-payment-copy-address');
+  if (copyAddress) copyAddress.disabled = !expiry.copyEnabled;
+  if (!expiry.qrEnabled && image) image.removeAttribute('src');
+  if (!expiry.expired) return;
+  stopTronCountdown();
+  if (activeTronOrder.state === 'pending') {
+    $('#tron-payment-state').textContent = '转账窗口已结束；若已按时转账，系统仍会继续识别，也可手动提交哈希核验。';
+    if (!tronExpiryRefreshRequested) {
+      tronExpiryRefreshRequested = true;
+      $('#tron-payment-refresh')?.click();
+    }
+  }
+}
+
+function startTronCountdown(order) {
+  stopTronCountdown();
+  if (order?.state !== 'pending') return;
+  tronCountdownStartedAt = tronMonotonicNow();
+  tronExpiryRefreshRequested = false;
+  updateTronCountdown();
+  if (tronExpiryPresentation(order, 0).seconds > 0 && order?.state === 'pending') {
+    tronCountdownTimer = setInterval(updateTronCountdown, 1000);
+  }
+}
+
+function renderTronInvoice(order) {
+  activeTronOrder = order;
+  const view = tronInvoicePresentation(order);
+  $('#tron-payment-amount').textContent = view.amount;
+  $('#tron-payment-address').textContent = view.address;
+  const expiry = tronExpiryPresentation(order, 0);
+  const qr = $('#tron-payment-qr');
+  const qrStage = $('#tron-payment-qr-stage');
+  const success = $('#tron-payment-success');
+  const statusVisual = $('#tron-payment-status-visual');
+  const nonPaymentState = !expiry.qrEnabled && !view.success;
+  if (qr) {
+    if (expiry.qrEnabled) qr.src = view.qrPath;
+    else qr.removeAttribute('src');
+  }
+  qrStage.hidden = !expiry.qrEnabled;
+  success.hidden = !view.success;
+  statusVisual.hidden = !nonPaymentState;
+  $('#tron-payment-status-headline').textContent = view.headline;
+  $('#tron-payment-status-symbol').textContent = order?.state === 'confirming' ? '···' : '!';
+  $('#tron-payment-success-detail').textContent = `${view.amount} 已记入企业钱包`;
+  $('#tron-payment-qr-panel').dataset.state = order?.state || 'unknown';
+  $('#tron-payment-copy-address').disabled = !expiry.copyEnabled;
+  $('#tron-payment-validity-label').textContent = view.success ? '到账状态' : order?.state === 'confirming' ? '链上状态' : '有效时间';
+  $('#tron-payment-countdown').textContent = view.success ? '已到账' : order?.state === 'confirming' ? '确认中' : expiry.label;
+  $('#tron-payment-state').textContent = view.status;
+  $('#tron-claim-form [name=txHash]').disabled = !view.canClaim;
+  $('#tron-claim-submit').hidden = !view.canClaim;
+  $('#tron-payment-recovery').hidden = !view.canClaim;
+  $('#tron-payment-refresh').disabled = !view.id;
+  $('#tron-payment-message').textContent = '';
+  const dialog = $('#tron-payment-dialog');
+  if (!dialog.open) dialog.showModal();
+  startTronCountdown(order);
+}
+
+function showTronInvoice(order) {
+  renderTronInvoice(order);
+  tronStatusPoller?.start(order);
+}
+
+export function planPaymentOrderPresentation(order) {
+  if (order?.state === 'needs-review') {
+    if (order?.purchaseState === 'purchased' && order?.subscriptionId) {
+      return { complete: false, clear: false, message: '套餐仍已购买并开始计时，但支付进入人工对账，钱包支出已冻结，请联系平台处理。' };
+    }
+    return { complete: false, clear: false, message: '支付需要人工对账，钱包支出已冻结，请联系平台处理。' };
+  }
+  if (order?.purchaseState === 'purchased' && order?.subscriptionId) {
+    return { complete: true, clear: true, message: '套餐已购买并开始计时；最终状态来自已验签的支付回调。' };
+  }
+  if (order?.purchaseState === 'failed' && order?.state === 'credited') {
+    const reason = ({ unavailable: '套餐或节点当前不可销售', unauthorized: '购买权限已变化', 'insufficient-balance': '支付期间钱包余额发生变化', 'wallet-frozen': '钱包支出已冻结', conflict: '当前套餐状态冲突' })[order.purchaseError] || '套餐未能自动开通';
+    return { complete: false, clear: true, message: `${reason}；已验证的支付金额已留在企业钱包，可在条件恢复后使用余额购买。` };
+  }
+  if (order?.state === 'expired' || order?.purchaseError === 'payment-expired') {
+    return { complete: false, clear: true, message: '支付订单已过期，未入账也未购买套餐，请重新发起。' };
+  }
+  if (order?.state === 'failed' || order?.purchaseError === 'payment-failed') {
+    return { complete: false, clear: true, message: '支付未完成，未入账也未购买套餐，请重新发起。' };
+  }
+  return { complete: false, clear: false, message: '支付处理中，请等待 Stripe 验签回调。' };
+}
+
+export function stripeCheckoutConfirmation(view, order) {
+  const displayedCents = Math.max(0, Number(view?.externalAmountCents) || 0);
+  const actualCents = Math.max(0, Number(order?.amountCents) || 0);
+  const required = displayedCents > 0 && actualCents > 0 && displayedCents !== actualCents;
+  return {
+    required,
+    displayed: usd(displayedCents),
+    actual: usd(actualCents),
+    message: required
+      ? `钱包余额已变化，服务端重新计算的 Stripe 支付金额为 ${usd(actualCents)}（页面原显示 ${usd(displayedCents)}）。确认按新金额继续？`
+      : '',
   };
 }
 
@@ -280,7 +560,7 @@ export function createExternalCheckoutSession({ createKey, submit, storage = glo
         write(entries);
       }
       try {
-        const result = await submit({ amountCents: selection.priceCents }, entry.key);
+        const result = await submit(selection.body, entry.key);
         if (request !== generation) return { stale: true };
         const entries = read();
         if (entries[id]) {
@@ -315,6 +595,30 @@ export function createExternalCheckoutSession({ createKey, submit, storage = glo
       entries.sort((a, b) => Number(b.lastSubmittedAt || b.createdAt || 0) - Number(a.lastSubmittedAt || a.createdAt || 0));
       return entries[0]?.selection;
     },
+    async reconcile(loadOrder, listRecent) {
+      const request = ++generation;
+      const entries = read();
+      const ordered = Object.entries(entries).sort((a, b) => Number(b[1]?.lastSubmittedAt || b[1]?.createdAt || 0) - Number(a[1]?.lastSubmittedAt || a[1]?.createdAt || 0));
+      for (const [id, entry] of ordered) {
+        if (!entry?.orderId) continue;
+        try {
+          const order = await loadOrder(entry.orderId);
+          if (request !== generation) return { stale: true };
+          const presentation = planPaymentOrderPresentation(order);
+          if (presentation.clear && entry.selection) {
+            delete entries[id];
+            write(entries);
+          }
+          return { order, selection: entry.selection };
+        } catch { /* recover through the tenant-scoped recent-order endpoint */ }
+      }
+      const recent = await listRecent();
+      if (request !== generation) return { stale: true };
+      const order = Array.isArray(recent) ? recent[0] : undefined;
+      if (!order) return {};
+      const match = ordered.find(([, entry]) => entry?.selection?.body?.ruleId === (order.ruleId || '') && entry?.selection?.body?.priceVersionId === order.priceVersionId);
+      return { order, selection: match?.[1]?.selection };
+    },
     clear(selection) {
       const entries = read();
       delete entries[fingerprint(selection)];
@@ -341,15 +645,20 @@ function renderPaymentCheckout() {
   $('#checkout-plan').textContent = selection.plan;
   $('#checkout-amount').textContent = view.amount;
   $('#checkout-wallet-balance').textContent = view.balance;
+  const externalAmount = $('#checkout-external-amount');
+  if (externalAmount) externalAmount.textContent = view.externalAmount;
   $('#checkout-balance-detail').textContent = view.balanceDetail;
   $('#checkout-external-detail').textContent = view.externalDetail;
+  $('#checkout-tron-detail').textContent = paymentState.tron ? '按订单精确金额转入 TRON 地址；固化且严格匹配后自动入账并购买。' : 'TRON USDT 收款尚未启用。';
   $('#checkout-back').disabled = busy;
   $('#checkout-balance-pay').disabled = !view.balanceEnabled || busy;
   $('#checkout-external-pay').disabled = !view.externalEnabled || busy;
+  $('#checkout-tron-pay').disabled = walletState.spendingFrozen || !paymentState.tron || busy;
 }
 
 export function businessViewChanged(view) {
   if (view !== 'checkout' && externalCheckoutSession?.isSubmitting()) externalCheckoutSession.invalidate();
+  if (view !== 'checkout' && activeTronOrder?.purpose === 'plan-purchase') invalidateTronRequests(true);
 }
 
 export function resetBusinessTools() {
@@ -357,7 +666,11 @@ export function resetBusinessTools() {
   planCatalogLoader?.invalidate?.();
   topUp = undefined;
   walletState = { initialized: false, balanceCents: 0, spendingFrozen: false };
-  paymentState = { enabled: false };
+  paymentState = { enabled: false, stripe: false, tron: false };
+  tronCheckout = undefined;
+  activeTronOrder = undefined;
+  tronRequestGate.reset();
+  invalidateTronRequests(true);
   purchasePlans = [];
   purchaseRules = [];
   selectedOffering = '';
@@ -370,6 +683,8 @@ export function resetBusinessTools() {
   if (typeof document !== 'undefined') {
     const dialog = $('#purchase-dialog');
     if (dialog?.open) dialog.close();
+    const tronDialog = $('#tron-payment-dialog');
+    if (tronDialog?.open) tronDialog.close();
     for (const selector of ['#purchase-dialog-title', '#purchase-dialog-rule', '#purchase-dialog-plan', '#purchase-dialog-price', '#purchase-dialog-status', '#checkout-status', '#business-message', '#finance-message']) {
       const element = $(selector);
       if (element) element.textContent = '';
@@ -501,9 +816,20 @@ async function loadCompatiblePlans(api) {
 export function bindBusinessTools(api, refresh, navigate = navigateWorkspace) {
   navigateWorkspace = navigate;
   ensurePlanCatalogLoader(api);
+  tronStatusPoller?.stop();
+  tronStatusPoller = createTronStatusPoller({
+    load: orderID => api(`/api/payments/tron/orders/${orderID}`),
+    onOrder: async order => {
+      renderTronInvoice(order);
+      if (order.state === 'credited') await refresh();
+    },
+    onError: error => {
+      if (activeTronOrder) $('#tron-payment-message').textContent = `自动刷新失败：${error.message}`;
+    },
+  });
   externalCheckoutSession = createExternalCheckoutSession({
     createKey: () => crypto.randomUUID(),
-    submit: (body, key) => api('/api/payments/checkout', { method: 'POST', body, key }),
+    submit: (body, key) => api('/api/payments/plan-checkout', { method: 'POST', body, key }),
     tenantId: '',
   });
   purchaseSession = createPurchaseSession({
@@ -515,6 +841,7 @@ export function bindBusinessTools(api, refresh, navigate = navigateWorkspace) {
       $('#purchase-dialog-cancel').disabled = busy;
       $('#checkout-balance-pay').disabled = busy;
       $('#checkout-external-pay').disabled = busy;
+      $('#checkout-tron-pay').disabled = busy;
       if (busy) $('#checkout-status').textContent = '正在使用钱包余额支付…';
     },
     onSuccess: (_result, selection) => {
@@ -528,22 +855,35 @@ export function bindBusinessTools(api, refresh, navigate = navigateWorkspace) {
   });
   $('#top-up-form').addEventListener('submit', async event => {
     event.preventDefault(); const button = event.target.querySelector('button'); button.disabled = true;
+    let method;
+    let tronRequest;
     try {
-      const amountCents = Number(new FormData(event.target).get('amountCents'));
+      const amountCents = usdInputToCents(new FormData(event.target).get('amountUSD'));
       if (topUp?.amountCents !== amountCents) topUp = { amountCents, key: crypto.randomUUID() };
-      const order = await api('/api/payments/checkout', { method: 'POST', body: { amountCents }, key: topUp.key });
+      method = new FormData(event.target).get('method');
+      const path = method === 'tron' ? '/api/payments/tron/orders' : '/api/payments/checkout';
+      tronRequest = method === 'tron' ? beginTronRequest() : undefined;
+      const order = await api(path, { method: 'POST', body: { amountCents }, key: topUp.key });
+      if (method === 'tron') {
+        if (!currentTronRequest(tronRequest)) return;
+        showTronInvoice(order);
+        return;
+      }
       if (order.checkoutUrl) {
         const url = new URL(order.checkoutUrl);
         if (url.protocol !== 'https:' || url.hostname !== 'checkout.stripe.com') throw new Error('支付跳转地址无效');
         location.assign(url.href);
       } else { setBusinessStatus('finance', '订单状态已更新，请刷新查看钱包和账本。'); await refresh(); }
-    } catch (error) { setBusinessStatus('finance', error.message); }
-    finally { button.disabled = false; }
+    } catch (error) {
+      if (method !== 'tron' || currentTronRequest(tronRequest)) setBusinessStatus('finance', error.message);
+    } finally {
+      if (method !== 'tron' || currentTronRequest(tronRequest)) button.disabled = false;
+    }
   });
   $('#wallet-ledger-refresh').addEventListener('click', async () => {
     try {
       const rows = await api('/api/billing/ledger'); const root = $('#wallet-ledger-rows'); root.replaceChildren();
-      for (const entry of rows) { const row = root.insertRow(); for (const value of [new Date(entry.createdAt).toLocaleString(), entry.kind, entry.ruleId || '钱包', `${entry.amountCents > 0 ? '+' : ''}${(entry.amountCents / 100).toFixed(2)}`, entry.reason]) row.insertCell().textContent = value; }
+      for (const entry of rows) { const row = root.insertRow(); for (const value of [new Date(entry.createdAt).toLocaleString(), entry.kind, entry.ruleId || '钱包', signedUsd(entry.amountCents), entry.reason]) row.insertCell().textContent = value; }
     } catch (error) { setBusinessStatus('finance', error.message); }
   });
   $('#purchase-form').addEventListener('submit', async event => {
@@ -578,10 +918,18 @@ export function bindBusinessTools(api, refresh, navigate = navigateWorkspace) {
       const order = await externalCheckoutSession.submit(selection);
       if (order?.stale) return;
       if (!order.checkoutUrl) {
-        $('#checkout-status').textContent = '支付订单状态已更新。请刷新钱包，到账后使用余额完成套餐购买。';
+        $('#checkout-status').textContent = planPaymentOrderPresentation(order).message;
         await refresh();
         renderPaymentCheckout();
         return;
+      }
+      const confirmation = stripeCheckoutConfirmation(view, order);
+      if (confirmation.required) {
+        $('#checkout-status').textContent = confirmation.message;
+        if (!window.confirm(confirmation.message)) {
+          renderPaymentCheckout();
+          return;
+        }
       }
       const url = new URL(order.checkoutUrl);
       if (url.protocol !== 'https:' || url.hostname !== 'checkout.stripe.com') throw new Error('支付跳转地址无效');
@@ -590,6 +938,58 @@ export function bindBusinessTools(api, refresh, navigate = navigateWorkspace) {
       $('#checkout-status').textContent = error.message;
       renderPaymentCheckout();
     }
+  });
+  $('#checkout-tron-pay').addEventListener('click', async () => {
+    const selection = purchaseSession.current();
+    if (!selection || !paymentState.tron || walletState.spendingFrozen) return;
+    const serialized = JSON.stringify(selection.body);
+    if (tronCheckout?.serialized !== serialized) tronCheckout = { serialized, key: crypto.randomUUID() };
+    const request = beginTronRequest();
+    $('#checkout-tron-pay').disabled = true;
+    $('#checkout-status').textContent = '正在创建 TRON USDT 收款订单…';
+    try {
+      const order = await api('/api/payments/tron/orders', { method: 'POST', body: selection.body, key: tronCheckout.key });
+      if (!currentTronRequest(request)) return;
+      showTronInvoice(order);
+      $('#checkout-status').textContent = '';
+    } catch (error) {
+      if (currentTronRequest(request)) $('#checkout-status').textContent = error.message;
+    } finally { if (currentTronRequest(request)) renderPaymentCheckout(); }
+  });
+  $('#tron-claim-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!activeTronOrder?.id) return;
+    const request = beginTronRequest();
+    const button = $('#tron-claim-submit'); button.disabled = true;
+    try {
+      const txHash = String(new FormData(event.target).get('txHash') || '');
+      const order = await api(`/api/payments/tron/orders/${activeTronOrder.id}/claim`, { method: 'POST', body: { txHash } });
+      if (!currentTronRequest(request)) return;
+      showTronInvoice(order);
+    } catch (error) { if (currentTronRequest(request)) $('#tron-payment-message').textContent = error.message; }
+    finally { if (currentTronRequest(request)) button.disabled = false; }
+  });
+  $('#tron-payment-refresh').addEventListener('click', async () => {
+    if (!activeTronOrder?.id) return;
+    const request = beginTronRequest();
+    try {
+      const order = await api(`/api/payments/tron/orders/${activeTronOrder.id}`);
+      if (!currentTronRequest(request)) return;
+      showTronInvoice(order);
+      if (order.state === 'credited') await refresh();
+    } catch (error) { if (currentTronRequest(request)) $('#tron-payment-message').textContent = error.message; }
+  });
+  $('#tron-payment-copy-address').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(activeTronOrder?.collectionAddress || '');
+      $('#tron-payment-message').textContent = '收款地址已复制。';
+    } catch { $('#tron-payment-message').textContent = '无法自动复制，请手动选择收款地址。'; }
+  });
+  $('#tron-payment-close').addEventListener('click', () => invalidateTronRequests(true));
+  $('#tron-payment-close-icon').addEventListener('click', () => invalidateTronRequests(true));
+  $('#tron-payment-dialog').addEventListener('close', () => {
+    if (activeTronOrder) invalidateTronRequests();
+    activeTronOrder = undefined;
   });
   $('#purchase-dialog-cancel').addEventListener('click', () => {
     if (purchaseSession.close()) $('#purchase-dialog').close();
@@ -647,6 +1047,11 @@ export async function refreshBusinessTools(api, identity, rules) {
   if (!businessRefreshGate.isCurrent(refreshRequest)) return { stale: true };
   walletState = wallet;
   paymentState = payment;
+  if (tronRequestGate.setTenant(identity.tenantId)) {
+		activeTronOrder = undefined;
+		const dialog = $('#tron-payment-dialog');
+		if (dialog?.open) dialog.close();
+  }
   externalCheckoutSession?.setTenant(identity.tenantId);
   const currentSelection = purchaseSession?.current();
   if (currentSelection && currentSelection.body.ruleId && !rules.some(rule => rule.id === currentSelection.body.ruleId)) {
@@ -654,20 +1059,57 @@ export async function refreshBusinessTools(api, identity, rules) {
     externalCheckoutSession.invalidate();
   }
   $('#wallet-status').textContent = wallet.spendingFrozen ? `钱包支出已冻结，请联系平台对账。余额：$${(wallet.balanceCents / 100).toFixed(2)}` : wallet.initialized ? `钱包余额：$${(wallet.balanceCents / 100).toFixed(2)}` : '钱包尚无到账或调整记录';
-  $('#top-up-form').hidden = !payment.enabled || !['owner', 'admin'].includes(identity.role) || wallet.spendingFrozen;
-  $('#payment-availability').textContent = payment.enabled ? '支付结果以验签回调到账为准，返回页面不代表充值成功。' : '支付渠道尚未启用。';
+  const stripeEnabled = payment.stripe === true || (payment.stripe === undefined && payment.enabled === true);
+  const tronEnabled = payment.tron === true;
+  const topUpMethod = $('#top-up-method');
+  for (const item of topUpMethod.options) {
+    const enabled = item.value === 'tron' ? tronEnabled : stripeEnabled;
+    item.disabled = !enabled;
+    item.hidden = !enabled;
+  }
+  if (tronEnabled) topUpMethod.value = 'tron'; else if (stripeEnabled) topUpMethod.value = 'stripe';
+  $('#top-up-form').hidden = (!stripeEnabled && !tronEnabled) || !['owner', 'admin'].includes(identity.role) || wallet.spendingFrozen;
+  $('#payment-availability').textContent = payment.enabled ? 'Stripe 以服务端验签回调为准；TRON USDT 仅在固化交易严格匹配后入账。返回页面或提交哈希都不代表充值成功。' : '支付渠道尚未启用。';
   purchaseRules = rules;
-  const pendingSelection = !purchaseSession.current() ? externalCheckoutSession.pendingSelection() : undefined;
+  let pendingSelection = !purchaseSession.current() ? externalCheckoutSession.pendingSelection() : undefined;
   canManagePurchase = canOpenPackageCheckout(identity, rules, wallet);
   await refreshSubscriptions(api);
   if (!businessRefreshGate.isCurrent(refreshRequest)) return { stale: true };
   await loadCompatiblePlans(api);
   if (!businessRefreshGate.isCurrent(refreshRequest)) return { stale: true };
+  let reconciled;
+  if (globalThis.location?.hash === '#/checkout') {
+    try {
+      reconciled = await externalCheckoutSession.reconcile(
+        id => api(`/api/payments/orders/${encodeURIComponent(id)}`),
+        () => api('/api/payments/orders?purpose=plan-purchase'),
+      );
+      if (reconciled?.stale || !businessRefreshGate.isCurrent(refreshRequest)) return { stale: true };
+      pendingSelection = reconciled?.selection || pendingSelection;
+      if (!pendingSelection && reconciled?.order) {
+        const rule = rules.find(item => item.id === reconciled.order.ruleId);
+        const plan = purchasePlans.find(item => item.id === reconciled.order.priceVersionId);
+        if (plan && (!reconciled.order.ruleId || rule)) pendingSelection = purchaseDialogSelection(plan, rule);
+      }
+    } catch (error) {
+      if (businessRefreshGate.isCurrent(refreshRequest)) $('#checkout-status').textContent = `支付订单状态读取失败：${error.message}`;
+    }
+  }
   if (!purchaseSession.current() && pendingSelection && globalThis.location?.hash === '#/checkout') {
     const rule = rules.find(item => item.id === pendingSelection.body.ruleId);
     const plan = purchasePlans.find(item => item.id === pendingSelection.body.priceVersionId);
     if (plan && (!pendingSelection.body.ruleId || rule)) purchaseSession.open(purchaseDialogSelection(plan, rule));
   }
   renderPaymentCheckout();
+  if (reconciled?.order) {
+    const orderView = planPaymentOrderPresentation(reconciled.order);
+    $('#checkout-status').textContent = orderView.message;
+    if (orderView.complete) {
+      purchaseSession.reset();
+      $('#business-message').textContent = orderView.message;
+      renderPaymentCheckout();
+      navigateWorkspace('billing');
+    }
+  }
   return { stale: false };
 }

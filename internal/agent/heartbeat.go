@@ -30,6 +30,9 @@ func (c *Client) ReportHeartbeat(ctx context.Context, heartbeat platform.AgentHe
 	if heartbeat.CertificateRotationSupported {
 		req.Header.Set("X-RelaDock-Certificate-Rotation", "1")
 	}
+	if heartbeat.SourceFlowSupported {
+		req.Header.Set("X-RelaDock-Source-Flow", "1")
+	}
 	response, err := c.do(req)
 	if err != nil {
 		return errors.New("heartbeat connection failed")

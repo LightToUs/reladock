@@ -1,6 +1,7 @@
 import { bindOperations } from './operations-tools.js';
 import { bindNodeBootstrap } from './node-bootstrap.js';
 import { bindConsoleNavigation } from './console-navigation.js';
+import { bindLightsailAdmin } from './lightsail-admin.js';
 import { agentContactPresentation, certificatePresentation, configurationPresentation, probePresentation } from './node-contact-status.js';
 import { bindNodeActionDialog, createNodeActionRunner, nodeActionDescriptor } from './node-action-dialog.js';
 import { bindNodeContentDialog, bindNodeDeliveryDialog, runDialogSession } from './node-content-dialog.js';
@@ -9,12 +10,14 @@ import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation
 import { bindNodeVisibilityToggle, nodesForAdminList } from './node-visibility.js';
 import { resourceModeLabel } from './resource-mode.js';
 import { adminPlanOfferingLabel, createOfferingMutationRunner, offeringActionDescriptor, offeringRouteLabel, offeringStateLabel, planInputFromFields, priceableOfferings } from './plan-catalog.js';
+import { sourceLoggingConfirmation, sourceLoggingPresentation } from './source-flow-logging.js';
 const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], monitoring: new Map(), certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '', showHiddenNodes: false };
 let adminNodeMonitoringPoller;
 let adminNavigation;
-const titles = { overview: '平台总览', nodes: '入口节点', tenants: '企业客户', rules: '全局规则', deliveries: '配置交付', plans:'规则套餐',operations:'告警工单',costs:'成本与经营差额',audit: '操作审计' };
-const descriptions = { overview: '跨企业查看资源与配置，受独立平台权限保护。', nodes: '管理入口节点的登记、接入、升级、维护与安全退役。', tenants: '查看企业客户并管理其控制台登录权限。', rules: '跨企业查看和控制转发配置，所有操作保留平台审计。', deliveries: '查看节点最近配置版本的领取、校验和应用确认。', plans: '把线路商品绑定入口节点，并创建不可变的逐规则套餐价格版本。', operations: '处理控制面告警并回复企业工单。', costs: '录入不可变节点成本并查看现金口径经营差额。', audit: '查看最近的平台管理操作记录。', notifications: '查看外部告警通知的真实交付状态。' };
+let lightsailAdmin;
+const titles = { overview: '平台总览', nodes: '入口节点', lightsail: 'Lightsail 云主机', tenants: '企业客户', rules: '全局规则', 'source-flows': '来源连接', deliveries: '配置交付', plans:'规则套餐',operations:'告警工单',costs:'成本与经营差额',audit: '操作审计' };
+const descriptions = { overview: '跨企业查看资源与配置，受独立平台权限保护。', nodes: '管理入口节点的登记、接入、升级、维护与安全退役。', lightsail: '创建、关闭和销毁 AWS Lightsail，并通过临时 SSH 执行一次脚本。', tenants: '查看企业客户并管理其控制台登录权限。', rules: '跨企业查看和控制转发配置，所有操作保留平台审计。', 'source-flows': '按有限时间窗口查询已启用规则的来源连接元数据。', deliveries: '查看节点最近配置版本的领取、校验和应用确认。', plans: '把线路商品绑定入口节点，并创建不可变的逐规则套餐价格版本。', operations: '处理控制面告警并回复企业工单。', costs: '录入不可变节点成本并查看现金口径经营差额。', audit: '查看最近的平台管理操作记录。', notifications: '查看外部告警通知的真实交付状态。' };
 const deliveries = { queued: '等待领取', leased: '领取处理中', applying: '应用中 · 等待确认', applied: '已应用 · 健康未知', validated: '校验通过 · 未应用', failed: '配置失败', superseded: '已被新版本替代' };
 const upgradeStates = { queued: '等待 Agent 领取', claimed: '已领取', installing: '正在安装', verifying: '正在验证', succeeded: '升级成功', 'rolled-back': '已自动回滚', failed: '升级失败', cancelled: '已取消' };
 const upgradeErrors = { 'download-unavailable': '发布包下载失败', 'archive-invalid': '发布包格式无效', 'checksum-mismatch': '发布包摘要不匹配', 'install-failed': '安装失败', 'service-failed': 'Agent 启动失败', 'health-timeout': '控制链路验证超时', 'rollback-failed': '回滚失败，需要人工处理', 'state-invalid': '升级状态不一致' };
@@ -23,9 +26,12 @@ function appendNavigationItem(view, label, short) { const link = document.create
 actions['node.certificate-renew-requested'] = '请求自动更换证书';
 actions['node.certificate-renew-issued'] = '签发待激活证书';
 actions['node.certificate-renew-activated'] = '新证书已激活';
+actions['rule.source-logging.enable'] = '启用来源连接记录';
+actions['rule.source-logging.disable'] = '关闭来源连接记录';
+actions['source-flow.query'] = '查询来源连接记录';
 appendNavigationItem('costs', '成本与经营差额', '成');
 appendNavigationItem('notifications', '通知交付', '通'); titles.notifications = '通知交付';
-function access(mode) { if(mode!=='admin'){bootstrapUI.clear();adminNodeMonitoringPoller?.stop();adminNodeMonitoringPoller=undefined;} $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
+function access(mode) { if(mode!=='admin'){bootstrapUI.clear();adminNodeMonitoringPoller?.stop();adminNodeMonitoringPoller=undefined;lightsailAdmin?.stop();} $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
 function message(text) { $('#admin-message').textContent = text; }
 async function api(path, body, key, signal) {
   const options = { credentials: 'same-origin', headers: {}, signal };
@@ -53,7 +59,7 @@ function appendUpgradeControls(controls, node) {
   if (['queued', 'claimed'].includes(node.upgrade?.state)) controls.append(button('取消升级', () => openNodeAction('upgrade-cancel', node)));
   if (['installing', 'verifying'].includes(node.upgrade?.state)) { const locked = button('升级中，操作已锁定', async () => {}); locked.disabled = true; controls.append(locked); }
 }
-function showView(view) { state.view = view; if ($('#admin-shell').hidden) return; if (view === 'deliveries') loadDeliveries().catch(error => message(error.message)); if(view==='plans')loadPlans().catch(e=>message(e.message));if(view==='operations')operations.refresh().catch(e=>message(e.message));if(view==='costs')loadCosts().catch(e=>message(e.message));if(view==='notifications')loadNotifications().catch(e=>message(e.message)); }
+function showView(view) { state.view = view; if ($('#admin-shell').hidden) return; lightsailAdmin?.setActive(view === 'lightsail'); if (view === 'deliveries') loadDeliveries().catch(error => message(error.message)); if(view==='source-flows')loadSourceFlows().catch(e=>$('#source-flow-message').textContent=e.message);if(view==='plans')loadPlans().catch(e=>message(e.message));if(view==='operations')operations.refresh().catch(e=>message(e.message));if(view==='costs')loadCosts().catch(e=>message(e.message));if(view==='notifications')loadNotifications().catch(e=>message(e.message)); }
 for (const nav of document.querySelectorAll('[data-jump]')) nav.addEventListener('click', () => adminNavigation.select(nav.dataset.jump, { focus: true }));
 
 async function reload() {
@@ -189,20 +195,56 @@ $('#certificate-revoke').addEventListener('click', () => { const node = state.ce
 
 function pager(kind, page) { $(`#${kind}-page`).textContent = `第 ${page.page} 页 · 共 ${page.total} 条`; $(`#${kind}-prev`).disabled = page.page <= 1; $(`#${kind}-next`).disabled = page.page * page.pageSize >= page.total; }
 function renderTenants(page) { const root = $('#admin-tenants'); root.replaceChildren(); for (const tenant of page.items) { const row = root.insertRow(); cell(row, tenant.name, `${tenant.ownerEmail} · ${tenant.id}`); cell(row, tenant.members); cell(row, tenant.rules); cell(row, tenant.status === 'active' ? '允许登录' : '已停用登录', tenant.hasPlatformAdmin ? '含平台管理员账户' : ''); const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('查看规则', async () => { state.tenantFilter = tenant.id; state.tenantName = tenant.name; state.rulePage = 1; await reload(); adminNavigation.select('rules', { focus: true }); })); if (!tenant.hasPlatformAdmin) controls.append(button(tenant.status === 'active' ? '停用登录' : '恢复登录', async () => { if (tenant.status === 'active' && !confirm(`停用“${tenant.name}”登录并撤销其全部会话？已有转发流量不会自动停止。`)) return; await mutate(`/api/admin/tenants/${tenant.id}/access`, { enabled: tenant.status !== 'active', revision: tenant.revision }, '企业登录权限已更新，原会话已撤销。'); }, tenant.status === 'active')); } empty(root, 5, '本页暂无企业。'); pager('tenants', page); }
+async function setRuleSourceLogging(rule, enabled) {
+  if (!confirm(sourceLoggingConfirmation(enabled))) return;
+  const response = await fetch(`/api/admin/rules/${rule.id}/source-logging`, { method: 'PATCH', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'RelaDock' }, body: JSON.stringify({ tenantId: rule.tenantId, desiredVersion: rule.desiredVersion, enabled }) });
+  const data = await response.json();
+  if (!response.ok) { const error = new Error(data.error || '源地址记录设置失败'); error.status = response.status; throw error; }
+  message(enabled ? '启用请求已入队，等待 Agent 应用确认。' : '关闭请求已入队，等待 Agent 应用确认；历史记录仍按保留期清理。');
+  await reload();
+}
 function renderRules(page) {
   const root = $('#admin-rules'); root.replaceChildren(); $('#rules-tenant-label').textContent = state.tenantFilter ? `企业：${state.tenantName}` : '全部企业';
   for (const rule of page.items) {
     const row = root.insertRow(); cell(row, rule.company, rule.name); cell(row, rule.nodeId, `端口 ${rule.listenPort}`); cell(row, rule.protocol.toUpperCase()); cell(row, rule.targetHost.includes(':') ? `[${rule.targetHost}]:${rule.targetPort}` : `${rule.targetHost}:${rule.targetPort}`); cell(row, `${rule.bandwidthMbps} Mbps`); cell(row, `${rule.desiredVersion} / ${rule.appliedVersion}`);
     const applied = rule.appliedVersion > 0 && rule.appliedVersion === rule.desiredVersion;
-    cell(row, applied ? (rule.appliedStatus === 'paused' ? '已应用暂停配置' : '已应用 · 健康未知') : '等待应用确认');
+    const logging = sourceLoggingPresentation(rule);
+    cell(row, applied ? (rule.appliedStatus === 'paused' ? '已应用暂停配置' : '已应用 · 健康未知') : '等待应用确认', logging.label);
     const controls = row.insertCell(); controls.className = 'table-actions';
     for (const action of [rule.status === 'paused' ? 'resume' : 'pause', 'delete']) controls.append(button({ resume: '恢复', pause: '暂停', delete: '删除' }[action], async () => {
       if (action === 'delete' && !confirm(`删除“${rule.company} / ${rule.name}”？已下发端口保持隔离，不立即复用。`)) return;
       await mutate(`/api/admin/rules/${rule.id}/${action}`, { tenantId: rule.tenantId, version: rule.desiredVersion }, '规则请求已入队，等待 Agent 确认；平台审计已记录。');
     }, action === 'delete'));
+    const sourceToggle = button(rule.sourceLoggingEnabled ? '关闭来源记录' : '启用来源记录', () => setRuleSourceLogging(rule, !rule.sourceLoggingEnabled));
+    if (!rule.sourceLoggingEnabled && rule.sourceLoggingUnsupported) { sourceToggle.disabled = true; sourceToggle.title = '节点 Agent 不在线、不是 apply 模式或不支持来源记录'; }
+    controls.append(sourceToggle);
   }
   empty(root, 8, '本页暂无匹配规则。'); pager('rules', page);
 }
+let sourceFlowPage = 1;
+const sourceFlowForm = $('#source-flow-query');
+function localDateTimeValue(date) { const offset = date.getTimezoneOffset() * 60000; return new Date(date.getTime() - offset).toISOString().slice(0, 16); }
+sourceFlowForm.elements.namedItem('from').value = localDateTimeValue(new Date(Date.now() - 60 * 60000));
+sourceFlowForm.elements.namedItem('to').value = localDateTimeValue(new Date());
+async function loadSourceFlows() {
+  const fields = Object.fromEntries(new FormData(sourceFlowForm));
+  const query = new URLSearchParams({ from: new Date(fields.from).toISOString(), to: new Date(fields.to).toISOString(), page: String(sourceFlowPage) });
+  for (const key of ['nodeId', 'ruleId', 'protocol', 'sourceIp']) if (fields[key]) query.set(key, fields[key]);
+  const data = await api(`/api/admin/source-flows?${query}`);
+  const root = $('#source-flow-rows'); root.replaceChildren();
+  for (const flow of data.items) {
+    const row = root.insertRow();
+    cell(row, new Date(flow.observedAt).toLocaleString()); cell(row, `${flow.company} / ${flow.ruleName}`, `${flow.ruleId} · ${flow.nodeId}`); cell(row, flow.protocol.toUpperCase()); cell(row, `${flow.sourceIp}:${flow.sourcePort}`); cell(row, `${flow.relayIp}:${flow.relayPort}`); cell(row, `${flow.targetIp}:${flow.targetPort}`); cell(row, flow.knownGap ? '存在已知采集缺口' : '此事件已记录', flow.knownGap ? '不能据此判断时间段完整' : '无事件仍不代表完整');
+  }
+  for (const gap of data.gaps || []) {
+    const row = root.insertRow();
+    cell(row, `${new Date(gap.openedAt).toLocaleString()} – ${gap.closedAt ? new Date(gap.closedAt).toLocaleString() : '仍在持续'}`); cell(row, '采集缺口', gap.nodeId); cell(row, '—'); cell(row, '—'); cell(row, '—'); cell(row, '—'); cell(row, `缺口：${gap.reason}`, `已知丢失 ${gap.droppedCount} 条；实际可能更多`);
+  }
+  empty(root, 7, '此窗口没有已接收事件或已知缺口；这仍不证明该时段没有连接。');
+  $('#source-flow-page').textContent = `第 ${data.page} 页 · ${data.totalCapped ? '至少 10000' : `共 ${data.total}`} 条`; $('#source-flow-prev').disabled = data.page <= 1; $('#source-flow-next').disabled = !data.hasMore; $('#source-flow-message').textContent = data.gapsTruncated ? '重叠采集缺口超过 200 条，当前只显示前 200 条；请缩小查询时间窗。' : '';
+}
+sourceFlowForm.addEventListener('submit', event => { event.preventDefault(); sourceFlowPage = 1; loadSourceFlows().catch(error => $('#source-flow-message').textContent = error.message); });
+for (const direction of ['prev', 'next']) $(`#source-flow-${direction}`).addEventListener('click', () => { sourceFlowPage += direction === 'next' ? 1 : -1; loadSourceFlows().catch(error => $('#source-flow-message').textContent = error.message); });
 function renderAudit(records) { const root = $('#admin-audit'); root.replaceChildren(); for (const log of records) { const row = root.insertRow(); cell(row, new Date(log.createdAt).toLocaleString()); cell(row, log.actor === 'local-operator' ? '本机运维' : log.actor); cell(row, actions[log.action] || log.action); cell(row, log.resourceId).className = 'audit-resource'; cell(row, Object.entries(log.details).map(([key, value]) => `${key}: ${String(value)}`).join(' · ') || '—').className = 'audit-detail'; } empty(root, 5, '暂无平台操作记录。'); }
 function renderDeliveryRows(root, records) { root.replaceChildren(); for (const record of records) { const row = root.insertRow(); for (const value of [record.generation, deliveries[record.state] || record.state, record.attempts, ({ 'invalid-config': '配置检查失败', 'internal-error': 'Agent 内部错误', 'lease-exhausted': '租约重试耗尽' })[record.errorCode] || record.errorCode || '—', new Date(record.createdAt).toLocaleString(), record.reportedAt ? new Date(record.reportedAt).toLocaleString() : '尚未回报']) cell(row, value); } empty(root, 6, '暂无交付记录。'); }
 async function loadDeliveries() { const root = $('#admin-deliveries'); const id = $('#delivery-node').value; if (!id) { root.replaceChildren(); empty(root, 6, '请先登记节点。'); return; } renderDeliveryRows(root, await api(`/api/admin/nodes/${encodeURIComponent(id)}/deliveries`)); }
@@ -212,7 +254,7 @@ $('#rules-clear-tenant').addEventListener('click', async () => { state.tenantFil
 for (const kind of ['tenants', 'rules']) for (const direction of ['prev', 'next']) $(`#${kind}-${direction}`).addEventListener('click', async () => { const key = kind === 'tenants' ? 'tenantPage' : 'rulePage'; state[key] += direction === 'next' ? 1 : -1; try { await reload(); } catch (error) { message(error.message); } });
 async function enter() { const who = await api('/api/auth/me'); if (!who.platformAdmin) { access('denied'); return; } $('#admin-email').textContent = who.email; access('admin'); await reload(); adminNavigation.sync(); startAdminNodeMonitoring(); }
 $('#admin-login-form').addEventListener('submit', async event => { event.preventDefault(); const submit = event.target.querySelector('button'); submit.disabled = true; try { await api('/api/auth/login', Object.fromEntries(new FormData(event.target))); event.target.reset(); $('#login-message').textContent = ''; await enter(); } catch (error) { $('#login-message').textContent = error.message; } finally { submit.disabled = false; } });
-async function logout() { try { await api('/api/auth/logout', {}); location.assign('/admin'); } catch (error) { message(error.message); } }
+async function logout() { lightsailAdmin?.stop(); try { await api('/api/auth/logout', {}); location.assign('/admin'); } catch (error) { message(error.message); } }
 $('#admin-logout').addEventListener('click', logout); $('#denied-logout').addEventListener('click', logout);
 $('#admin-refresh').addEventListener('click', async () => { $('#admin-refresh').disabled = true; try { await reload(); if (state.view === 'plans') await loadPlans(); message('已刷新最新平台数据。'); } catch (error) { message(error.message); } finally { $('#admin-refresh').disabled = false; } });
 const offeringStateActions = offering => {
@@ -347,6 +389,7 @@ $('#plan-form').addEventListener('submit', async event => {
   }
 });
 const operations=bindOperations((path,{body}={})=>api(path,body),{admin:true});
+lightsailAdmin = bindLightsailAdmin({ api, onMessage: message });
 adminNavigation = bindConsoleNavigation({
   root: $('#admin-shell'), sidebar: document.querySelector('.admin-nav'), mobileToggle: $('#admin-nav-toggle'), collapseToggle: $('#admin-sidebar-collapse'),
   title: $('#view-title'), description: $('#admin-view-description'), items: document.querySelectorAll('#admin-navigation [data-view]'), panes: document.querySelectorAll('[data-pane]'),

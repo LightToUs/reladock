@@ -42,6 +42,7 @@ func main() {
 	snat := flag.String("snat", "", "explicit IPv4 SNAT address for apply mode")
 	shapingInterface := flag.String("shaping-interface", "", "explicit dedicated shaping interface for apply mode")
 	walDir := flag.String("metering-wal-dir", "", "explicit absolute collector WAL directory for apply mode")
+	sourceFlowWALDir := flag.String("source-flow-wal-dir", "", "optional distinct private source-flow metadata WAL directory for apply mode")
 	nftBinary := flag.String("nft-binary", "/usr/sbin/nft", "trusted absolute nft binary path")
 	tcBinary := flag.String("tc-binary", "/usr/sbin/tc", "trusted absolute tc binary path")
 	ipBinary := flag.String("ip-binary", "/usr/sbin/ip", "trusted absolute ip binary path")
@@ -54,7 +55,7 @@ func main() {
 	if err := agent.ValidateEndpoint(*endpoint, *nodeID); err != nil {
 		log.Fatal(err)
 	}
-	state, applier, err := agent.PrepareApply(agent.RuntimeOptions{Apply: *apply, StateDir: *stateDir, SNATAddress: *snat, ShapingInterface: *shapingInterface, WALDir: *walDir, NFTBinary: *nftBinary, TCBinary: *tcBinary, IPBinary: *ipBinary, ShapingLeaseFile: *shapingLease, EthtoolBinary: *ethtoolBinary, ControlLockPath: "/var/lib/reladock-locks/control.lock"}, *nodeID)
+	state, applier, err := agent.PrepareApply(agent.RuntimeOptions{Apply: *apply, StateDir: *stateDir, SNATAddress: *snat, ShapingInterface: *shapingInterface, WALDir: *walDir, SourceFlowWALDir: *sourceFlowWALDir, NFTBinary: *nftBinary, TCBinary: *tcBinary, IPBinary: *ipBinary, ShapingLeaseFile: *shapingLease, EthtoolBinary: *ethtoolBinary, ControlLockPath: "/var/lib/reladock-locks/control.lock"}, *nodeID)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -88,6 +89,11 @@ func main() {
 			log.Fatal("kernel boot identity unavailable")
 		}
 		kernelBootID = bootID
+		if engine.SourceFlowWAL != nil {
+			if stateErr = engine.ConfigureSourceFlow(bootID); stateErr != nil {
+				log.Fatal(stateErr)
+			}
+		}
 		runner.Retirement = &agent.RetirementWorker{State: retirementState, Adapter: engine.Adapter, BootID: bootID}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -169,7 +175,15 @@ func main() {
 			}
 		}
 		rotationState, rotationError := credentials.RotationStatus()
-		if err := runner.ReportRuntimeHeartbeat(activityCtx, platform.AgentHeartbeat{CertificateRotationSupported: true, Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError, KernelBootID: kernelBootID, JournalSequence: journalSequence}, resourceCollector, engine); err != nil {
+		var sourceFlows *platform.SourceFlowStatus
+		if engine != nil && engine.SourceFlowAvailable() {
+			var statusErr error
+			sourceFlows, statusErr = engine.SourceFlowStatus(time.Now().UTC())
+			if statusErr != nil {
+				return statusErr
+			}
+		}
+		if err := runner.ReportRuntimeHeartbeat(activityCtx, platform.AgentHeartbeat{CertificateRotationSupported: true, SourceFlowSupported: engine != nil && engine.SourceFlowAvailable(), Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError, KernelBootID: kernelBootID, JournalSequence: journalSequence, SourceFlows: sourceFlows}, resourceCollector, engine); err != nil {
 			return err
 		}
 		return upgradeHealth.HeartbeatSucceeded()
@@ -193,6 +207,14 @@ func main() {
 			activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
 			defer cancel()
 			return engine.ProbeCycle(activityCtx, &runner)
+		}
+		if engine.SourceFlowAvailable() {
+			hooks.SourceFlowCapture = engine.CaptureSourceFlows
+			hooks.SourceFlowUpload = func(parent context.Context) error {
+				activityCtx, cancel := context.WithTimeout(parent, 20*time.Second)
+				defer cancel()
+				return engine.FlushSourceFlows(activityCtx, &runner)
+			}
 		}
 	}
 	activities, err := agent.RuntimeActivities(hooks)

@@ -8,9 +8,53 @@
 
 ## 控制平台安装
 
+来源连接记录默认不可用。需要该功能时，控制服务环境必须显式设置 `SOURCE_FLOW_RETENTION_DAYS=30..365`（建议 180，并先完成合同/司法辖区确认）；缺省时服务仍启动，但所有启用请求失败关闭。恢复数据库备份后，在开放管理员查询前先运行同版本保留清理。
+
 发布包内有 `install-linux.sh`：在目标机器核对后执行 `sh /path/install-linux.sh control /absolute/release-directory`；节点使用 `agent`。脚本检查 Linux/root/systemd 和二进制 SHA256，安装系统账号、程序及服务模板，保留已有环境文件。Agent 安装会在缺少固定 `/usr/sbin/conntrack` 时通过受支持的系统包管理器安装 `conntrack`/`conntrack-tools`，安装后仍会核对固定路径；它不会自动启动或启用服务，也不会修改网络规则。脚本完成后填写实际配置和证书，再显式启动服务。
 
 控制平台可用 `reladock --check-config` 校验当前进程环境和 TLS 文件，不连接数据库或监听网络；它不自动读取 env 文件，由 systemd EnvironmentFile 或受控启动器注入。
+
+## 可选 AWS Lightsail 脚本节点
+
+该连接器默认关闭，并与 RelaDock 入口节点/Agent 分离。`--check-config` 只校验字段，不加载 AWS 凭据或连接 AWS；正常启动只有在精确设置 `LIGHTSAIL_ENABLED=true` 后才通过 AWS SDK 默认凭据链解析工作负载角色、共享配置或环境凭据。优先使用专用工作负载角色，不把长期 AWS key 写进 `control.env`、数据库、浏览器或仓库。
+
+```ini
+LIGHTSAIL_ENABLED=true
+LIGHTSAIL_ALLOWED_REGIONS=ap-southeast-1,us-east-1
+LIGHTSAIL_SSH_SOURCE_CIDR=203.0.113.10/32
+# 可选：LIGHTSAIL_WORKER_INTERVAL=5s
+# 可选：LIGHTSAIL_AWS_OPERATION_TIMEOUT=15m
+# 可选：LIGHTSAIL_SSH_CONNECT_TIMEOUT=30s
+# 可选：LIGHTSAIL_SCRIPT_TIMEOUT=20m
+```
+
+允许区域必须先在目标 AWS 账户可用或完成 opt-in；控制端不会替账户启用区域。SSH 来源只接受规范的单主机 IPv4 `/32` 或 IPv6 `/128`，应填写控制服务实际出站地址；创建任务会用 `PutInstancePublicPorts` 把实例公开端口集合收窄为该来源的 TCP/22。此窗口持续到实例被关闭或销毁，不是一次连接后自动关口；若还需业务端口，应由脚本或后续受审流程明确处理，不能把它与 RelaDock 数据面防火墙混淆。
+
+`CreateInstances` 与首次成功执行 `PutInstancePublicPorts` 不是原子操作；两者之间可能短暂保留所选 blueprint 的默认公开端口。真实账户验收必须在隔离账户中测量该窗口、选择默认暴露最小的镜像并核对最终端口集合。当前实现不承诺“零暴露创建”。
+
+按当前代码路径，专用 IAM principal 至少需要以下 action；列表依据 [AWS Lightsail Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/list_lightsail.html) 核对。由于目录、创建和部分静态 IP action 不支持全部资源级限制，初始策略可能需要 `Resource: "*"`；在真实账户验收后再按 AWS 支持的资源 ARN、`aws:RequestTag/reladock-managed`、`aws:ResourceTag/reladock-managed` 和允许区域收紧，不能先假设未验证的条件键有效。
+
+```text
+lightsail:GetRegions
+lightsail:GetBlueprints
+lightsail:GetBundles
+lightsail:GetInstance
+lightsail:CreateInstances
+lightsail:GetOperation
+lightsail:PutInstancePublicPorts
+lightsail:GetStaticIp
+lightsail:AllocateStaticIp
+lightsail:AttachStaticIp
+lightsail:DetachStaticIp
+lightsail:ReleaseStaticIp
+lightsail:GetInstanceAccessDetails
+lightsail:StopInstance
+lightsail:DeleteInstance
+```
+
+Lightsail API 会限流；worker 对未完成操作和可重试 provider 失败使用有界退避，浏览器目录错误只返回固定 503，不立即循环重试。不要通过缩短 worker 间隔绕过 AWS 限流；AWS 官方建议增加请求间隔，参见 [Lightsail API throttling](https://docs.aws.amazon.com/lightsail/latest/userguide/lightsail-api-throttling.html)。
+
+粘贴脚本属于高敏感部署材料：创建前去除长期密钥和不必要输出。正文只保留到执行边界；开始执行时数据库原子清除正文，之后仅保存摘要、大小、有界脱敏输出和结果。`unknown` 表示可能已经产生副作用，平台绝不重放；先登录 AWS/实例人工核查。关机保留静态 IP 和费用事实；销毁必须先关机、输入完整实例名，并通过标签/绑定核验后按 detach → delete → release 执行。当前没有真实 AWS、付费创建、SSH 或销毁验收，启用前必须在隔离账户和允许区域完成小规格端到端演练与费用告警。
 
 开发联调期间可在控制服务环境中显式设置 `RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES=true`。此开关默认关闭，只使 `pending-agent` 规则绕过套餐周期、额度和到期判断；人工暂停、删除、逐规则带宽、真实计量、mTLS、Agent 校验和 applied ACK 仍照常执行。配置不会伪造订阅或账本，开发用量以空 `subscriptionId` 独立上报，并携带配置 generation；关闭开关后，Agent 仍可依据数据库保留且校验摘要的历史版本快照排空已持久化开发 WAL，伪造、不完整或不存在的 generation 会被拒绝。控制服务与 `reladock-admin` 必须使用同一环境文件。开启或关闭后必须重启控制服务，并对相关节点执行配置重试生成新 generation。商业生产必须删除该变量或设为精确的 `false`；其他拼写和值会使服务和运维 CLI 拒绝启动。
 
@@ -27,6 +71,8 @@
 复制校验 Agent 二进制及本节点独立的 `ca.crt`、`agent.crt`、`agent.key`。配置 `agent.env.example` 并安装 `reladock-agent.service`。校验服务使用非特权账号，只有出站 mTLS 联系能力。实际转发命令与此服务分离；`docs/DATAPLANE.md` 描述 Adapter 的限制和验收，不能用校验通过代替规则已生效。
 
 ### 显式应用模式
+
+来源连接采集还要求 Agent 增加一个与 `--metering-wal-dir` 不同的私有绝对路径 `--source-flow-wal-dir`，并具备 conntrack netlink 所需 `CAP_NET_ADMIN`。未配置该目录时 apply 转发照常工作，但 Agent 不声明来源记录能力，平台不能启用规则。该 WAL 只保存连接元数据和缺口，不得与计费 WAL 共用、删除或手工清空来处理积压。
 
 先核对实际 IPv4 ingress 与 SNAT；控制平台的 `listenAddress` 必须为本节点实际地址，不可保留 `0.0.0.0`。客户目标须是可路由的非回环 IPv4；DNS 在受控应用时解析并固定，不承诺即时切换。平台不自动配置网卡、路由、ip_forward、卸载功能或云安全组。
 
@@ -122,6 +168,9 @@ CA 必须仍有至少 31 天有效期。签发节点证书固定 ClientAuth、�
 - 生成的命令先从可信控制台下载引导脚本，再从固定 GitHub tag 下载归档，使用控制台固定摘要验证后才执行包内 Agent。凭证经 stdin 交给 Agent，不进入 URL、服务参数、环境文件或后台审计。
 - **复制命令本身含短期凭证**，可能被终端历史、剪贴板或屏幕录制保存；不要发给他人。界面仅内存保存命令，过期、收起或退出后清除。控制台及反向代理不得记录 Authorization/响应正文。
 - 成功后 `/etc/reladock/agent.env` 由安装器写入；私钥只在 `/etc/reladock/node-pki/agent.key` 本地生成，凭据仅服务账号可读，自动启用 `reladock-agent.service` 与只负责受控二进制升级的 `reladock-updater.timer`。不启动 apply，不改主机防火墙、IP forwarding、路由、offload、qdisc 或云安全组。
+- 同一命令在完整既有安装上从 `/dev/tty` 显示“升级 / 不操作”菜单，不从承载短期凭证的标准输入读取选择。回车、其他输入、无交互终端及选择“不操作”都保持现状并且不请求发布元数据；该次新生成凭证没有被消费，操作者应回后台撤销。受控自动化可显式附加 `--existing-action upgrade` 或 `--existing-action none`，但不能用它绕过完整性检查。
+- “完整既有安装”要求 `agent.env`、PKI 关键文件、本地节点/控制地址对应关系、四个 Agent 二进制及四个 systemd 单元均为非符号链接的普通文件。任一缺失或身份冲突都不显示升级选项，保留全部现场并进入下方恢复流程。
+- 菜单升级仍从控制台固定版本和摘要取得归档，完成外层摘要、平面文件白名单和包内摘要验证后，只替换 Agent/dataplane/updater/recovery 二进制与四个 systemd 单元；不注册新身份、不安装系统包、不修改网络前置条件。它保存并恢复原 validation/apply 与 updater timer 活动状态；候选启动失败时恢复旧文件和旧模式。服务 active 只证明进程恢复，不代表控制链路、配置应用或端到端转发健康。
 - 后台环境报告包含采样时间、架构和有限只读网络信息；无权限/不支持的检查显示 unknown。数据有截断限制，不可用它替代专用网卡、完整防火墙和流量健康验收。
 
 ## Agent 受控升级与回滚

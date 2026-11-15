@@ -188,15 +188,15 @@ func TestTenantNodeInventoryScopesDedicatedNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, input := range []platform.NodeInput{
-		{ID: "inventory-shared", Name: "Shared", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: platform.ResourceModeShared},
-		{ID: "inventory-first", Name: "First only", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: platform.ResourceModeDedicatedTenant, DedicatedTenantID: firstWho.TenantID},
-		{ID: "inventory-second", Name: "Second only", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: platform.ResourceModeDedicatedRule, DedicatedTenantID: secondWho.TenantID},
+		{ID: "inventory-shared", Name: "Shared", Region: "Test", ListenAddress: "0.0.0.0", PublicAddress: "192.0.2.10", CapacityMbps: 1000, ResourceMode: platform.ResourceModeShared},
+		{ID: "inventory-first", Name: "First only", Region: "Test", ListenAddress: "0.0.0.0", PublicAddress: "192.0.2.11", CapacityMbps: 1000, ResourceMode: platform.ResourceModeDedicatedTenant, DedicatedTenantID: firstWho.TenantID},
+		{ID: "inventory-second", Name: "Second only", Region: "Test", ListenAddress: "0.0.0.0", PublicAddress: "192.0.2.12", CapacityMbps: 1000, ResourceMode: platform.ResourceModeDedicatedRule, DedicatedTenantID: secondWho.TenantID},
 	} {
 		if err = store.AdminAddNode(context.Background(), admin, input); err != nil {
 			t.Fatal(err)
 		}
 	}
-	assertInventory := func(cookie *http.Cookie, present, absent string) {
+	assertInventory := func(cookie *http.Cookie, present, presentAddress, absent, absentAddress string) {
 		t.Helper()
 		for _, path := range []string{"/api/nodes", "/api/overview"} {
 			rec := request(h, "GET", path, "", cookie)
@@ -204,13 +204,13 @@ func TestTenantNodeInventoryScopesDedicatedNodes(t *testing.T) {
 				t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
 			}
 			body := rec.Body.String()
-			if !strings.Contains(body, `"id":"inventory-shared"`) || !strings.Contains(body, `"id":"`+present+`"`) || strings.Contains(body, `"id":"`+absent+`"`) || strings.Contains(body, "dedicatedTenantId") {
+			if !strings.Contains(body, `"id":"inventory-shared"`) || !strings.Contains(body, `"publicAddress":"192.0.2.10"`) || !strings.Contains(body, `"id":"`+present+`"`) || !strings.Contains(body, `"publicAddress":"`+presentAddress+`"`) || strings.Contains(body, `"id":"`+absent+`"`) || strings.Contains(body, absentAddress) || strings.Contains(body, "dedicatedTenantId") || strings.Contains(body, "listenAddress") {
 				t.Fatalf("scoped inventory %s: %s", path, body)
 			}
 		}
 	}
-	assertInventory(firstCookie, "inventory-first", "inventory-second")
-	assertInventory(secondCookie, "inventory-second", "inventory-first")
+	assertInventory(firstCookie, "inventory-first", "192.0.2.11", "inventory-second", "192.0.2.12")
+	assertInventory(secondCookie, "inventory-second", "192.0.2.12", "inventory-first", "192.0.2.11")
 }
 
 func TestHTTPRejectsCrossSiteMalformedAndOversizedRequests(t *testing.T) {

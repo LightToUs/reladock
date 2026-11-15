@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#07111f"><title>RelaDock · 网络中转</title><link rel="stylesheet" href="/app.css"><script src="/app.js" type="module"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#07111f"><title>RelaDock · 网络中转</title><link rel="icon" href="/reladock-mark.svg" type="image/svg+xml"><link rel="stylesheet" href="/app.css"><script src="/app.js" type="module"></script></head>
 <body>
 <section class="auth" id="auth" hidden>
   <div class="tag">RelaDock · 企业网络中转</div><h1 id="auth-title">登录企业控制台</h1><p class="muted">管理企业入口、转发配置与交付状态。</p>
@@ -20,7 +20,7 @@
 </section>
 <div id="console" hidden>
 <aside id="workspace-sidebar">
-  <div class="brand"><span class="brand-mark" aria-hidden="true">R</span><div class="brand-copy"><h2>RelaDock</h2></div><button id="workspace-nav-collapse" class="sidebar-collapse" type="button" aria-controls="workspace-navigation" aria-expanded="true">‹</button></div>
+  <div class="brand"><img class="brand-mark" src="/reladock-mark.svg" alt=""><div class="brand-copy"><h2>RelaDock</h2></div><button id="workspace-nav-collapse" class="sidebar-collapse" type="button" aria-controls="workspace-navigation" aria-expanded="true">‹</button></div>
   <nav id="workspace-navigation" aria-label="工作台导航">
     <a data-view="overview" data-short="概" class="selected" href="#/overview"><span class="nav-label">运行概览</span></a>
     <a data-view="billing" data-short="套" href="#/billing"><span class="nav-label">购买套餐</span></a>
@@ -69,7 +69,7 @@
 <div class="notice" data-pane="overview"><span>运行边界</span><p>配置已应用、节点在线和目标可达均不代表端到端健康。</p></div>
 <section class="rule-management primary-section" id="rules-section" data-pane="rules" hidden>
   <div class="section-heading"><div><h2>转发规则 <span class="muted" id="rule-count"></span></h2><p class="hint muted">先购买套餐，再用已购买套餐创建规则；暂停保留端口，删除已下发规则后继续隔离等待安全回收。</p></div><button id="rule-create" class="compact">创建规则</button></div>
-  <div class="scroll"><table><thead><tr><th>名称 / 节点</th><th>预留端口</th><th>传输</th><th>目标</th><th>带宽上限</th><th>已使用流量</th><th>近期带宽</th><th>配置版本</th><th>状态</th><th>操作</th></tr></thead><tbody id="rules"></tbody></table></div><p id="rules-message" class="error" role="status"></p>
+  <div class="scroll"><table><thead><tr><th>名称 / 入口地址</th><th>预留端口</th><th>传输</th><th>目标</th><th>带宽上限</th><th>已使用流量</th><th>近期带宽</th><th>配置版本</th><th>状态</th><th>操作</th></tr></thead><tbody id="rules"></tbody></table></div><p id="rules-message" class="error" role="status"></p>
 </section>
 <dialog id="rule-dialog" class="editor-dialog" aria-labelledby="rule-dialog-title">
   <div class="dialog-heading"><div><h2 id="rule-dialog-title">创建中转规则</h2><p id="rule-dialog-description" class="muted"></p></div><button id="rule-dialog-close" class="icon-button" type="button" aria-label="关闭规则弹窗">×</button></div>
@@ -108,10 +108,10 @@
 </section>
 <section id="node-status-section" class="node-status-section" data-pane="node-status" hidden>
   <div class="section-heading"><div><h2>入口节点</h2><p class="hint muted">仅显示本企业关联节点；在线或配置一致不代表端到端健康。</p></div></div>
-  <div class="scroll"><table class="node-status-table"><thead><tr><th>入口节点</th><th>联系 / 配置</th><th>实时速率</th><th>累计流量</th><th>Agent 运行</th><th>CPU / RAM / 存储 / 连接跟踪</th><th>样本时间</th></tr></thead><tbody id="node-status-rows"></tbody></table></div>
+  <div class="scroll"><table class="node-status-table"><thead><tr><th>入口节点 / 地址</th><th>联系 / 配置</th><th>实时速率</th><th>累计流量</th><th>Agent 运行</th><th>CPU / RAM / 存储 / 连接跟踪</th><th>样本时间</th></tr></thead><tbody id="node-status-rows"></tbody></table></div>
   <p id="node-status-message" class="muted hint" role="status" aria-live="polite">等待节点数据。</p>
 </section>
-<section id="nodes-section" data-pane="rules" hidden><h2>交付概况</h2><p class="muted hint">校验和应用确认不代表端到端健康。</p><div class="scroll"><table><thead><tr><th>节点</th><th>地区</th><th>资源状态</th><th>期望 / 校验 / 应用版本</th><th>交付状态</th><th>最近联系</th></tr></thead><tbody id="nodes"></tbody></table></div><p id="refresh-message" class="muted hint" role="status"></p></section>
+<section id="nodes-section" data-pane="rules" hidden><h2>交付概况</h2><p class="muted hint">校验和应用确认不代表端到端健康。</p><div class="scroll"><table><thead><tr><th>节点 / 入口地址</th><th>地区</th><th>资源状态</th><th>期望 / 校验 / 应用版本</th><th>交付状态</th><th>最近联系</th></tr></thead><tbody id="nodes"></tbody></table></div><p id="refresh-message" class="muted hint" role="status"></p></section>
 <section data-pane="audit" hidden><h2>操作记录</h2><div class="scroll"><table id="audit"><thead><tr><th>时间</th><th>操作</th><th>资源</th></tr></thead><tbody id="audit-rows"></tbody></table></div></section>
 <div data-pane="team" hidden>
 <section id="member-tools"><h2>企业成员</h2><div class="scroll"><table><thead><tr><th>邮箱</th><th>角色</th><th>管理</th></tr></thead><tbody id="member-rows"></tbody></table></div><form id="invitation-form"><label>受邀邮箱<input name="email" type="email" required></label><label>角色<select name="role"><option value="viewer">只读成员</option><option value="admin">企业管理员</option></select></label><button>生成邀请（24 小时有效）</button></form><p class="hint muted">邀请令牌只显示一次，请通过可信渠道发送。</p><div class="scroll"><table><thead><tr><th>受邀邮箱</th><th>到期时间</th><th>状态</th><th>管理</th></tr></thead><tbody id="invitation-rows"></tbody></table></div></section>
@@ -122,21 +122,50 @@
   <div class="section-heading"><div><h2>套餐市场</h2></div></div>
   <div class="purchase-toolbar"><div class="plan-line-filter"><span>线路类型</span><div id="plan-line-filters" class="plan-filter-list" role="group" aria-label="按线路筛选套餐"></div></div></div>
   <p id="plan-availability" class="muted"></p><div id="plan-card-grid" class="plan-card-grid" aria-live="polite"></div><p id="business-message" class="error" role="status"></p>
-  <dialog id="purchase-dialog" class="editor-dialog purchase-dialog" aria-labelledby="purchase-dialog-title"><div class="dialog-heading"><div><h2 id="purchase-dialog-title">配置套餐</h2></div></div><div class="purchase-dialog-summary"><div><span>绑定规则 / 待绑定</span><strong id="purchase-dialog-rule"></strong></div><div><span>套餐内容</span><strong id="purchase-dialog-plan"></strong></div><div class="purchase-dialog-total"><span>本周期价格</span><strong id="purchase-dialog-price"></strong></div></div><form id="purchase-form"><input name="ruleId" type="hidden"><input name="priceVersionId" type="hidden"><p class="hint muted">付款后立即计时；未绑定规则的套餐会在创建规则时绑定，节点未部署时等待交付。</p><p id="purchase-dialog-status" class="error" role="status"></p><div class="dialog-actions"><button type="button" id="purchase-dialog-cancel" class="secondary">取消</button><button id="purchase-confirm">确认购买</button></div></form></dialog>
+  <dialog id="purchase-dialog" class="editor-dialog purchase-dialog" aria-labelledby="purchase-dialog-title"><div class="dialog-heading"><div><h2 id="purchase-dialog-title">配置套餐</h2></div></div><div class="purchase-dialog-summary"><div><span>绑定规则 / 待绑定</span><strong id="purchase-dialog-rule"></strong></div><div><span>套餐内容</span><strong id="purchase-dialog-plan"></strong></div><div class="purchase-dialog-total"><span>本周期价格</span><strong id="purchase-dialog-price"></strong></div></div><form id="purchase-form"><input name="ruleId" type="hidden"><input name="priceVersionId" type="hidden"><p class="hint muted">一次购买会优先使用企业钱包；余额不足时仅由服务端计算并收取差额。付款验签并成功购买后才开始计时，节点未部署时等待交付。</p><p id="purchase-dialog-status" class="error" role="status"></p><div class="dialog-actions"><button type="button" id="purchase-dialog-cancel" class="secondary">取消</button><button id="purchase-confirm">选择支付方式</button></div></form></dialog>
 </section>
 <section class="subscription-center" data-pane="billing" hidden><div class="billing-detail-heading"><div><h2>当前套餐</h2></div><button id="subscription-refresh" class="secondary">刷新用量</button></div><div class="scroll"><table><thead><tr><th>套餐</th><th>本周期流量</th><th>带宽上限</th><th>到期时间</th><th>状态</th><th>自动续费</th></tr></thead><tbody id="subscription-rows"></tbody></table></div></section>
-<section class="finance-center" data-pane="overview"><div class="section-heading"><div><h2>钱包与账单</h2></div><div class="purchase-wallet"><span>可用钱包</span><strong id="wallet-status">读取中</strong></div></div><p id="payment-availability" class="hint muted"></p><form id="top-up-form" class="top-up-inline" hidden><label>充值金额 / 美分<input name="amountCents" type="number" min="50" max="1000000" required></label><button>前往支付页面</button></form><div class="billing-detail-heading"><div><h3>账本流水</h3></div><button id="wallet-ledger-refresh" class="secondary">刷新账本</button></div><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>所属规则</th><th>金额</th><th>说明</th></tr></thead><tbody id="wallet-ledger-rows"></tbody></table></div><p id="finance-message" class="error" role="status" aria-live="polite"></p></section>
+<section class="finance-center" data-pane="overview"><div class="section-heading"><div><h2>钱包与账单</h2></div><div class="purchase-wallet"><span>可用钱包</span><strong id="wallet-status">读取中</strong></div></div><p id="payment-availability" class="hint muted"></p><form id="top-up-form" class="top-up-inline" hidden><label>充值金额 / USD<input name="amountUSD" type="number" inputmode="decimal" min="0.50" max="10000.00" step="0.01" placeholder="10.00" required></label><label>支付方式<select id="top-up-method" name="method"><option value="tron">USDT · TRON</option><option value="stripe">银行卡 · Stripe</option></select></label><button>创建充值订单</button></form><div class="billing-detail-heading"><div><h3>账本流水</h3></div><button id="wallet-ledger-refresh" class="secondary">刷新账本</button></div><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>所属规则</th><th>金额 / USD</th><th>说明</th></tr></thead><tbody id="wallet-ledger-rows"></tbody></table></div><p id="finance-message" class="error" role="status" aria-live="polite"></p></section>
+<dialog id="tron-payment-dialog" class="editor-dialog tron-payment-dialog" aria-labelledby="tron-payment-title">
+  <div class="tron-payment-heading">
+    <div><span>USDT · TRC-20</span><h2 id="tron-payment-title">扫码支付</h2><p>链上固化后自动识别到账</p></div>
+    <button id="tron-payment-close-icon" class="icon-button" type="button" aria-label="关闭 USDT 付款弹窗">×</button>
+  </div>
+  <div id="tron-payment-qr-panel" class="tron-payment-primary">
+    <div class="tron-payment-primary-address">
+      <span id="tron-payment-address-label" class="tron-payment-primary-label">收款地址</span>
+      <div><code id="tron-payment-address"></code><button type="button" id="tron-payment-copy-address" class="secondary compact">复制地址</button></div>
+    </div>
+    <div class="tron-payment-visual">
+      <div id="tron-payment-qr-stage" class="tron-payment-qr-stage"><img id="tron-payment-qr" alt="TRON USDT 收款地址二维码" width="256" height="256"></div>
+      <div id="tron-payment-success" class="tron-payment-result tron-payment-result-success" hidden><span aria-hidden="true">✓</span><strong>充值成功</strong><p id="tron-payment-success-detail"></p></div>
+      <div id="tron-payment-status-visual" class="tron-payment-result" hidden><span id="tron-payment-status-symbol" aria-hidden="true">···</span><strong id="tron-payment-status-headline"></strong><p>正在读取服务端订单状态</p></div>
+    </div>
+    <div class="tron-payment-amount-line"><strong id="tron-payment-amount"></strong></div>
+    <p id="tron-payment-network" class="tron-payment-network">TRON（TRC-20）</p>
+    <div class="tron-payment-validity"><span id="tron-payment-validity-label">有效时间</span><strong id="tron-payment-countdown" aria-live="polite">--:--</strong></div>
+  </div>
+  <div class="tron-payment-details">
+    <div class="tron-payment-status"><span>订单状态</span><p id="tron-payment-state"></p></div>
+    <p class="tron-payment-safety">仅发送 TRON 网络 USDT。请核对六位精确金额；发送其他网络或资产不会自动入账。</p>
+    <details id="tron-payment-token-info" class="tron-payment-disclosure"><summary>网络与代币信息</summary><dl><div><dt>网络类型</dt><dd>TRON（TRC-20）</dd></div><div><dt>官方 USDT 合约</dt><dd><code>TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t</code></dd></div></dl></details>
+    <details id="tron-payment-recovery" class="tron-payment-disclosure"><summary>未自动到账？手动提交交易哈希</summary><form id="tron-claim-form"><label>交易哈希<input name="txHash" required minlength="64" maxlength="64" pattern="[0-9a-f]{64}" autocomplete="off" spellcheck="false"></label><div class="dialog-actions"><button id="tron-claim-submit">提交交易哈希</button></div></form></details>
+    <div class="dialog-actions tron-payment-actions"><button type="button" id="tron-payment-refresh" class="secondary">刷新状态</button><button type="button" id="tron-payment-close" class="secondary">关闭</button></div>
+    <p id="tron-payment-message" class="error" role="status" aria-live="polite"></p>
+  </div>
+</dialog>
 <section id="payment-checkout" class="payment-checkout" data-pane="checkout" hidden>
   <div class="checkout-heading"><button type="button" id="checkout-back" class="secondary">返回套餐选购</button></div>
   <div id="checkout-empty" class="checkout-empty"><h2>没有待支付的套餐</h2><p class="muted">请先返回套餐选购，选择规则和套餐后进入支付。</p></div>
   <div id="checkout-content" hidden>
-    <h2>完成套餐支付</h2><p class="muted hint">仅钱包扣款成功后开通；外部支付返回不代表到账。</p>
+    <h2>直接购买套餐</h2><p class="muted hint">钱包余额优先抵扣；不足部分通过 Stripe 支付，验签回调会在同一事务中入账并尝试购买。</p>
     <div class="checkout-order-summary"><div><span>关联规则</span><strong id="checkout-rule"></strong></div><div><span>套餐内容</span><strong id="checkout-plan"></strong></div><div class="checkout-total"><span>应付金额</span><strong id="checkout-amount"></strong></div></div>
     <div class="payment-method-grid">
       <article class="payment-method"><div><span>余额支付</span><h3>企业钱包</h3></div><strong id="checkout-wallet-balance">$0.00</strong><p id="checkout-balance-detail" class="muted"></p><button type="button" id="checkout-balance-pay">使用余额支付</button></article>
-      <article class="payment-method"><div><span>其他支付方式</span><h3>银行卡 / Stripe</h3></div><strong>外部支付</strong><p id="checkout-external-detail" class="muted"></p><button type="button" id="checkout-external-pay">前往外部支付</button></article>
+      <article class="payment-method"><div><span>差额支付</span><h3>银行卡 / Stripe</h3></div><strong id="checkout-external-amount">$0.00</strong><p id="checkout-external-detail" class="muted"></p><button type="button" id="checkout-external-pay">支付差额并购买</button></article>
+      <article class="payment-method"><div><span>链上支付</span><h3>USDT / TRON</h3></div><strong>TRC-20</strong><p id="checkout-tron-detail" class="muted"></p><button type="button" id="checkout-tron-pay">创建 USDT 订单</button></article>
     </div>
-    <p class="checkout-boundary muted">外部支付必须经验签回调入账，再使用钱包完成购买。</p>
+    <p class="checkout-boundary muted">外部页面返回不代表成功；最终状态只以服务端验签、钱包账本和套餐订单为准。若支付已到账但套餐因停售、权限变化或余额并发变动未开通，资金会保留在企业钱包。</p>
     <p id="checkout-status" class="error" role="status" aria-live="polite"></p>
   </div>
 </section>

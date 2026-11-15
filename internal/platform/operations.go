@@ -15,6 +15,7 @@ const DefaultContactStaleAfter = 5 * time.Minute
 type OperationNode struct {
 	ID                  string     `json:"id"`
 	Name                string     `json:"name"`
+	PublicAddress       string     `json:"publicAddress"`
 	ContactStatus       string     `json:"contactStatus"`
 	LastSeenAt          *time.Time `json:"lastSeenAt"`
 	AgentStartedAt      *time.Time `json:"agentStartedAt"`
@@ -269,6 +270,7 @@ func (s *Store) reconcileNodeIncidents(ctx context.Context, nodeID string, stale
 	}
 	var enrolled, controlMonitored, stale, failed, certificateExpiring, certificateExpired, rotationFailed bool
 	var cpuHigh, memoryHigh, diskHigh, conntrackHigh, clockSkew, dataplaneDrift bool
+	var sourceFlowDegraded, sourceFlowNormalStable bool
 	err = tx.QueryRow(ctx, `SELECT
 	 n.certificate_fingerprint IS NOT NULL,
 	 n.status<>'maintenance',
@@ -282,8 +284,10 @@ func (s *Store) reconcileNodeIncidents(ctx context.Context, nodeID string, stale
  COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.disk_high_since<=clock_timestamp()-interval '5 minutes',false),
  COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.conntrack_high_since<=clock_timestamp()-interval '5 minutes',false),
  COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.clock_skew_since<=clock_timestamp()-interval '2 minutes',false),
- COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.dataplane_drift_since<=clock_timestamp()-interval '2 minutes',false)
-	 FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation LEFT JOIN node_resource_latest rs ON rs.node_id=n.id WHERE n.id=$1`, nodeID, staleAfter.Seconds()).Scan(&enrolled, &controlMonitored, &stale, &failed, &certificateExpiring, &certificateExpired, &rotationFailed, &cpuHigh, &memoryHigh, &diskHigh, &conntrackHigh, &clockSkew, &dataplaneDrift)
+ COALESCE(rs.received_at>=clock_timestamp()-interval '90 seconds' AND rs.dataplane_drift_since<=clock_timestamp()-interval '2 minutes',false),
+ COALESCE(sf.received_at>=clock_timestamp()-interval '90 seconds' AND sf.collector_status IN ('degraded','unavailable') AND sf.degraded_since<=clock_timestamp()-interval '2 minutes',false),
+ COALESCE(sf.received_at>=clock_timestamp()-interval '90 seconds' AND sf.collector_status='normal' AND sf.normal_since<=clock_timestamp()-interval '2 minutes',false)
+	 FROM nodes n LEFT JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation LEFT JOIN node_resource_latest rs ON rs.node_id=n.id LEFT JOIN node_source_flow_latest sf ON sf.node_id=n.id WHERE n.id=$1`, nodeID, staleAfter.Seconds()).Scan(&enrolled, &controlMonitored, &stale, &failed, &certificateExpiring, &certificateExpired, &rotationFailed, &cpuHigh, &memoryHigh, &diskHigh, &conntrackHigh, &clockSkew, &dataplaneDrift, &sourceFlowDegraded, &sourceFlowNormalStable)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // Inventory may change between its read and this transaction.
 	}
@@ -293,18 +297,20 @@ func (s *Store) reconcileNodeIncidents(ctx context.Context, nodeID string, stale
 	for _, condition := range []struct {
 		kind       string
 		actionable bool
+		resolve    bool
 	}{
-		{"contact-stale", enrolled && controlMonitored && stale},
-		{"config-failed", enrolled && controlMonitored && failed},
-		{"certificate-expiring", enrolled && certificateExpiring},
-		{"certificate-expired", enrolled && certificateExpired},
-		{"certificate-rotation-failed", enrolled && rotationFailed},
-		{"resource-cpu-high", enrolled && cpuHigh},
-		{"resource-memory-high", enrolled && memoryHigh},
-		{"resource-disk-high", enrolled && diskHigh},
-		{"resource-conntrack-high", enrolled && conntrackHigh},
-		{"resource-clock-skew", enrolled && clockSkew},
-		{"dataplane-drift", enrolled && dataplaneDrift},
+		{"contact-stale", enrolled && controlMonitored && stale, true},
+		{"config-failed", enrolled && controlMonitored && failed, true},
+		{"certificate-expiring", enrolled && certificateExpiring, true},
+		{"certificate-expired", enrolled && certificateExpired, true},
+		{"certificate-rotation-failed", enrolled && rotationFailed, true},
+		{"resource-cpu-high", enrolled && cpuHigh, true},
+		{"resource-memory-high", enrolled && memoryHigh, true},
+		{"resource-disk-high", enrolled && diskHigh, true},
+		{"resource-conntrack-high", enrolled && conntrackHigh, true},
+		{"resource-clock-skew", enrolled && clockSkew, true},
+		{"dataplane-drift", enrolled && dataplaneDrift, true},
+		{"source-flow-collector-degraded", enrolled && sourceFlowDegraded, enrolled && sourceFlowNormalStable},
 	} {
 		var id, state string
 		err = tx.QueryRow(ctx, `SELECT id,state FROM operations_incidents WHERE node_id=$1 AND kind=$2 FOR UPDATE`, nodeID, condition.kind).Scan(&id, &state)
@@ -325,7 +331,7 @@ func (s *Store) reconcileNodeIncidents(ctx context.Context, nodeID string, stale
 			} else {
 				_, err = tx.Exec(ctx, `UPDATE operations_incidents SET observed_at=clock_timestamp() WHERE id=$1`, id)
 			}
-		} else if !absent && state == "open" {
+		} else if !absent && state == "open" && condition.resolve {
 			action = "incident.resolve"
 			_, err = tx.Exec(ctx, `UPDATE operations_incidents SET state='resolved',observed_at=clock_timestamp(),resolved_at=clock_timestamp() WHERE id=$1`, id)
 		}
@@ -357,7 +363,7 @@ func (s *Store) ListOperationsNodes(ctx context.Context, who Identity, admin boo
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM nodes n`+where, admin, who.TenantID).Scan(&result.Total); err != nil {
 		return result, err
 	}
-	rows, err := tx.Query(ctx, `SELECT n.id,n.name,CASE WHEN n.certificate_fingerprint IS NULL THEN 'unknown' WHEN n.agent_heartbeat_at IS NULL THEN 'never-seen' WHEN n.agent_heartbeat_at<clock_timestamp()-$3*interval '1 second' THEN 'offline' ELSE 'online' END,n.last_seen_at,n.agent_started_at,n.agent_heartbeat_at,n.desired_generation,n.validated_generation,COALESCE(o.state,'unknown'),ARRAY(SELECT r.id::text FROM relay_rules r WHERE r.node_id=n.id AND r.status<>'deleted' AND ($1 OR r.tenant_id=$2) ORDER BY r.id LIMIT 100),
+	rows, err := tx.Query(ctx, `SELECT n.id,n.name,COALESCE(host(n.public_address),''),CASE WHEN n.certificate_fingerprint IS NULL THEN 'unknown' WHEN n.agent_heartbeat_at IS NULL THEN 'never-seen' WHEN n.agent_heartbeat_at<clock_timestamp()-$3*interval '1 second' THEN 'offline' ELSE 'online' END,n.last_seen_at,n.agent_started_at,n.agent_heartbeat_at,n.desired_generation,n.validated_generation,COALESCE(o.state,'unknown'),ARRAY(SELECT r.id::text FROM relay_rules r WHERE r.node_id=n.id AND r.status<>'deleted' AND ($1 OR r.tenant_id=$2) ORDER BY r.id LIMIT 100),
 	CASE WHEN rs.node_id IS NULL THEN 'unknown' WHEN rs.received_at<clock_timestamp()-$5*interval '1 second' THEN 'stale' WHEN rs.dataplane_state='drifted' THEN 'drifted' WHEN COALESCE(rs.cpu_percent>=90,false) OR COALESCE(rs.memory_percent>=90,false) OR COALESCE(rs.disk_percent>=85,false) OR COALESCE(rs.conntrack_percent>=80,false) OR rs.clock_skew_seconds>120 THEN 'pressure' WHEN rs.cpu_percent IS NULL AND rs.memory_percent IS NULL AND rs.disk_percent IS NULL AND rs.conntrack_percent IS NULL THEN 'unknown' ELSE 'normal' END,
 	rs.received_at,rs.cpu_percent,rs.memory_percent,rs.disk_percent,rs.conntrack_percent,rs.clock_skew_seconds,COALESCE(rs.dataplane_state,'')
 	FROM nodes n
@@ -370,7 +376,7 @@ func (s *Store) ListOperationsNodes(ctx context.Context, who Identity, admin boo
 	nodeIDs := make([]string, 0, result.PageSize)
 	for rows.Next() {
 		v := OperationNode{DataPlaneStatus: "unknown", ResourceStatus: "unknown"}
-		if err = rows.Scan(&v.ID, &v.Name, &v.ContactStatus, &v.LastSeenAt, &v.AgentStartedAt, &v.AgentHeartbeatAt, &v.DesiredGeneration, &v.ValidatedGeneration, &v.DeliveryState, &v.RuleIDs, &v.ResourceStatus, &v.ResourceObservedAt, &v.CPUPercent, &v.MemoryPercent, &v.DiskPercent, &v.ConntrackPercent, &v.ClockSkewSeconds, &v.DataPlaneState); err != nil {
+		if err = rows.Scan(&v.ID, &v.Name, &v.PublicAddress, &v.ContactStatus, &v.LastSeenAt, &v.AgentStartedAt, &v.AgentHeartbeatAt, &v.DesiredGeneration, &v.ValidatedGeneration, &v.DeliveryState, &v.RuleIDs, &v.ResourceStatus, &v.ResourceObservedAt, &v.CPUPercent, &v.MemoryPercent, &v.DiskPercent, &v.ConntrackPercent, &v.ClockSkewSeconds, &v.DataPlaneState); err != nil {
 			return result, err
 		}
 		v.RateState = "none"

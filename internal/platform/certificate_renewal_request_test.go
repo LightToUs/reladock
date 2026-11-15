@@ -263,6 +263,15 @@ func TestMigration33PreservesIdentityAndGuardsRenewalTarget(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `DROP TRIGGER clear_node_certificate_renewal ON nodes; DROP FUNCTION clear_node_certificate_renewal(); ALTER TABLE nodes DROP COLUMN certificate_renewal_fingerprint,DROP COLUMN agent_certificate_rotation_supported; DELETE FROM schema_migrations WHERE version=33`); err != nil {
 		t.Fatal(err)
 	}
+	// Newer migrations may already exist in this schema, so max(version) cannot
+	// drive migration 33 again after this targeted rollback. Reapply the exact
+	// migration under test, then verify the normal migrator remains repeatable.
+	if _, err := s.pool.Exec(ctx, migration33SQL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, "INSERT INTO schema_migrations(version) VALUES(33)"); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 2; i++ {
 		if err := s.Migrate(ctx); err != nil {
 			t.Fatal(err)

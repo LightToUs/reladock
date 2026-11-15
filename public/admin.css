@@ -73,6 +73,7 @@ small { font-size: .875rem; line-height: 1.45; }
   color: var(--nav-ink);
 }
 .admin-brand { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 34px; }
+.admin-brand-mark { display: block; width: 42px; height: 42px; flex: 0 0 auto; border-radius: 10px; object-fit: contain; }
 .admin-brand-copy { min-width: 0; }
 .admin-brand h2 { margin: 0; font-size: 1.75rem; letter-spacing: -.05em; }
 .admin-brand p { margin: 4px 0 0; color: #9fb3cc; font-size: .92rem; }
@@ -398,6 +399,11 @@ tbody tr:hover td { background: #f1f6fd; }
 }
 .table-actions { min-width: 224px; }
 .table-actions button { min-height: 34px; margin: 0 5px 6px 0; padding: 6px 9px; }
+.lightsail-status-line { display: flex; align-items: baseline; gap: 12px; margin: 16px 0 8px; }
+.lightsail-status-line .detail { margin: 0; }
+.node-dialog form .lightsail-script-field, .node-dialog form .lightsail-dialog-wide { grid-column: 1 / -1; }
+.lightsail-script-field textarea { min-height: 240px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.5; tab-size: 2; }
+#lightsail-destroy-dialog label { display: grid; gap: 8px; margin: 18px 0 0; }
 .table-empty { padding: 34px; color: var(--muted); text-align: center; }
 .audit-resource { max-width: 180px; overflow-wrap: anywhere; }
 .audit-detail { max-width: 360px; overflow-wrap: anywhere; }

@@ -9,21 +9,23 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"reladock/internal/sourceflow"
 )
 
 type ConfigRule struct {
 	ID       string `json:"id"`
 	TenantID string `json:"tenantId"`
 	RuleInput
-	ListenPort         int        `json:"listenPort"`
-	Version            int64      `json:"version"`
-	Status             string     `json:"status"`
-	SubscriptionID     string     `json:"subscriptionId,omitempty"`
-	ExpiresAt          *time.Time `json:"expiresAt,omitempty"`
-	QuotaBytes         int64      `json:"quotaBytes,omitempty"`
-	UsageUploadBytes   int64      `json:"usageUploadBytes,omitempty"`
-	UsageDownloadBytes int64      `json:"usageDownloadBytes,omitempty"`
-	DevelopmentBypass  bool       `json:"developmentBypass,omitempty"`
+	ListenPort           int        `json:"listenPort"`
+	Version              int64      `json:"version"`
+	Status               string     `json:"status"`
+	SubscriptionID       string     `json:"subscriptionId,omitempty"`
+	ExpiresAt            *time.Time `json:"expiresAt,omitempty"`
+	QuotaBytes           int64      `json:"quotaBytes,omitempty"`
+	UsageUploadBytes     int64      `json:"usageUploadBytes,omitempty"`
+	UsageDownloadBytes   int64      `json:"usageDownloadBytes,omitempty"`
+	DevelopmentBypass    bool       `json:"developmentBypass,omitempty"`
+	SourceLoggingEnabled bool       `json:"sourceLoggingEnabled,omitempty"`
 }
 type ConfigAllocation struct {
 	ID                      string `json:"id"`
@@ -63,10 +65,12 @@ type ConfigJob struct {
 	Attempts   int             `json:"attempts"`
 }
 type ConfigReport struct {
-	LeaseToken string `json:"leaseToken"`
-	Checksum   string `json:"checksum"`
-	Outcome    string `json:"outcome"`
-	ErrorCode  string `json:"errorCode"`
+	LeaseToken               string               `json:"leaseToken"`
+	Checksum                 string               `json:"checksum"`
+	Outcome                  string               `json:"outcome"`
+	ErrorCode                string               `json:"errorCode"`
+	SourceFlowManifest       *sourceflow.Manifest `json:"sourceFlowManifest,omitempty"`
+	SourceFlowManifestDigest string               `json:"sourceFlowManifestDigest,omitempty"`
 }
 
 // Caller holds the node lock. Snapshot and node generation commit with the mutation.
@@ -91,9 +95,17 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 	if retirementSchema {
 		cfg.SchemaVersion = 2
 	}
-	query := `SELECT id,tenant_id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,desired_version,status,''::text,false,NULL::timestamptz,0::bigint,0::bigint,0::bigint FROM relay_rules WHERE node_id=$1 AND status<>'deleted' ORDER BY id`
+	var sourceFlowSchema bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='relay_rules' AND column_name='source_logging_enabled')`).Scan(&sourceFlowSchema); err != nil {
+		return err
+	}
+	sourceColumn, sourceRuleColumn := "false", "false"
+	if sourceFlowSchema {
+		sourceColumn, sourceRuleColumn = "source_logging_enabled", "r.source_logging_enabled"
+	}
+	query := `SELECT id,tenant_id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,desired_version,status,''::text,false,NULL::timestamptz,0::bigint,0::bigint,0::bigint,` + sourceColumn + ` FROM relay_rules WHERE node_id=$1 AND status<>'deleted' ORDER BY id`
 	if entitlementSchema {
-		query = `SELECT r.id,r.tenant_id,r.name,r.protocol,r.target_host,r.target_port,r.bandwidth_mbps,r.node_id,r.listen_port,r.desired_version,r.status,COALESCE(p.id::text,''),COALESCE(p.ends_at>clock_timestamp() AND COALESCE(u.upload_bytes,0)::numeric+COALESCE(u.download_bytes,0)::numeric<v.quota_bytes,false),p.ends_at,COALESCE(v.quota_bytes,0),COALESCE(u.upload_bytes,0),COALESCE(u.download_bytes,0) FROM relay_rules r LEFT JOIN LATERAL (SELECT p.id,p.price_version_id,p.ends_at FROM rule_subscriptions p WHERE p.rule_id=r.id OR EXISTS(SELECT 1 FROM subscription_usage su WHERE su.subscription_id=p.id AND su.rule_id=r.id) ORDER BY p.ordinal DESC LIMIT 1) p ON true LEFT JOIN plan_price_versions v ON v.id=p.price_version_id LEFT JOIN LATERAL (SELECT SUM(upload_bytes)::bigint AS upload_bytes,SUM(download_bytes)::bigint AS download_bytes FROM subscription_usage su WHERE su.subscription_id=p.id) u ON true WHERE r.node_id=$1 AND r.status<>'deleted' ORDER BY r.id`
+		query = `SELECT r.id,r.tenant_id,r.name,r.protocol,r.target_host,r.target_port,r.bandwidth_mbps,r.node_id,r.listen_port,r.desired_version,r.status,COALESCE(p.id::text,''),COALESCE(p.ends_at>clock_timestamp() AND COALESCE(u.upload_bytes,0)::numeric+COALESCE(u.download_bytes,0)::numeric<v.quota_bytes,false),p.ends_at,COALESCE(v.quota_bytes,0),COALESCE(u.upload_bytes,0),COALESCE(u.download_bytes,0),` + sourceRuleColumn + ` FROM relay_rules r LEFT JOIN LATERAL (SELECT p.id,p.price_version_id,p.ends_at FROM rule_subscriptions p WHERE p.rule_id=r.id OR EXISTS(SELECT 1 FROM subscription_usage su WHERE su.subscription_id=p.id AND su.rule_id=r.id) ORDER BY p.ordinal DESC LIMIT 1) p ON true LEFT JOIN plan_price_versions v ON v.id=p.price_version_id LEFT JOIN LATERAL (SELECT SUM(upload_bytes)::bigint AS upload_bytes,SUM(download_bytes)::bigint AS download_bytes FROM subscription_usage su WHERE su.subscription_id=p.id) u ON true WHERE r.node_id=$1 AND r.status<>'deleted' ORDER BY r.id`
 	}
 	rows, err := tx.Query(ctx, query, nodeID)
 	if err != nil {
@@ -102,7 +114,7 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 	for rows.Next() {
 		var r ConfigRule
 		var entitled bool
-		if err = rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.Version, &r.Status, &r.SubscriptionID, &entitled, &r.ExpiresAt, &r.QuotaBytes, &r.UsageUploadBytes, &r.UsageDownloadBytes); err != nil {
+		if err = rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.Version, &r.Status, &r.SubscriptionID, &entitled, &r.ExpiresAt, &r.QuotaBytes, &r.UsageUploadBytes, &r.UsageDownloadBytes, &r.SourceLoggingEnabled); err != nil {
 			rows.Close()
 			return err
 		}
@@ -119,7 +131,13 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 		} else if entitlementSchema && !entitled {
 			r.Status = "paused"
 		}
+		if r.Status != "pending-agent" {
+			r.SourceLoggingEnabled = false
+		}
 		cfg.Rules = append(cfg.Rules, r)
+		if r.SourceLoggingEnabled {
+			cfg.SchemaVersion = 3
+		}
 	}
 	err = rows.Err()
 	rows.Close()
@@ -255,6 +273,9 @@ func (s *Store) ReportConfig(ctx context.Context, nodeID, jobID string, report C
 	if report.Outcome == "failed" && report.ErrorCode != "invalid-config" && report.ErrorCode != "internal-error" {
 		return ErrInvalid
 	}
+	if report.Outcome != "applied" && (report.SourceFlowManifest != nil || report.SourceFlowManifestDigest != "") {
+		return ErrInvalid
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -270,7 +291,8 @@ func (s *Store) ReportConfig(ctx context.Context, nodeID, jobID string, report C
 	var generation, current int64
 	var until time.Time
 	var attempts int
-	err = tx.QueryRow(ctx, `SELECT o.state,COALESCE(o.lease_token,''),o.checksum,o.error_code,o.generation,n.desired_generation,COALESCE(o.lease_until,now()),o.attempts FROM config_outbox o JOIN nodes n ON n.id=o.node_id WHERE o.id=$1 AND o.node_id=$2 FOR UPDATE OF o`, jobID, nodeID).Scan(&state, &token, &checksum, &errorCode, &generation, &current, &until, &attempts)
+	var payload []byte
+	err = tx.QueryRow(ctx, `SELECT o.state,COALESCE(o.lease_token,''),o.checksum,o.error_code,o.generation,n.desired_generation,COALESCE(o.lease_until,now()),o.attempts,o.payload FROM config_outbox o JOIN nodes n ON n.id=o.node_id WHERE o.id=$1 AND o.node_id=$2 FOR UPDATE OF o`, jobID, nodeID).Scan(&state, &token, &checksum, &errorCode, &generation, &current, &until, &attempts, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -280,10 +302,36 @@ func (s *Store) ReportConfig(ctx context.Context, nodeID, jobID string, report C
 	if token != report.LeaseToken || checksum != report.Checksum {
 		return ErrConflict
 	}
-	if state == report.Outcome && errorCode == report.ErrorCode {
+	if state == report.Outcome && errorCode == report.ErrorCode && report.Outcome != "applied" {
 		return nil
 	}
+	var cfg NodeConfig
+	var appliedSourceRules []sourceflow.AppliedRule
+	if report.Outcome == "applied" {
+		if err = json.Unmarshal(payload, &cfg); err != nil {
+			return err
+		}
+		appliedSourceRules, err = validateSourceFlowApplication(cfg, report.SourceFlowManifest, report.SourceFlowManifestDigest)
+		if err != nil {
+			return err
+		}
+		if state == "applied" && errorCode == report.ErrorCode {
+			if cfg.SchemaVersion == 3 {
+				var total, matching int
+				if err = tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE manifest_digest=$3) FROM applied_source_flow_rules WHERE node_id=$1 AND config_generation=$2`, nodeID, generation, report.SourceFlowManifestDigest).Scan(&total, &matching); err != nil {
+					return err
+				}
+				if total != len(appliedSourceRules) || matching != total {
+					return ErrConflict
+				}
+			}
+			return nil
+		}
+	}
 	if state == "superseded" && generation < current {
+		if report.Outcome == "applied" {
+			return ErrConflict
+		}
 		return nil
 	}
 	if report.Outcome == "applied" && state != "applying" {
@@ -309,18 +357,29 @@ func (s *Store) ReportConfig(ctx context.Context, nodeID, jobID string, report C
 		}
 	}
 	if outcome == "applied" {
-		var payload []byte
-		if err = tx.QueryRow(ctx, "SELECT payload FROM config_outbox WHERE id=$1", jobID).Scan(&payload); err != nil {
+		// A later full-snapshot ACK is the authoritative supersession point,
+		// including schema-v1/v2 snapshots that disable source logging entirely.
+		// Retention is measured from this point rather than the older manifest's
+		// original apply time, so delayed uploads remain attributable.
+		if _, err = tx.Exec(ctx, `UPDATE applied_source_flow_rules
+SET superseded_at=COALESCE(superseded_at,clock_timestamp())
+WHERE node_id=$1 AND config_generation<$2`, nodeID, generation); err != nil {
 			return err
 		}
-		var cfg NodeConfig
-		if err = json.Unmarshal(payload, &cfg); err != nil {
-			return err
+		for _, applied := range appliedSourceRules {
+			if _, err = tx.Exec(ctx, `INSERT INTO applied_source_flow_rules(
+node_id,config_generation,tenant_id,rule_id,allocation_id,rule_version,source_logging_enabled,
+protocol,relay_ip,relay_port,target_ip,target_port,manifest_digest
+) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, nodeID, generation, applied.TenantID, applied.RuleID, applied.AllocationID, applied.RuleVersion, applied.SourceLoggingEnabled, applied.Protocol, applied.RelayIP, applied.RelayPort, applied.TargetIP, applied.TargetPort, report.SourceFlowManifestDigest); err != nil {
+				return err
+			}
 		}
 		ids := []string{}
 		for _, r := range cfg.Rules {
 			ids = append(ids, r.ID)
-			if _, err = tx.Exec(ctx, "UPDATE relay_rules SET applied_version=$2,applied_status=$3 WHERE id=$1 AND node_id=$4 AND applied_version<=$2", r.ID, r.Version, r.Status, nodeID); err != nil {
+			if _, err = tx.Exec(ctx, `UPDATE relay_rules SET applied_version=$2,applied_status=$3,
+source_logging_applied_enabled=$4,source_logging_applied_version=$2,source_logging_applied_generation=$5
+WHERE id=$1 AND node_id=$6 AND applied_version<=$2`, r.ID, r.Version, r.Status, r.SourceLoggingEnabled, generation, nodeID); err != nil {
 				return err
 			}
 		}
@@ -338,7 +397,9 @@ func (s *Store) ReportConfig(ctx context.Context, nodeID, jobID string, report C
 		}
 		// Absence from a full snapshot acknowledges removal, but allocation
 		// reuse remains fenced until explicit conntrack reconciliation.
-		if _, err = tx.Exec(ctx, "UPDATE relay_rules SET applied_version=desired_version,applied_status='deleted' WHERE node_id=$1 AND status='deleted' AND delivery_generation<=$2 AND id<>ALL($3::uuid[])", nodeID, generation, ids); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE relay_rules SET applied_version=desired_version,applied_status='deleted',
+source_logging_applied_enabled=false,source_logging_applied_version=desired_version,source_logging_applied_generation=$2
+WHERE node_id=$1 AND status='deleted' AND delivery_generation<=$2 AND id<>ALL($3::uuid[])`, nodeID, generation, ids); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(ctx, "UPDATE nodes SET applied_generation=GREATEST(applied_generation,$2),validated_generation=GREATEST(validated_generation,$2),last_seen_at=now() WHERE id=$1", nodeID, generation); err != nil {
