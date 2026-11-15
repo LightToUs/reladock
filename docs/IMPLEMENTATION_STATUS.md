@@ -4,7 +4,7 @@
 
 本分支从公开 `v0.9.9` 标签隔离回移安装器增量，不包含主工作区其他未提交功能。全新主机继续原注册流程；完整既有 Agent 从 `/dev/tty` 显示“升级 / 不操作”，不读取承载短期凭证的标准输入。回车、其他输入、无交互终端或选择不操作均保持现场且不请求发布元数据。环境、PKI、任一 Agent 二进制或 systemd 单元只要出现但未形成完整一致安装，即失败关闭；悬空符号链接、身份配置冲突也不允许覆盖。
 
-选择升级后才读取控制台固定 Release，验证外层 SHA256、普通平面文件白名单和包内 SHA256SUMS；只替换 Agent、dataplane、updater、recovery 与四个 systemd 单元，不注册新身份、不安装系统包、不修改网络前置条件。原 validation/apply 与 updater timer 状态保持，候选启动失败恢复旧文件和旧服务模式。进程 active 不等于控制链路、配置应用或端到端转发健康。
+选择升级后才读取控制台固定 Release，验证外层 SHA256、普通平面文件白名单和包内 SHA256SUMS；只替换 Agent、dataplane、updater、recovery 与四个 systemd 单元，不注册新身份、不安装系统包、不修改网络前置条件。升级前 apply 活动时恢复并 enable apply；其他情况 enable 并启动 validation-only，另一模式被 disable，确保立即连接且重启后只有一个模式自动启动。原来活动的 updater timer 继续恢复；候选启动或 enable 失败时恢复旧文件、活动状态和两个 Agent 单元原 enable 状态。进程 active 不等于配置应用或端到端转发健康。
 
 验证：从 `v0.9.9` 未改基线运行真实 PostgreSQL + Go race 全包通过，Node 112 项中 111 通过、1 个 opt-in Linux 安装测试默认跳过、0 失败；增量完成后 `npm test` 同样 111/1/0，`npm run vet` 通过。启用 `RELADOCK_INSTALLER_DOCKER_TESTS=1` 的无网络 Linux 容器回归通过，覆盖真实伪终端菜单、不操作、无终端、validation/apply 模式保持、无 conntrack 的 validation 升级、身份冲突、残缺环境、仅残留二进制、候选启动失败回滚、归档符号链接/嵌套路径拒绝和 PKI/环境不变。最终双架构包摘要：amd64 `5acc2446e19e290d726f9d4548503845b9f2f95403a189cad8d38812593af7c4`，arm64 `47633852acd217a576b9431cca84cc16c11ca5d6f4fa5723b180b4f7c283f40d`；两包 SHA256SUMS 和包内脚本逐字一致校验通过。
 
@@ -21,6 +21,10 @@
 生产仅切换公开安装脚本路由，没有改动 `v0.9.10` Release 归档和固定摘要。脚本部署为 `/opt/reladock/installers/bootstrap-agent-f66aecd.sh`，SHA256 为 `d4ba2d183dbdc9b4a20a88302007cfebf8627875ce40ff7664ec8bb587e89baf`；Nginx 配置 SHA256 为 `15c1f1fb89052cb266ee4587c04de3fbbd048e7e1528be40226abeb306cb3b73`，回滚备份为 `/root/reladock-backups/v0.9.10-legacy-identity-hotfix-pre-f66aecd`。公开入口返回 `200`、`Content-Type: text/x-shellscript`、`Cache-Control: no-store`；控制健康和固定 v0.9.10 元数据正常，Nginx/控制服务 active 且 enabled，最近十分钟无 warning。此次没有接触目标节点文件、PKI、Agent 服务或网络规则；该节点报告 validation/apply 均 inactive、updater timer active，菜单升级将按设计保留这一活动状态，不应被描述为 Agent 已上线。
 
 热修复后，操作者在上述真实旧 VPS 重新运行一条命令，包内 21 个文件的 SHA256SUMS 全部显示 `OK`，交互菜单选择升级后返回“Existing Agent upgraded from the pinned release”，并明确确认身份、环境、WAL、journal 与原服务模式均保留。新 bootstrap token 未被消费，仍须在控制台撤销。该节点升级前 validation/apply 均 inactive，因此升级后也没有 Agent 进程领取或确认配置；企业后台继续显示“等待 Agent 确认”符合事实。此结果验收了真实 VPS 菜单、GitHub 下载、双层摘要及文件替换路径，但没有验收 Agent 心跳、配置校验、applied ACK 或端到端转发；下一步仅可显式启动 validation 服务取得校验确认，apply 仍需独立网络前置条件和授权。
+
+用户随后明确要求升级后立即重连并在主机重启后自动启动。提交 `7102121` 将菜单升级收敛为单一开机模式：升级前 apply 活动才恢复并 enable apply，否则 disable apply、enable 并启动 validation-only；两个模式都 inactive 的旧节点因此会安全回到 validation 连接。回滚额外恢复升级前两个单元各自的 enable 状态。隔离 Docker 测试先复现 inactive 升级仍离线，再覆盖 inactive→validation、自启、active apply 保持、另一模式禁用及候选启动失败回滚；`sh -n`、`npm run vet` 通过。默认跨包并行完整回归两次遇到与安装器无关的秒级 PostgreSQL 时序测试失败，相关三个用例各自带 race 连续 10 次通过；最终 `GOFLAGS=-p=1 npm test` 包级串行全绿，Node 112 项为 111 通过、1 个 opt-in Docker 测试默认跳过、0 失败。
+
+生产公开入口已切换到 `/opt/reladock/installers/bootstrap-agent-7102121.sh`，脚本 SHA256 为 `1a4c7f10be6d9f51aebe769e697861b903a716a4c31987bf7d81079064c06980`，Nginx 配置 SHA256 为 `38614d1e7306ec6987233836087ff87d0a6ad07192d6122aa41436485d3081a5`，回滚备份为 `/root/reladock-backups/v0.9.10-agent-autostart-pre-7102121`。公开下载返回 `200`、`Content-Type: text/x-shellscript`、`Cache-Control: no-store`，控制健康和固定 v0.9.10 摘要正常，Nginx/控制服务 active 且 enabled，最近十分钟无 warning。此前已用旧热修复完成升级的目标节点不会被生产入口切换远程修改，仍须手动 enable/start validation 或再次运行新安装器；本次没有自动触碰目标节点或网络规则。
 
 > 2026-11-06 全局核验快照；v0.9.10 发布事实以 2026-11-15 顶部条目为准。生产控制端已部署当前 `0.9.8` 控制构建并迁移至 schema v29，生产入口 Agent 仍为 `0.9.5`；未部署节点销售与交付解耦及独立支付页仍仅存在于本地源码，尚未部署生产。生产控制服务已显式接入 Stripe 沙盒测试配置和公开测试 Webhook；本地开发控制端另通过香港服务器上的专用 Cloudflare Tunnel 与 SSH 反向通道接入独立 Stripe 沙盒 Webhook。两者都没有启用 live key、执行真实支付或完成验签到账闭环。当前生产控制构建包含动态节点监控、蓝色主题、独立页面导航、混合入口资源模式、绑定具体节点的线路商品、受约束的草稿管理，以及按美元输入、套餐代码可数字开头并由服务端自动分配版本的套餐新增对话框；本次没有升级 Agent 或修改数据面。本文是实现状态入口，不替代需求与架构文档；用户最新明确指令始终优先。
 
