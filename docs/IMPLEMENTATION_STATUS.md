@@ -1,5 +1,13 @@
 # 当前实现状态与 AI 交接
 
+## 2026-11-15 validation-only Agent 心跳修复（hk-02 生产热修复已部署）
+
+`hk-02` 在全新系统完成 bootstrap 兑换、证书绑定、配置领取与第 2 代 validated 后，后台仍显示“待 Agent 连接”。控制端只读证据显示证书指纹 `5e180b04fa4735ad5a67bd9293933bfaf59516cdf7a12079247cb06ede4b5268` 与节点登记一致、证书有效至 2026-12-15、预检与配置轮询持续更新，但 `agent_heartbeat_at` 为空。真实主机日志确认 validation 服务 active/enabled、apply inactive/disabled，心跳持续被拒绝；节点与控制端时间偏差约 10 ms，不是身份、网络、自启或时钟问题。
+
+临时回环 TLS 捕获实际请求后确认根因：`main` 中 nil 的 `*NodeEngine` 赋给 `DataplaneInspector` 接口后接口值非 nil，资源采集器调用其只读 `Stable` 并把错误映射成 `dataplaneState=drifted`；控制端按安全约束拒绝 validation 模式携带 drifted。最小心跳与手工 `not-applicable` 资源心跳均返回 200。TDD 新增 `TestResourceCollectorTreatsTypedNilInspectorAsNotApplicable`，修复前准确失败为 `got drifted`，修复后与 `internal/agent` 全包通过；实现只把 typed-nil 指针视为未启用检查器，真实 apply 检查器语义不变。
+
+Linux amd64 修复候选 SHA256 为 `61facfcbc6ec7528a70006f1186e857186b6989eeea35aa0b75d071c2632c15b`。并行短运行在真实控制端无心跳错误且写入 validation/not-applicable 后，已备份旧二进制并替换 `/opt/reladock/reladock-agent`；旧 SHA256 `551c05b0136886067748fe495a608418582f4fe44c3c623b30559d249ad6e066` 保存在 `/var/backups/reladock/agent-heartbeat-hotfix-20261115/reladock-agent-551c05b`。正式服务重启后 active/enabled，apply 继续 inactive/disabled；控制端在 14:10:24 UTC 收到新进程持续心跳，判定 `hk-02` online，资源为 CPU 0%、内存 10%、根磁盘 10%、conntrack unknown、`not-applicable`。诊断临时私钥副本、证书、脚本和候选均已删除。本修复未启用转发、修改网络规则、账务或业务数据；online/validated 仍不等于 applied 或端到端健康。
+
 ## 2026-11-15 新增节点的专属企业搜索（生产静态覆盖已部署）
 
 平台管理员在新增或编辑企业专属/规则专属节点时，可在原企业 ID 字段按企业名称、owner 邮箱或 ID 搜索，候选项显示企业名、owner 邮箱及停用标记，选中后提交真实企业 ID。新控制端优先使用仅平台管理员可用的搜索接口；旧控制端返回 404 时，页面自动分页读取现有管理员企业列表，在浏览器缓存目录并过滤前 20 条。节点归属、存在规则时不可改归属等原有服务端约束未改变。

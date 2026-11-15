@@ -1,5 +1,7 @@
 # RelaDock
 
+v0.9.11 修复 validation-only Agent 心跳：未启用 apply 时的 `*NodeEngine` typed nil 不再被接口值误判为可用数据面检查器，资源状态正确上报 `not-applicable`，避免控制端按模式约束拒绝心跳。该修复只恢复控制连接和资源上报，不启用 apply，也不修改 nftables、tc、路由或客户流量。
+
 v0.9.10 已将既有完整 Agent 安装识别加入一条命令安装器：全新主机继续直接注册；既有环境、PKI、二进制与 systemd 单元完整且身份一致时，从 `/dev/tty` 提供“升级 / 更换身份并重新安装 / 不操作”菜单。升级保留现有身份；重新安装仅允许 validation-only 主机，在验证固定发布包后先把原 PKI、环境、WAL、journal、updater 状态、二进制和 systemd 单元持久备份到 root-only 目录，再用本次命令的短期凭证注册新身份。任何残缺、符号链接、身份冲突或 apply 活动/启用/配置状态都拒绝覆盖。
 
 2026-11-15 生产安装入口增加旧版身份兼容与服务自启热修复：旧 Agent 缺少后来引入的 `identity.pem`、但仍有安全的 `agent.crt` 与 `agent.key` 及其余完整一致状态时，也可进入菜单。存在但不是非符号链接普通文件的 `identity.pem` 仍失败关闭。升级前 apply 正在运行时恢复并 enable apply；其他情况均启用安全的 validation-only，升级完成后立即连接且重启机器自动启动。另一模式被 disable，候选启动失败则恢复旧文件、活动状态和 enable 状态。
