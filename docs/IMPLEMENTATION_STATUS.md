@@ -1,16 +1,18 @@
 # 当前实现状态与 AI 交接
 
-> 最后代码核验：2026-11-16；最后生产环境核验：2026-11-13。生产控制端运行 `v0.9.12`、数据库 schema v38，receive-only TRON 主网连接器已启用并运行自动固化区块扫描；Stripe 生产密钥与独立 Live webhook 已启用。现有入口 Agent 与公开安装包仍为 `v0.9.9`。本地 Lightsail 增量为 schema v39，未部署生产。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量或离机恢复验收完成。
+> 最后代码与生产控制端核验：2026-11-16。生产控制端运行 `v0.9.13`、数据库 schema v39；Lightsail 代码已部署但未配置任何 `LIGHTSAIL_*` 变量，连接器保持关闭。receive-only TRON 主网连接器已启用并运行自动固化区块扫描；Stripe 生产密钥与独立 Live webhook 已启用。现有入口 Agent 与公开安装包仍为 `v0.9.9`。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量或离机恢复验收完成。
 
-## 2026-11-16 AWS Lightsail 一次性脚本节点（本地）
+## 2026-11-16 AWS Lightsail 一次性脚本节点（生产控制端已部署，默认关闭）
 
 新增默认关闭、仅平台管理员可用的独立 `#/lightsail` 页面和 API。管理员从服务端允许区域的真实目录中选择活动 Linux 镜像/套餐，提交最多 64 KiB 脚本与幂等键；数据库保存不可变选择、确定的实例/静态 IP 名、脚本摘要和租约任务。worker 依次协调实例、将公开端口收窄为固定来源 TCP/22、分配并绑定一枚专属静态 IP、取得 AWS 临时 SSH 材料与见证主机公钥，然后执行一次脚本。开始执行会在同一事务记录边界并清除待执行正文；跨越边界后的任何不确定结果为 `unknown`，不自动重放。
 
 关机保留静态 IP；销毁仅允许 stopped、当前 revision 和精确实例名确认，且重新核对 `reladock-managed`/本地 UUID 标签、名称与 IP attachment 后按分离、删除、释放收敛，归属不一致进入人工复核。脚本正文、AWS 临时私钥/证书和 provider 原始错误不进入列表、审计或日志。页面 5/30 秒非重叠轮询，失败保留最后结果，并明确云状态/SSH/脚本成功都不代表 RelaDock 转发健康。该模块不会创建平台 `nodes`、Agent、线路或套餐，也不承担按规则扩缩。
 
-实现已由 provider 替身、环回 SSH 服务、真实 PostgreSQL 随机 schema、HTTP/权限/静态前端和运行时测试覆盖；精确全量验证结果记录在本文“最近验证记录”。本轮没有加载真实 AWS 账户、创建/停止/销毁付费实例、连接真实 VPS、修改生产网络规则、部署控制端或运行数据库迁移，因此只能标记“已实现但待环境验收”。
+实现已由 provider 替身、环回 SSH 服务、真实 PostgreSQL 随机 schema、HTTP/权限/静态前端和运行时测试覆盖；精确全量验证结果记录在本文“最近验证记录”。控制端代码和 v39 迁移已部署，但没有加载真实 AWS 账户、创建/停止/销毁付费实例、连接真实 Lightsail VPS 或修改生产网络规则，因此只能标记“代码已部署、连接器关闭、待真实 AWS 环境验收”。
 
-最终验证使用专用本机 PostgreSQL 测试库并由测试创建/删除随机 schema；`GOFLAGS=-timeout=20m npm test` 退出 0，Go 全包 `-race` 通过（`internal/web` 101.851s），Node.js 147 项中 146 通过、1 项按默认 Linux 安装环境跳过、0 失败；`npm run vet` 与 `git diff --check` 均退出 0。最终安全复核另确认生产代码和文档中没有 AWS access key 或私钥候选，列表、状态、审计和日志不返回脚本正文。首次基线测试因既有 `.env` 与本机 PostgreSQL 卷密码不一致而在连接阶段失败，未重置或迁移该既有数据库。上述验证没有访问 AWS，也没有验收真实区域 opt-in、短暂默认防火墙窗口、API 限流、主机密钥材料、SSH、停止或销毁。
+最终验证使用专用本机 PostgreSQL 测试库并由测试创建/删除随机 schema；`GOFLAGS=-timeout=20m npm test` 退出 0，Go 全包 `-race` 通过（`internal/web` 101.851s），Node.js 147 项中 146 通过、1 项按默认 Linux 安装环境跳过、0 失败；`npm run vet` 与 `git diff --check` 均退出 0。最终安全复核另确认生产代码和文档中没有 AWS access key 或私钥候选，列表、状态、审计和日志不返回脚本正文。首次基线测试因既有 `.env` 与本机 PostgreSQL 卷密码不一致而在连接阶段失败，未重置或迁移该既有数据库。上述自动验证没有访问 AWS，也没有验收真实区域 opt-in、短暂默认防火墙窗口、API 限流、主机密钥材料、SSH、停止或销毁。
+
+生产发布提交为 `0dc4f6b`，已推送到 `origin/feat/console-page-navigation`。Linux amd64 `v0.9.13` 归档 SHA256 为 `67cd46946ca7c90369a0e04e26e8cc276f90b191b71be06e201b79363ca63ec1`，安装的控制二进制 SHA256 为 `cf873f8ec94089e08e9f75b5bb2968e43f574ea978c1d8c21141ea5396b5f2be`。部署前候选使用生产配置执行 `--check-config` 通过；备份位于 `/root/reladock-pre-v39-20261115T170432Z`，包含旧二进制、环境、systemd 配置和 custom-format 数据库，`pg_restore --list` 与 SHA256 清单通过。切换后服务 active/enabled、schema v39、钱包与最新账本不一致 0、Lightsail 实例/任务均为 0、生产环境没有 `LIGHTSAIL_*` 配置、部署后 journal warning/error 均为空。公网首页返回 200，`lightsail-admin.js` 与本地 SHA256 同为 `b8f4c44ddd0de2e08805b6d7edce27418b4212fd9bc989d43bed3c3752f56faa`，未登录 Lightsail 状态 API 返回 401。首次切换脚本在备份清单自引用校验处于停服前安全中止；修正后切换完成，后置检查曾因 Type=simple active 早于迁移事务完成而返回非零，随后独立复核确认迁移和服务均正常。
 
 ## 2026-11-14 既有 Agent 安装菜单与安全升级（本地）
 
