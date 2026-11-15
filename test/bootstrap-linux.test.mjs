@@ -33,10 +33,11 @@ test('Linux installer verifies archive, enrolls, enables only validation, and pr
  const systemctl=[
   '#!/bin/sh',
   'printf "%s\\n" "$*" >> /tmp/services',
-  'case "$1" in enable) unit=$3;; is-active|is-enabled) unit=$3;; *) unit=$2;; esac',
+  'case "$1" in enable) if [ "$2" = --now ]; then unit=$3; else unit=$2; fi;; disable) unit=$2;; is-active|is-enabled) unit=$3;; *) unit=$2;; esac',
   '[ "$unit" != reladock-agent ] || unit=reladock-agent.service',
   'case "$1" in',
-  '  enable) [ "$2" = --now ] || exit 0; touch "/tmp/enabled.$unit" "/tmp/active.$unit";;',
+  '  enable) if [ "$2" = --now ] && [ -f "/tmp/fail-once.$unit" ]; then rm -f "/tmp/fail-once.$unit"; exit 1; fi; touch "/tmp/enabled.$unit"; [ "$2" != --now ] || touch "/tmp/active.$unit";;',
+  '  disable) rm -f "/tmp/enabled.$unit";;',
   '  start|restart) if [ -f "/tmp/fail-once.$unit" ]; then rm -f "/tmp/fail-once.$unit"; exit 1; fi; touch "/tmp/active.$unit";;',
   '  stop) rm -f "/tmp/active.$unit";;',
   '  is-active) [ "$2" = --quiet ] && test -f "/tmp/active.$unit";;',
@@ -86,6 +87,10 @@ exit [lindex $result 3]
  const identitySymlink=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 6 | sh /installer https://console.example.com; rm -f /etc/reladock/node-pki/identity.pem; ln -s agent.crt /etc/reladock/node-pki/identity.pem; if sh /installer https://console.example.com --existing-action none; then exit 9; fi');
  assert.equal(identitySymlink.status,0,identitySymlink.stdout+identitySymlink.stderr);
  assert.match(identitySymlink.stderr,/Existing Agent state is incomplete or conflicting/);
+ const inactiveUpgrade=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 7 | sh /installer https://console.example.com; systemctl stop reladock-agent.service; rm -f /tmp/enabled.reladock-agent.service; printf "old-agent" > /opt/reladock/reladock-agent; sh /installer https://console.example.com --existing-action upgrade; systemctl is-active --quiet reladock-agent.service; systemctl is-enabled --quiet reladock-agent.service; ! systemctl is-active --quiet reladock-agent-apply.service; ! systemctl is-enabled --quiet reladock-agent-apply.service; grep -q fixture-certificate /opt/reladock/reladock-agent');
+ assert.equal(inactiveUpgrade.status,0,inactiveUpgrade.stdout+inactiveUpgrade.stderr);
+ const activeApplyUpgrade=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 8 | sh /installer https://console.example.com; systemctl stop reladock-agent.service; systemctl enable --now reladock-agent-apply.service; printf "old-agent" > /opt/reladock/reladock-agent; sh /installer https://console.example.com --existing-action upgrade; systemctl is-active --quiet reladock-agent-apply.service; systemctl is-enabled --quiet reladock-agent-apply.service; ! systemctl is-active --quiet reladock-agent.service; ! systemctl is-enabled --quiet reladock-agent.service; grep -q fixture-certificate /opt/reladock/reladock-agent');
+ assert.equal(activeApplyUpgrade.status,0,activeApplyUpgrade.stdout+activeApplyUpgrade.stderr);
  const noninteractive=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; printf "%064d\\n" 5 | sh /installer https://console.example.com; printf "old-agent" > /opt/reladock/reladock-agent; sh /installer https://console.example.com; grep -q old-agent /opt/reladock/reladock-agent; test "$(wc -l < /tmp/enrollments)" = 1');
  assert.equal(noninteractive.status,0,noninteractive.stdout+noninteractive.stderr);
  assert.match(noninteractive.stdout,/left unchanged because no interactive terminal is available/);

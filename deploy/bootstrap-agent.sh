@@ -124,11 +124,18 @@ tar -xzf "$temp/release.tar.gz" -C "$temp/release"
 if [ "$bootstrap_upgrade" = 1 ]; then
  validation_active=0
  apply_active=0
+ validation_enabled=0
+ apply_enabled=0
  updater_timer_active=0
  systemctl is-active --quiet reladock-agent.service && validation_active=1
  systemctl is-active --quiet reladock-agent-apply.service && apply_active=1
+ systemctl is-enabled --quiet reladock-agent.service && validation_enabled=1
+ systemctl is-enabled --quiet reladock-agent-apply.service && apply_enabled=1
  systemctl is-active --quiet reladock-updater.timer && updater_timer_active=1
  [ "$validation_active" = 0 ] || [ "$apply_active" = 0 ] || fail 'Both Agent modes are active; refusing ambiguous upgrade.'
+ upgrade_mode=validation
+ upgrade_unit=reladock-agent.service
+ if [ "$apply_active" = 1 ]; then upgrade_mode=apply; upgrade_unit=reladock-agent-apply.service; fi
  systemctl is-active --quiet reladock-updater.service && fail 'A controlled Agent upgrade is already running.'
  upgrade_backup="$temp/upgrade-backup"
  mkdir -p "$upgrade_backup/opt" "$upgrade_backup/systemd"
@@ -149,6 +156,8 @@ if [ "$bootstrap_upgrade" = 1 ]; then
    cp -p "$upgrade_backup/systemd/$rollback_path" "/etc/systemd/system/$rollback_path" || rollback_ok=0
   done
   systemctl daemon-reload || rollback_ok=0
+  if [ "$validation_enabled" = 1 ]; then systemctl enable reladock-agent.service || rollback_ok=0; else systemctl disable reladock-agent.service || rollback_ok=0; fi
+  if [ "$apply_enabled" = 1 ]; then systemctl enable reladock-agent-apply.service || rollback_ok=0; else systemctl disable reladock-agent-apply.service || rollback_ok=0; fi
   [ "$validation_active" = 0 ] || systemctl start reladock-agent.service || rollback_ok=0
   [ "$apply_active" = 0 ] || systemctl start reladock-agent-apply.service || rollback_ok=0
   [ "$updater_timer_active" = 0 ] || systemctl start reladock-updater.timer || rollback_ok=0
@@ -180,13 +189,22 @@ if [ "$bootstrap_upgrade" = 1 ]; then
  if [ "$validation_active" = 1 ] && ! systemctl stop reladock-agent.service; then upgrade_failed 'Cannot stop the validation Agent for upgrade.'; fi
  if [ "$apply_active" = 1 ] && ! systemctl stop reladock-agent-apply.service; then upgrade_failed 'Cannot stop the apply Agent for upgrade.'; fi
  if ! install_upgrade_release; then upgrade_failed 'Pinned release installation failed.'; fi
- if [ "$validation_active" = 1 ] && ! systemctl start reladock-agent.service; then upgrade_failed 'Upgraded validation Agent failed to start.'; fi
- if [ "$apply_active" = 1 ] && ! systemctl start reladock-agent-apply.service; then upgrade_failed 'Upgraded apply Agent failed to start.'; fi
+ if [ "$upgrade_mode" = validation ]; then
+  if ! systemctl disable reladock-agent-apply.service; then upgrade_failed 'Cannot disable the inactive apply Agent for safe reboot.'; fi
+  if ! systemctl enable --now reladock-agent.service; then upgrade_failed 'Upgraded validation Agent failed to enable and start.'; fi
+ else
+  if ! systemctl disable reladock-agent.service; then upgrade_failed 'Cannot disable the inactive validation Agent for safe reboot.'; fi
+  if ! systemctl enable --now reladock-agent-apply.service; then upgrade_failed 'Upgraded apply Agent failed to enable and start.'; fi
+ fi
  if [ "$updater_timer_active" = 1 ] && ! systemctl start reladock-updater.timer; then upgrade_failed 'Updater timer failed to resume after upgrade.'; fi
- if [ "$validation_active" = 1 ] && ! systemctl is-active --quiet reladock-agent.service; then upgrade_failed 'Upgraded validation Agent is not active.'; fi
- if [ "$apply_active" = 1 ] && ! systemctl is-active --quiet reladock-agent-apply.service; then upgrade_failed 'Upgraded apply Agent is not active.'; fi
+ if ! systemctl is-active --quiet "$upgrade_unit"; then
+  if [ "$upgrade_mode" = validation ]; then upgrade_failed 'Upgraded validation Agent is not active.'; else upgrade_failed 'Upgraded apply Agent is not active.'; fi
+ fi
+ if ! systemctl is-enabled --quiet "$upgrade_unit"; then
+  if [ "$upgrade_mode" = validation ]; then upgrade_failed 'Upgraded validation Agent is not enabled for reboot.'; else upgrade_failed 'Upgraded apply Agent is not enabled for reboot.'; fi
+ fi
  if [ "$updater_timer_active" = 1 ] && ! systemctl is-active --quiet reladock-updater.timer; then upgrade_failed 'Updater timer is not active after upgrade.'; fi
- echo 'Existing Agent upgraded from the pinned release. Identity, environment, WAL and journal were preserved. The prior service mode was restored.'
+ echo "Existing Agent upgraded from the pinned release. Identity, environment, WAL and journal were preserved. The $upgrade_mode Agent is active and enabled for reboot."
  echo 'The new bootstrap token was not consumed; revoke it in the console. Service activity is not end-to-end forwarding health.'
  exit 0
 fi
