@@ -41,9 +41,12 @@ if [ "$bootstrap_check" = 0 ]; then
  existing_complete=1
  [ -f /etc/reladock/agent.env ] && [ ! -L /etc/reladock/agent.env ] || existing_complete=0
  [ -d /etc/reladock/node-pki ] && [ ! -L /etc/reladock/node-pki ] || existing_complete=0
- for path in agent.key enrollment.json agent.crt ca.crt identity.pem control node-id; do
+ for path in agent.key enrollment.json agent.crt ca.crt control node-id; do
   [ -f "/etc/reladock/node-pki/$path" ] && [ ! -L "/etc/reladock/node-pki/$path" ] || existing_complete=0
  done
+ if [ -e /etc/reladock/node-pki/identity.pem ] || [ -L /etc/reladock/node-pki/identity.pem ]; then
+  [ -f /etc/reladock/node-pki/identity.pem ] && [ ! -L /etc/reladock/node-pki/identity.pem ] || existing_complete=0
+ fi
  for path in reladock-agent reladock-dataplane reladock-updater reladock-recovery; do
   [ -f "/opt/reladock/$path" ] && [ ! -L "/opt/reladock/$path" ] || existing_complete=0
  done
