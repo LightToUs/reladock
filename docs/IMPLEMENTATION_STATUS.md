@@ -14,6 +14,12 @@
 
 本次没有升级任何既有 Agent、修改实际网络规则、迁移数据库或部署主分支其他增量。公开入口和双架构下载已验收，但真实 VPS 上的交互菜单、客户协议、UDP、容量及升级中断仍未生产验收，不得据此宣称端到端转发或节点生产就绪。
 
+2026-11-15 真实旧节点首次重试发现兼容性边界：该节点除 `/etc/reladock/node-pki/identity.pem` 缺失外，`agent.env`、`agent.crt`、`agent.key`、注册记录、CA、节点/控制身份、四个二进制和四个 systemd 单元均完整一致。Agent 凭据管理器本来就将缺少 `identity.pem` 视为受支持的旧版只读迁移输入，安全使用 `agent.crt` + `agent.key`；v0.9.10 外层安装器将 `identity.pem` 强制列为完整条件，属于兼容性判定过严，而非该节点 PKI 损坏。
+
+修复提交 `f66aecd` 允许仅缺少 `identity.pem` 的完整旧版安装进入菜单；若该路径存在，仍必须是非符号链接普通文件。隔离 Docker 测试先复现失败后通过，并覆盖不操作不请求元数据、升级不创建 `identity.pem` 以及 `identity.pem` 符号链接仍拒绝；`npm run vet` 通过。完整 Go race + Node 回归最终通过，Node 112 项为 111 通过、1 个 opt-in Docker 安装测试默认跳过、0 失败；一次全套运行中的无关遥测速率时序用例失败后，单项 race 连续 10 次通过，随后完整套件全绿。
+
+生产仅切换公开安装脚本路由，没有改动 `v0.9.10` Release 归档和固定摘要。脚本部署为 `/opt/reladock/installers/bootstrap-agent-f66aecd.sh`，SHA256 为 `d4ba2d183dbdc9b4a20a88302007cfebf8627875ce40ff7664ec8bb587e89baf`；Nginx 配置 SHA256 为 `15c1f1fb89052cb266ee4587c04de3fbbd048e7e1528be40226abeb306cb3b73`，回滚备份为 `/root/reladock-backups/v0.9.10-legacy-identity-hotfix-pre-f66aecd`。公开入口返回 `200`、`Content-Type: text/x-shellscript`、`Cache-Control: no-store`；控制健康和固定 v0.9.10 元数据正常，Nginx/控制服务 active 且 enabled，最近十分钟无 warning。此次没有接触目标节点文件、PKI、Agent 服务或网络规则；该节点报告 validation/apply 均 inactive、updater timer active，菜单升级将按设计保留这一活动状态，不应被描述为 Agent 已上线。
+
 > 2026-11-06 全局核验快照；v0.9.10 发布事实以 2026-11-15 顶部条目为准。生产控制端已部署当前 `0.9.8` 控制构建并迁移至 schema v29，生产入口 Agent 仍为 `0.9.5`；未部署节点销售与交付解耦及独立支付页仍仅存在于本地源码，尚未部署生产。生产控制服务已显式接入 Stripe 沙盒测试配置和公开测试 Webhook；本地开发控制端另通过香港服务器上的专用 Cloudflare Tunnel 与 SSH 反向通道接入独立 Stripe 沙盒 Webhook。两者都没有启用 live key、执行真实支付或完成验签到账闭环。当前生产控制构建包含动态节点监控、蓝色主题、独立页面导航、混合入口资源模式、绑定具体节点的线路商品、受约束的草稿管理，以及按美元输入、套餐代码可数字开头并由服务端自动分配版本的套餐新增对话框；本次没有升级 Agent 或修改数据面。本文是实现状态入口，不替代需求与架构文档；用户最新明确指令始终优先。
 
 ## 2026-11-07 v0.9.9 发布准备
