@@ -20,3 +20,17 @@ CREATE TABLE oauth_login_attempts (
 );
 
 CREATE INDEX oauth_login_attempts_expiry ON oauth_login_attempts(expires_at);
+
+CREATE TABLE google_link_challenges (
+ token_hash text PRIMARY KEY CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+ subject text NOT NULL CHECK (length(subject) BETWEEN 1 AND 255 AND subject !~ '[[:cntrl:][:space:]]'),
+ email text NOT NULL CHECK (length(email) BETWEEN 3 AND 254 AND email = lower(email) AND email = btrim(email)),
+ return_to text NOT NULL CHECK (return_to IN ('/','/admin')),
+ expires_at timestamptz NOT NULL,
+ consumed_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ CHECK (expires_at > created_at),
+ CHECK (consumed_at IS NULL OR consumed_at >= created_at)
+);
+
+CREATE INDEX google_link_challenges_expiry ON google_link_challenges(expires_at);

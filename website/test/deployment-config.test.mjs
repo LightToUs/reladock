@@ -17,3 +17,7 @@ test('console upstream explicitly negotiates the control server TLS version', ()
 test('public-site proxy configuration does not claim the agent listener', () => {
   assert.doesNotMatch(nginxConfig, /9443/);
 });
+
+test('Google callback query secrets are excluded from access logs', () => {
+  assert.match(nginxConfig, /location\s*=\s*\/api\/auth\/google\/callback\s*\{[^}]*access_log\s+off;/s);
+});

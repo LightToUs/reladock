@@ -1,10 +1,12 @@
 # Google Login Implementation Plan
 
+> **2026-11-16 security amendment:** Independent review found that Google `email_verified` alone cannot prove ownership of a pre-existing RelaDock account, especially because RelaDock registration does not separately verify mailbox ownership. The approved implementation therefore supersedes the direct-email-binding steps below: an unbound callback creates only a 10-minute `google_link_challenges` record with a hashed random token and a Strict, endpoint-scoped Cookie. `POST /api/auth/google/link` must then verify the same existing email and password before binding, creating a session, consuming the challenge, and auditing in one transaction. The Nginx callback location also disables access logging so code/state query values are not persisted. The original task sequence remains as implementation history; this amendment is authoritative wherever it conflicts.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add optional Google OpenID Connect login for existing RelaDock members without changing tenant, role, platform-admin, password-login, Agent, data-plane, or billing boundaries.
 
-**Architecture:** A new `internal/googleauth` adapter owns Google OAuth2/OIDC protocol validation behind a small provider interface. PostgreSQL schema v41 stores one-time login attempts and durable `(provider, subject)` member bindings; the existing web server orchestrates same-origin start, cross-site callback, session creation, and fixed redirects. Static enterprise/admin pages share a small Google-login controller while all authorization continues to come from current RelaDock database state.
+**Architecture:** A new `internal/googleauth` adapter owns Google OAuth2/OIDC protocol validation behind a small provider interface. PostgreSQL schema v41 stores one-time login attempts, hashed first-link challenges, and durable `(provider, subject)` member bindings; the existing web server orchestrates same-origin start, cross-site callback, password-confirmed first binding, session creation, and fixed redirects. Static enterprise/admin pages share a small Google-login controller while all authorization continues to come from current RelaDock database state.
 
 **Tech Stack:** Go 1.24, PostgreSQL, `github.com/coreos/go-oidc/v3` v3.17.0, `golang.org/x/oauth2` v0.35.0, static ES modules, Node.js test runner.
 
@@ -13,7 +15,7 @@
 ## Global Constraints
 
 - Google login serves existing `members` only; it never creates a tenant/member or grants a role/platform permission.
-- First login links a normalized, verified email; later login resolves only the stable Google `sub`.
+- First authorization never links or creates a session by email alone; it requires the existing same-email RelaDock password. Later login resolves only the stable Google `sub`.
 - Request only `openid email`; never persist Google authorization codes/tokens/raw claims, picture, or name. Persist only hashed state plus nonce/PKCE verifier in the bounded 10-minute login-attempt table, and never log or return those attempt secrets outside the required opaque state Cookie and Google authorization URL.
 - Google auth is disabled when both settings are empty and startup fails closed on partial/invalid configuration.
 - Preserve password registration/login, invitations, password changes, session revocation, tenant suspension, and API-key behavior.
@@ -22,11 +24,11 @@
 
 ## Review Focus
 
-- Concurrent first callbacks for one Google subject must create one binding and separate valid RelaDock sessions without rebinding; pinned by `TestCompleteGoogleLoginConcurrentFirstBinding` in Task 2.
+- Concurrent password-confirmed first links for one Google subject must create one binding and separate valid RelaDock sessions without rebinding; pinned by `TestCompleteGoogleLoginConcurrentFirstBinding` in Task 2.
 - A Google subject already linked to member A must never move to member B after its asserted email changes; pinned by `TestCompleteGoogleLoginUsesSubjectAfterBindingAndRejectsConflicts` in Task 2.
 - Callback replay, expired attempts, mismatched cookie/query state, and nonce mismatch must create neither session nor binding; pinned by `TestGoogleCallbackRejectsReplayExpiryStateAndNonce` in Task 3.
 - A suspended tenant or changed platform role must be re-read at login time, never inherited from claims or stale state; pinned by `TestCompleteGoogleLoginRechecksTenantAndPrivileges` in Task 2.
-- Provider/network errors and unknown emails must expose only an enumerated generic browser error and no secret material; pinned by `TestGoogleCallbackErrorsAreBoundedAndSecretFree` in Task 3.
+- Provider/network errors and failed first-link credentials must expose only an enumerated generic browser error and no secret material; an unknown email may receive a challenge but can never bind without the existing password.
 
 ---
 
@@ -122,11 +124,11 @@ If execution remains in the current dirty checkout, do not stage overlapping use
 
 **Interfaces:**
 - Consumes: normalized member emails, existing `Identity`, session token hashing, `platformLock`, and tenant/member audit conventions.
-- Produces: `SchemaVersion = 41` with `member_external_identities` and `oauth_login_attempts`.
+- Produces: `SchemaVersion = 41` with `member_external_identities`, `oauth_login_attempts`, and `google_link_challenges`.
 - Produces: `OAuthLoginAttempt{Verifier, Nonce, ReturnTo string}` and `GoogleIdentity{Subject, Email string; EmailVerified bool}`.
 - Produces: `Store.StartGoogleLogin(ctx, state, verifier, nonce, returnTo string) error`.
 - Produces: `Store.ConsumeGoogleLogin(ctx, state string) (OAuthLoginAttempt, error)`.
-- Produces: `Store.CompleteGoogleLogin(ctx, GoogleIdentity) (Identity, string, error)`.
+- Produces: `Store.CompleteGoogleLogin(...) (GoogleLoginResult, error)` for bound login or a pending challenge, plus `Store.CompleteGoogleLink(...)` for password-confirmed binding.
 
 - [ ] **Step 1: Write failing migration tests**
 
@@ -215,7 +217,7 @@ If execution remains in the current dirty checkout, defer the commit rather than
 - Consumes: `googleauth.Provider`, `Store.StartGoogleLogin`, `Store.ConsumeGoogleLogin`, and `Store.CompleteGoogleLogin`.
 - Produces: public `GET /api/auth/google/status` → `{enabled:boolean}`.
 - Produces: same-origin `POST /api/auth/google/start` with `{returnTo:"/"|"/admin"}` → `{authorizationURL:string}` plus a 10-minute callback-scoped state Cookie.
-- Produces: `GET /api/auth/google/callback` → clears the state Cookie, creates the Strict RelaDock session on success, and responds 303 to the fixed return target; bounded failure redirects add only `googleAuth=failed`.
+- Produces: `GET /api/auth/google/callback` → clears the state Cookie; bound subjects receive the Strict session, while unbound subjects receive only a Strict link challenge and `googleAuth=link`. `POST /api/auth/google/link` verifies the existing password before creating the session.
 - Produces: `web.Options.GoogleAuth googleauth.Provider`; `cmd/reladock` constructs the provider only when configured.
 
 - [ ] **Step 1: Write failing status/start tests**
@@ -242,7 +244,7 @@ Add:
 - `TestGoogleCallbackRejectsUnknownUnverifiedAndSubjectConflict`
 - `TestGoogleCallbackErrorsAreBoundedAndSecretFree`
 
-Assert successful callbacks use 303, clear the Lax attempt Cookie, set the existing Strict session Cookie, and make `/api/auth/me` return current database identity. Assert all failure paths create no session/binding, use only the fixed destinations and `googleAuth=failed`, and never echo code/state/nonce/verifier/token/provider error.
+Assert successful callbacks use 303 and clear the Lax attempt Cookie. Bound subjects set the existing Strict session Cookie; unbound subjects set only the endpoint-scoped Strict link Cookie and require a successful password-confirmation POST before `/api/auth/me` works. Assert failure paths create no session/binding, use only fixed destinations, and never echo code/state/nonce/verifier/token/provider error.
 
 - [ ] **Step 5: Run callback tests to verify RED**
 
@@ -288,7 +290,7 @@ If execution remains in the current dirty checkout, defer the commit rather than
 
 **Interfaces:**
 - Consumes: public Google status/start endpoints and the fixed `googleAuth=failed` query marker.
-- Produces: `createGoogleLoginController({api, returnTo, button, message, location, history})` with `load()`, `start()`, and `consumeCallbackError()`.
+- Produces: `createGoogleLoginController({api, returnTo, button, message, location, history})` with `load()`, `start()`, and `consumeCallbackResult()` for `failed`/`link` markers.
 - Produces: enterprise Google button visible only in login mode when enabled; admin Google button visible when enabled.
 
 - [ ] **Step 1: Write failing controller tests**
@@ -366,7 +368,7 @@ Authorized redirect URI: ${PUBLIC_ORIGIN}/api/auth/google/callback
 Scopes: openid email
 ```
 
-State that both variables absent disables the feature, partial configuration fails startup, secrets never enter browser/database, only existing verified-email members can first-link, and production Google consent/client/browser callback remains unverified until separately configured and authorized.
+State that both variables absent disables the feature, partial configuration fails startup, provider secrets never enter browser/database, first-link requires the existing same-email password, callback access logging must be suppressed, and production Google consent/client/browser callback remains unverified until separately configured and authorized.
 
 - [ ] **Step 2: Update product and implementation status surgically**
 

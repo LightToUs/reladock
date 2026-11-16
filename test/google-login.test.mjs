@@ -120,12 +120,22 @@ test('invalid authorization URLs and request failures stay on page with a generi
 test('callback failure displays a generic message and removes only the marker', () => {
   const fixture = controllerFixture();
   fixture.location.href = 'https://console.example.com/admin?googleAuth=failed&keep=1#/overview';
-  assert.equal(fixture.controller.consumeCallbackError(), true);
+  assert.equal(fixture.controller.consumeCallbackResult(), 'failed');
   assert.equal(fixture.message.textContent, 'Google 登录未完成，请重试或使用邮箱密码登录。');
   assert.equal(fixture.history.replaced, '/admin?keep=1#/overview');
 
   fixture.location.href = 'https://console.example.com/admin?keep=1';
   fixture.history.replaced = '';
-  assert.equal(fixture.controller.consumeCallbackError(), false);
+  assert.equal(fixture.controller.consumeCallbackResult(), '');
   assert.equal(fixture.history.replaced, '');
+});
+
+test('first authorization requests existing-account password binding and survives disabled status', async () => {
+  const fixture = controllerFixture();
+  fixture.location.href = 'https://console.example.com/?googleAuth=link&keep=1#/overview';
+  assert.equal(fixture.controller.consumeCallbackResult(), 'link');
+  assert.equal(fixture.message.textContent, '首次使用 Google 登录，请输入现有 RelaDock 账号邮箱和密码完成绑定。');
+  assert.equal(fixture.history.replaced, '/?keep=1#/overview');
+  assert.equal(await fixture.controller.load(), false);
+  assert.equal(fixture.message.textContent, '首次使用 Google 登录，请输入现有 RelaDock 账号邮箱和密码完成绑定。');
 });

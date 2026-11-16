@@ -28,6 +28,7 @@ const accountMenu = bindAccountMenu({
 });
 let mode = 'login';
 let googleLoginAvailable = false;
+let googleLinkPending = false;
 let identity;
 const ruleDraft = {};
 let telemetryByRule = new Map();
@@ -85,7 +86,7 @@ function setMode(value) {
   $('#auth-form [name=password]').minLength = value === 'register' ? 12 : 1;
   $('#auth-form [name=password]').autocomplete = value === 'register' ? 'new-password' : 'current-password';
   $('#auth-title').textContent = value === 'register' ? '开通企业账户' : '登录企业控制台';
-  $('#auth-submit').textContent = value === 'register' ? '创建企业并进入控制台' : '登录';
+  $('#auth-submit').textContent = value === 'register' ? '创建企业并进入控制台' : googleLinkPending ? '验证并绑定 Google' : '登录';
   $('#login-tab').setAttribute('aria-selected', String(value === 'login')); $('#register-tab').setAttribute('aria-selected', String(value === 'register'));
   $('#auth-message').textContent = value === 'register' ? '密码需要 12–128 个字节，建议使用较长的字母、数字组合。' : '';
 }
@@ -120,7 +121,7 @@ $('#password-form').addEventListener('submit', async event => {
 $('#auth-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!logoutGuard.canLogin()) return; const button = $('#auth-submit'); button.disabled = true;
   const fields = Object.fromEntries(new FormData(event.target)); if (mode === 'login') delete fields.company;
-  try { identity = await api(`/api/auth/${mode}`, { method: 'POST', body: fields }); event.target.reset(); $('#auth-message').textContent = ''; if (identity.platformAdmin) { location.assign('/admin'); return; } await refresh(); }
+  try { identity = await api(mode === 'login' && googleLinkPending ? '/api/auth/google/link' : `/api/auth/${mode}`, { method: 'POST', body: fields }); googleLinkPending = false; event.target.reset(); $('#auth-message').textContent = ''; $('#google-login-message').textContent = ''; if (identity.platformAdmin) { location.assign('/admin'); return; } await refresh(); }
   catch (error) { $('#auth-message').textContent = error.message; } finally { button.disabled = false; }
 });
 $('#logout').addEventListener('click', async () => {
@@ -465,7 +466,8 @@ $('#rule-form').addEventListener('submit', async event => {
   }
 });
 setMode('login');
-googleLogin.consumeCallbackError();
+googleLinkPending = googleLogin.consumeCallbackResult() === 'link';
+setMode('login');
 void googleLogin.load();
 bindAccountTools(api,refresh);
 bindBusinessTools(api,refresh,view=>workspaceNavigation.select(view));

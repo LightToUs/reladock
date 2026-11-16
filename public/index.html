@@ -14,8 +14,8 @@
   <div id="google-login-entry" class="google-login-entry" hidden>
     <p class="auth-alternative">其他登录方式</p>
     <button id="google-login" class="google-login-button" type="button" hidden>使用 Google 登录</button>
-    <p id="google-login-message" class="error google-login-message" role="status" aria-live="polite"></p>
   </div>
+  <p id="google-login-message" class="error google-login-message" role="status" aria-live="polite"></p>
   <p id="auth-message" class="error" role="status"></p><p class="muted hint">企业账户用于管理中转服务；客户自行管理 VPN 用户、协议密钥与订阅。</p>
   <details><summary>接受企业邀请</summary><form id="accept-invitation"><label>邀请令牌<input name="token" required autocomplete="off"></label><label>受邀邮箱<input name="email" type="email" required autocomplete="username"></label><label>设置密码<div class="password-input"><input id="invitation-password" name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password"><button id="invitation-password-toggle" class="password-toggle" type="button" aria-controls="invitation-password" aria-pressed="false">显示</button></div></label><button>接受邀请并登录</button></form><p id="accept-message" class="error" role="status"></p></details>
 </section>

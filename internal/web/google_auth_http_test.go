@@ -237,6 +237,11 @@ func googleCallback(handler http.Handler, rawQuery, remoteAddr string, cookie *h
 	return recorder
 }
 
+func completeGoogleLinkHTTP(handler http.Handler, email, password, remoteAddr string, cookie *http.Cookie) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(map[string]string{"email": email, "password": password})
+	return googleAuthRequest(handler, http.MethodPost, "https://console.example.com"+googleLinkPath, string(body), remoteAddr, cookie)
+}
+
 func assertGoogleCallbackFailure(t *testing.T, recorder *httptest.ResponseRecorder, returnTo string, forbidden ...string) {
 	t.Helper()
 	if recorder.Code != http.StatusSeeOther {
@@ -272,13 +277,25 @@ func TestGoogleCallbackLinksExistingMemberAndSetsStrictSession(t *testing.T) {
 	handler := newGoogleAuthHandler(store, provider)
 	stateCookie := startGoogleAuth(t, handler, provider, "/", "192.0.2.20:1234")
 	callback := googleCallback(handler, "state="+url.QueryEscape(stateCookie.Value)+"&code=fixture-code", "192.0.2.20:1234", stateCookie)
-	if callback.Code != http.StatusSeeOther || callback.Header().Get("Location") != "/" {
+	if callback.Code != http.StatusSeeOther || callback.Header().Get("Location") != "/?googleAuth=link" {
 		t.Fatalf("callback: %d location=%q body=%s", callback.Code, callback.Header().Get("Location"), callback.Body.String())
 	}
 	cleared := findCookie(callback.Result().Cookies(), googleStateCookieName)
-	session := findCookie(callback.Result().Cookies(), cookieName)
-	if cleared == nil || cleared.MaxAge != -1 || session == nil || len(session.Value) != 43 || session.Path != "/" || !session.HttpOnly || !session.Secure || session.SameSite != http.SameSiteStrictMode {
-		t.Fatalf("callback cookies: cleared=%+v session=%+v", cleared, session)
+	linkCookie := findCookie(callback.Result().Cookies(), googleLinkCookieName)
+	if cleared == nil || cleared.MaxAge != -1 || linkCookie == nil || len(linkCookie.Value) != 43 || linkCookie.Path != googleLinkPath || !linkCookie.HttpOnly || !linkCookie.Secure || linkCookie.SameSite != http.SameSiteStrictMode || linkCookie.MaxAge != 600 {
+		t.Fatalf("callback cookies: cleared=%+v link=%+v", cleared, linkCookie)
+	}
+	if session := findCookie(callback.Result().Cookies(), cookieName); session != nil && session.Value != "" {
+		t.Fatalf("unlinked callback created session: %+v", session)
+	}
+	linked := completeGoogleLinkHTTP(handler, who.Email, "long-test-password-42", "192.0.2.21:1234", linkCookie)
+	if linked.Code != http.StatusOK {
+		t.Fatalf("link: %d %s", linked.Code, linked.Body.String())
+	}
+	session := findCookie(linked.Result().Cookies(), cookieName)
+	clearedLink := findCookie(linked.Result().Cookies(), googleLinkCookieName)
+	if session == nil || len(session.Value) != 43 || session.Path != "/" || !session.HttpOnly || !session.Secure || session.SameSite != http.SameSiteStrictMode || clearedLink == nil || clearedLink.MaxAge != -1 {
+		t.Fatalf("link cookies: session=%+v clearedLink=%+v", session, clearedLink)
 	}
 	me := googleAuthRequest(handler, http.MethodGet, "https://console.example.com/api/auth/me", "", "192.0.2.21:1234", session)
 	if me.Code != http.StatusOK {
@@ -309,10 +326,15 @@ func TestGoogleCallbackReturnsAdminToAdminWithoutGrantingPrivilege(t *testing.T)
 	handler := newGoogleAuthHandler(store, provider)
 	stateCookie := startGoogleAuth(t, handler, provider, "/admin", "192.0.2.30:1234")
 	callback := googleCallback(handler, "state="+stateCookie.Value+"&code=admin-code", "192.0.2.30:1234", stateCookie)
-	if callback.Code != http.StatusSeeOther || callback.Header().Get("Location") != "/admin" {
+	if callback.Code != http.StatusSeeOther || callback.Header().Get("Location") != "/admin?googleAuth=link" {
 		t.Fatalf("admin callback: %d %q", callback.Code, callback.Header().Get("Location"))
 	}
-	session := findCookie(callback.Result().Cookies(), cookieName)
+	linkCookie := findCookie(callback.Result().Cookies(), googleLinkCookieName)
+	linked := completeGoogleLinkHTTP(handler, who.Email, "long-test-password-42", "192.0.2.31:1234", linkCookie)
+	if linked.Code != http.StatusOK {
+		t.Fatalf("admin link: %d %s", linked.Code, linked.Body.String())
+	}
+	session := findCookie(linked.Result().Cookies(), cookieName)
 	me := googleAuthRequest(handler, http.MethodGet, "https://console.example.com/api/auth/me", "", "192.0.2.31:1234", session)
 	var loaded platform.Identity
 	if err = json.Unmarshal(me.Body.Bytes(), &loaded); err != nil || loaded.PlatformAdmin || loaded.MemberID != who.MemberID {
@@ -340,7 +362,7 @@ func TestGoogleCallbackRejectsReplayExpiryStateAndNonce(t *testing.T) {
 			t.Fatalf("state mismatch exchanged code %d times", calls)
 		}
 		success := googleCallback(handler, "state="+stateCookie.Value+"&code=correct-code", "192.0.2.41:1234", stateCookie)
-		if success.Code != http.StatusSeeOther || success.Header().Get("Location") != "/" || findCookie(success.Result().Cookies(), cookieName) == nil {
+		if success.Code != http.StatusSeeOther || success.Header().Get("Location") != "/?googleAuth=link" || findCookie(success.Result().Cookies(), googleLinkCookieName) == nil {
 			t.Fatalf("unconsumed attempt did not succeed: %d %s", success.Code, success.Body.String())
 		}
 	})
@@ -355,7 +377,7 @@ func TestGoogleCallbackRejectsReplayExpiryStateAndNonce(t *testing.T) {
 		handler := newGoogleAuthHandler(store, provider)
 		stateCookie := startGoogleAuth(t, handler, provider, "/", "192.0.2.50:1234")
 		query := "state=" + stateCookie.Value + "&code=replay-code"
-		if first := googleCallback(handler, query, "192.0.2.50:1234", stateCookie); findCookie(first.Result().Cookies(), cookieName) == nil {
+		if first := googleCallback(handler, query, "192.0.2.50:1234", stateCookie); findCookie(first.Result().Cookies(), googleLinkCookieName) == nil {
 			t.Fatalf("first callback failed: %d %s", first.Code, first.Body.String())
 		}
 		replay := googleCallback(handler, query, "192.0.2.51:1234", stateCookie)
@@ -405,8 +427,15 @@ func TestGoogleCallbackRejectsUnknownUnverifiedAndSubjectConflict(t *testing.T) 
 		provider := &fakeGoogleProvider{claims: googleauth.Claims{Subject: "unknown-http-subject", Email: "unknown-http@example.com"}}
 		handler := newGoogleAuthHandler(store, provider)
 		stateCookie := startGoogleAuth(t, handler, provider, "/", "192.0.2.80:1234")
-		failed := googleCallback(handler, "state="+stateCookie.Value+"&code=unknown-code", "192.0.2.80:1234", stateCookie)
-		assertGoogleCallbackFailure(t, failed, "/", "unknown-code", stateCookie.Value)
+		pending := googleCallback(handler, "state="+stateCookie.Value+"&code=unknown-code", "192.0.2.80:1234", stateCookie)
+		if pending.Code != http.StatusSeeOther || pending.Header().Get("Location") != "/?googleAuth=link" {
+			t.Fatalf("unknown callback: %d %q", pending.Code, pending.Header().Get("Location"))
+		}
+		linkCookie := findCookie(pending.Result().Cookies(), googleLinkCookieName)
+		failed := completeGoogleLinkHTTP(handler, "unknown-http@example.com", "long-test-password-42", "192.0.2.80:1234", linkCookie)
+		if failed.Code != http.StatusUnauthorized || strings.Contains(failed.Body.String(), "unknown-http-subject") || strings.Contains(failed.Body.String(), stateCookie.Value) {
+			t.Fatalf("unknown link response: %d %s", failed.Code, failed.Body.String())
+		}
 		var bindings, sessions int
 		if err := inspection.QueryRow(context.Background(), `SELECT (SELECT count(*) FROM member_external_identities),(SELECT count(*) FROM sessions)`).Scan(&bindings, &sessions); err != nil || bindings != 0 || sessions != 0 {
 			t.Fatalf("unknown callback wrote bindings=%d sessions=%d err=%v", bindings, sessions, err)
@@ -435,15 +464,26 @@ func TestGoogleCallbackRejectsUnknownUnverifiedAndSubjectConflict(t *testing.T) 
 		provider := &fakeGoogleProvider{claims: googleauth.Claims{Subject: "first-http-subject", Email: who.Email}}
 		handler := newGoogleAuthHandler(store, provider)
 		firstState := startGoogleAuth(t, handler, provider, "/", "192.0.2.82:1234")
-		if first := googleCallback(handler, "state="+firstState.Value+"&code=first-code", "192.0.2.82:1234", firstState); findCookie(first.Result().Cookies(), cookieName) == nil {
+		first := googleCallback(handler, "state="+firstState.Value+"&code=first-code", "192.0.2.82:1234", firstState)
+		firstLink := findCookie(first.Result().Cookies(), googleLinkCookieName)
+		if firstLink == nil {
 			t.Fatalf("first binding failed: %d %s", first.Code, first.Body.String())
+		}
+		if linked := completeGoogleLinkHTTP(handler, who.Email, "long-test-password-42", "192.0.2.82:1234", firstLink); linked.Code != http.StatusOK {
+			t.Fatalf("first link failed: %d %s", linked.Code, linked.Body.String())
 		}
 		provider.mu.Lock()
 		provider.claims.Subject = "second-http-subject"
 		provider.mu.Unlock()
 		secondState := startGoogleAuth(t, handler, provider, "/admin", "192.0.2.83:1234")
-		failed := googleCallback(handler, "state="+secondState.Value+"&code=conflict-code", "192.0.2.83:1234", secondState)
-		assertGoogleCallbackFailure(t, failed, "/admin", "conflict-code", secondState.Value)
+		pending := googleCallback(handler, "state="+secondState.Value+"&code=conflict-code", "192.0.2.83:1234", secondState)
+		if pending.Code != http.StatusSeeOther || pending.Header().Get("Location") != "/admin?googleAuth=link" {
+			t.Fatalf("conflicting subject callback: %d %q", pending.Code, pending.Header().Get("Location"))
+		}
+		failed := completeGoogleLinkHTTP(handler, who.Email, "long-test-password-42", "192.0.2.83:1234", findCookie(pending.Result().Cookies(), googleLinkCookieName))
+		if failed.Code != http.StatusUnauthorized || strings.Contains(failed.Body.String(), "conflict-code") || strings.Contains(failed.Body.String(), secondState.Value) {
+			t.Fatalf("conflicting link response: %d %s", failed.Code, failed.Body.String())
+		}
 	})
 }
 

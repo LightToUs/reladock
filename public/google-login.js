@@ -1,5 +1,6 @@
 const genericStartError = 'Google 登录暂时不可用，请稍后重试。';
 const genericCallbackError = 'Google 登录未完成，请重试或使用邮箱密码登录。';
+const genericLinkMessage = '首次使用 Google 登录，请输入现有 RelaDock 账号邮箱和密码完成绑定。';
 
 export function createGoogleLoginController({ api, returnTo, button, message, location, history, onAvailabilityChange = () => {} }) {
   if (returnTo !== '/' && returnTo !== '/admin') throw new Error('invalid Google login return target');
@@ -42,13 +43,14 @@ export function createGoogleLoginController({ api, returnTo, button, message, lo
     }
   }
 
-  function consumeCallbackError() {
+  function consumeCallbackResult() {
     const current = new URL(location.href);
-    if (current.searchParams.get('googleAuth') !== 'failed') return false;
-    message.textContent = genericCallbackError;
+    const result = current.searchParams.get('googleAuth');
+    if (result !== 'failed' && result !== 'link') return '';
+    message.textContent = result === 'link' ? genericLinkMessage : genericCallbackError;
     current.searchParams.delete('googleAuth');
     history.replaceState(null, '', current.pathname + current.search + current.hash);
-    return true;
+    return result;
   }
 
   button.addEventListener('click', event => {
@@ -56,5 +58,5 @@ export function createGoogleLoginController({ api, returnTo, button, message, lo
     void start();
   });
 
-  return { load, start, consumeCallbackError };
+  return { load, start, consumeCallbackResult };
 }

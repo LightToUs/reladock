@@ -139,7 +139,7 @@ func (s *server) allowed(r *http.Request) bool {
 	}
 	category := "api"
 	max := 120
-	if strings.HasPrefix(r.URL.Path, "/api/auth/login") || strings.HasPrefix(r.URL.Path, "/api/auth/register") || r.URL.Path == "/api/auth/google/start" || r.URL.Path == googleCallbackPath {
+	if strings.HasPrefix(r.URL.Path, "/api/auth/login") || strings.HasPrefix(r.URL.Path, "/api/auth/register") || r.URL.Path == "/api/auth/google/start" || r.URL.Path == googleCallbackPath || r.URL.Path == googleLinkPath {
 		category = "auth"
 		max = 10
 	}

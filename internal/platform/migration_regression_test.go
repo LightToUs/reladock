@@ -8,6 +8,7 @@ import (
 func revertSchemaTo40(t *testing.T, s *Store) {
 	t.Helper()
 	if _, err := s.pool.Exec(context.Background(), `
+DROP TABLE google_link_challenges;
 DROP TABLE oauth_login_attempts;
 DROP TABLE member_external_identities;
 DELETE FROM schema_migrations WHERE version=41;`); err != nil {
@@ -44,6 +45,7 @@ func TestMigration41From40PreservesExistingFacts(t *testing.T) {
 func revertSchemaTo38(t *testing.T, s *Store) {
 	t.Helper()
 	_, err := s.pool.Exec(context.Background(), `
+DROP TABLE google_link_challenges;
 DROP TABLE oauth_login_attempts;
 DROP TABLE member_external_identities;
 DROP TABLE lightsail_jobs;
@@ -88,6 +90,7 @@ func TestMigration39From38PreservesExistingFacts(t *testing.T) {
 func revertSchemaTo29(t *testing.T, s *Store) {
 	t.Helper()
 	_, err := s.pool.Exec(context.Background(), `
+DROP TABLE google_link_challenges;
 DROP TABLE oauth_login_attempts;
 DROP TABLE member_external_identities;
 DROP TABLE lightsail_jobs;

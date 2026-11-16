@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,10 +16,33 @@ func insertGoogleAuthMember(t *testing.T, store *Store, email string) (tenantID,
 	if _, err := store.pool.Exec(ctx, "INSERT INTO tenants(id,name) VALUES($1,$2)", tenantID, "Google auth fixture"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.pool.Exec(ctx, "INSERT INTO members(id,tenant_id,email,password_hash,role) VALUES($1,$2,$3,'fixture-password-hash','owner')", memberID, tenantID, email); err != nil {
+	passwordHash, err := hashPassword("long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, "INSERT INTO members(id,tenant_id,email,password_hash,role) VALUES($1,$2,$3,$4,'owner')", memberID, tenantID, email, passwordHash); err != nil {
 		t.Fatal(err)
 	}
 	return tenantID, memberID
+}
+
+func linkGoogleAuthMember(t *testing.T, store *Store, identity GoogleIdentity, linkToken, returnTo string) (Identity, string) {
+	t.Helper()
+	result, err := store.CompleteGoogleLogin(context.Background(), identity, linkToken, returnTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.LinkRequired {
+		t.Fatalf("first Google login did not require a password link: %+v", result)
+	}
+	who, token, linkedReturnTo, err := store.CompleteGoogleLink(context.Background(), linkToken, identity.Email, "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linkedReturnTo != returnTo {
+		t.Fatalf("link return target = %q, want %q", linkedReturnTo, returnTo)
+	}
+	return who, token
 }
 
 func TestMigration41GoogleIdentityConstraints(t *testing.T) {
@@ -65,6 +89,18 @@ func TestMigration41GoogleIdentityConstraints(t *testing.T) {
 		var column string
 		_ = rows.Scan(&column)
 		t.Fatalf("provider secret column exists: %s", column)
+	}
+	if _, err := store.pool.Exec(ctx, `INSERT INTO google_link_challenges(token_hash,subject,email,return_to,expires_at) VALUES($1,'link-subject','google-a@example.com','/',now()+interval '10 minutes')`, validHash); err != nil {
+		t.Fatal(err)
+	}
+	for name, args := range map[string][]any{
+		"plaintext token": {"plaintext-token", "link-subject", "google-a@example.com", "/", time.Now().Add(10 * time.Minute)},
+		"open redirect":   {"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "link-subject", "google-a@example.com", "https://evil.example", time.Now().Add(10 * time.Minute)},
+		"expired":         {"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "link-subject", "google-a@example.com", "/admin", time.Now().Add(-time.Minute)},
+	} {
+		if _, err := store.pool.Exec(ctx, `INSERT INTO google_link_challenges(token_hash,subject,email,return_to,expires_at) VALUES($1,$2,$3,$4,$5)`, args...); err == nil {
+			t.Fatalf("%s link challenge constraint was not enforced", name)
+		}
 	}
 }
 
@@ -133,53 +169,105 @@ func TestGoogleLoginAttemptIsHashedSingleUseAndExpires(t *testing.T) {
 	}
 }
 
-func TestCompleteGoogleLoginLinksExistingVerifiedEmailAndCreatesSession(t *testing.T) {
+func TestCompleteGoogleLoginRequiresPasswordLinkBeforeCreatingSession(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	_, memberID := insertGoogleAuthMember(t, store, "member@example.com")
-	who, token, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "google-subject-a", Email: "Member@Example.com", EmailVerified: true})
+	linkToken := strings.Repeat("L", 43)
+	result, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "google-subject-a", Email: "Member@Example.com", EmailVerified: true}, linkToken, "/")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if who.MemberID != memberID || who.Email != "member@example.com" || who.Role != "owner" || who.PlatformAdmin {
-		t.Fatalf("identity = %+v", who)
+	if !result.LinkRequired || result.SessionToken != "" || result.Identity.MemberID != "" {
+		t.Fatalf("unbound completion = %+v", result)
 	}
-	if len(token) != 43 {
-		t.Fatalf("session token length = %d", len(token))
+	var challengeHash, subject, email string
+	var bindings, sessions, audits int
+	if err := store.pool.QueryRow(ctx, `SELECT token_hash,subject,email,
+ (SELECT count(*) FROM member_external_identities),
+ (SELECT count(*) FROM sessions),
+ (SELECT count(*) FROM audit_logs)
+ FROM google_link_challenges`).Scan(&challengeHash, &subject, &email, &bindings, &sessions, &audits); err != nil {
+		t.Fatal(err)
+	}
+	if challengeHash != tokenHash(linkToken) || challengeHash == linkToken || subject != "google-subject-a" || email != "member@example.com" || bindings != 0 || sessions != 0 || audits != 0 {
+		t.Fatalf("challenge hash=%q subject=%q email=%q bindings=%d sessions=%d audits=%d", challengeHash, subject, email, bindings, sessions, audits)
+	}
+	who, token, returnTo, err := store.CompleteGoogleLink(ctx, linkToken, "MEMBER@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if who.MemberID != memberID || len(token) != 43 || returnTo != "/" {
+		t.Fatalf("linked identity=%+v tokenLength=%d returnTo=%q", who, len(token), returnTo)
 	}
 	if loaded, err := store.Session(ctx, token); err != nil || loaded.MemberID != memberID {
 		t.Fatalf("session identity = %+v, err = %v", loaded, err)
 	}
-	var bindings, links, logins int
+	var links, logins, consumed int
 	if err := store.pool.QueryRow(ctx, `SELECT
  (SELECT count(*) FROM member_external_identities WHERE provider='google' AND subject='google-subject-a' AND member_id=$1),
  (SELECT count(*) FROM audit_logs WHERE action='account.google_link' AND actor_id=$1),
- (SELECT count(*) FROM audit_logs WHERE action='account.login' AND actor_id=$1)`, memberID).Scan(&bindings, &links, &logins); err != nil {
+	 (SELECT count(*) FROM audit_logs WHERE action='account.login' AND actor_id=$1),
+	 (SELECT count(*) FROM google_link_challenges WHERE consumed_at IS NOT NULL)`, memberID).Scan(&bindings, &links, &logins, &consumed); err != nil {
 		t.Fatal(err)
 	}
-	if bindings != 1 || links != 1 || logins != 1 {
-		t.Fatalf("bindings=%d links=%d logins=%d", bindings, links, logins)
+	if bindings != 1 || links != 1 || logins != 1 || consumed != 1 {
+		t.Fatalf("bindings=%d links=%d logins=%d consumed=%d", bindings, links, logins, consumed)
 	}
 }
 
-func TestCompleteGoogleLoginRejectsUnknownOrUnverifiedEmailWithoutWrites(t *testing.T) {
+func TestCompleteGoogleLinkRejectsWrongCredentialsWithoutWritesAndAllowsRetry(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	insertGoogleAuthMember(t, store, "known@example.com")
-	for name, identity := range map[string]GoogleIdentity{
-		"unknown":    {Subject: "unknown-subject", Email: "unknown@example.com", EmailVerified: true},
-		"unverified": {Subject: "unverified-subject", Email: "known@example.com", EmailVerified: false},
+	linkToken := strings.Repeat("M", 43)
+	if _, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "credential-subject", Email: "known@example.com", EmailVerified: true}, linkToken, "/admin"); err != nil {
+		t.Fatal(err)
+	}
+	for name, credentials := range map[string][2]string{
+		"wrong email":    {"other@example.com", "long-test-password-42"},
+		"wrong password": {"known@example.com", "wrong-password"},
 	} {
-		if _, _, err := store.CompleteGoogleLogin(ctx, identity); err != ErrUnauthorized {
+		if _, _, _, err := store.CompleteGoogleLink(ctx, linkToken, credentials[0], credentials[1]); err != ErrUnauthorized {
 			t.Fatalf("%s err = %v, want ErrUnauthorized", name, err)
 		}
 	}
-	var bindings, sessions, audits int
-	if err := store.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM member_external_identities),(SELECT count(*) FROM sessions),(SELECT count(*) FROM audit_logs)`).Scan(&bindings, &sessions, &audits); err != nil {
+	var bindings, sessions, audits, consumed int
+	if err := store.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM member_external_identities),(SELECT count(*) FROM sessions),(SELECT count(*) FROM audit_logs),(SELECT count(*) FROM google_link_challenges WHERE consumed_at IS NOT NULL)`).Scan(&bindings, &sessions, &audits, &consumed); err != nil {
 		t.Fatal(err)
 	}
-	if bindings != 0 || sessions != 0 || audits != 0 {
-		t.Fatalf("failed login wrote bindings=%d sessions=%d audits=%d", bindings, sessions, audits)
+	if bindings != 0 || sessions != 0 || audits != 0 || consumed != 0 {
+		t.Fatalf("failed link wrote bindings=%d sessions=%d audits=%d consumed=%d", bindings, sessions, audits, consumed)
+	}
+	if _, _, _, err := store.CompleteGoogleLink(ctx, linkToken, "known@example.com", "long-test-password-42"); err != nil {
+		t.Fatalf("valid retry failed: %v", err)
+	}
+}
+
+func TestCompleteGoogleLinkRejectsExpiredAndReplayedChallenge(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	insertGoogleAuthMember(t, store, "expiry@example.com")
+	expiredToken := strings.Repeat("N", 43)
+	if result, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "expiry-subject", Email: "expiry@example.com", EmailVerified: true}, expiredToken, "/"); err != nil || !result.LinkRequired {
+		t.Fatalf("expired challenge setup = %+v err=%v", result, err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE google_link_challenges SET created_at=now()-interval '20 minutes',expires_at=now()-interval '10 minutes' WHERE token_hash=$1`, tokenHash(expiredToken)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.CompleteGoogleLink(ctx, expiredToken, "expiry@example.com", "long-test-password-42"); err != ErrUnauthorized {
+		t.Fatalf("expired challenge err=%v", err)
+	}
+
+	validToken := strings.Repeat("O", 43)
+	if result, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "replay-link-subject", Email: "expiry@example.com", EmailVerified: true}, validToken, "/admin"); err != nil || !result.LinkRequired {
+		t.Fatalf("replay challenge setup = %+v err=%v", result, err)
+	}
+	if _, _, _, err := store.CompleteGoogleLink(ctx, validToken, "expiry@example.com", "long-test-password-42"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := store.CompleteGoogleLink(ctx, validToken, "expiry@example.com", "long-test-password-42"); err != ErrUnauthorized {
+		t.Fatalf("replayed challenge err=%v", err)
 	}
 }
 
@@ -188,17 +276,23 @@ func TestCompleteGoogleLoginUsesSubjectAfterBindingAndRejectsConflicts(t *testin
 	ctx := context.Background()
 	_, memberA := insertGoogleAuthMember(t, store, "subject-a@example.com")
 	_, memberB := insertGoogleAuthMember(t, store, "subject-b@example.com")
-	if _, _, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "stable-subject", Email: "subject-a@example.com", EmailVerified: true}); err != nil {
-		t.Fatal(err)
-	}
-	who, _, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "stable-subject", Email: "subject-b@example.com", EmailVerified: true})
+	linkGoogleAuthMember(t, store, GoogleIdentity{Subject: "stable-subject", Email: "subject-a@example.com", EmailVerified: true}, strings.Repeat("A", 43), "/")
+	result, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "stable-subject", Email: "subject-b@example.com", EmailVerified: true}, strings.Repeat("B", 43), "/admin")
 	if err != nil {
 		t.Fatal(err)
+	}
+	who := result.Identity
+	if result.LinkRequired || len(result.SessionToken) != 43 {
+		t.Fatalf("bound subject result = %+v", result)
 	}
 	if who.MemberID != memberA || who.MemberID == memberB {
 		t.Fatalf("stable subject moved to %+v", who)
 	}
-	if _, _, err = store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "second-subject", Email: "subject-a@example.com", EmailVerified: true}); err != ErrUnauthorized {
+	secondToken := strings.Repeat("C", 43)
+	if pending, pendingErr := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "second-subject", Email: "subject-a@example.com", EmailVerified: true}, secondToken, "/"); pendingErr != nil || !pending.LinkRequired {
+		t.Fatalf("second subject challenge = %+v err=%v", pending, pendingErr)
+	}
+	if _, _, _, err = store.CompleteGoogleLink(ctx, secondToken, "subject-a@example.com", "long-test-password-42"); err != ErrUnauthorized {
 		t.Fatalf("second subject for one member err = %v", err)
 	}
 	var bindings int
@@ -216,17 +310,24 @@ func TestCompleteGoogleLoginConcurrentFirstBinding(t *testing.T) {
 		token string
 		err   error
 	}
+	linkTokens := []string{strings.Repeat("D", 43), strings.Repeat("E", 43)}
+	for _, linkToken := range linkTokens {
+		result, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "concurrent-subject", Email: "concurrent@example.com", EmailVerified: true}, linkToken, "/")
+		if err != nil || !result.LinkRequired {
+			t.Fatalf("challenge result=%+v err=%v", result, err)
+		}
+	}
 	start := make(chan struct{})
 	results := make(chan result, 2)
 	var wait sync.WaitGroup
-	for range 2 {
+	for _, linkToken := range linkTokens {
 		wait.Add(1)
-		go func() {
+		go func(linkToken string) {
 			defer wait.Done()
 			<-start
-			who, token, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "concurrent-subject", Email: "concurrent@example.com", EmailVerified: true})
+			who, token, _, err := store.CompleteGoogleLink(ctx, linkToken, "concurrent@example.com", "long-test-password-42")
 			results <- result{who: who, token: token, err: err}
-		}()
+		}(linkToken)
 	}
 	close(start)
 	wait.Wait()
@@ -261,23 +362,22 @@ func TestCompleteGoogleLoginRechecksTenantAndPrivileges(t *testing.T) {
 	ctx := context.Background()
 	tenantID, memberID := insertGoogleAuthMember(t, store, "privilege@example.com")
 	identity := GoogleIdentity{Subject: "privilege-subject", Email: "privilege@example.com", EmailVerified: true}
-	if _, _, err := store.CompleteGoogleLogin(ctx, identity); err != nil {
-		t.Fatal(err)
-	}
+	linkGoogleAuthMember(t, store, identity, strings.Repeat("F", 43), "/")
 	if _, err := store.pool.Exec(ctx, "UPDATE members SET role='viewer',is_platform_admin=true WHERE id=$1", memberID); err != nil {
 		t.Fatal(err)
 	}
-	who, token, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: identity.Subject, Email: "changed@example.com", EmailVerified: true})
+	result, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: identity.Subject, Email: "changed@example.com", EmailVerified: true}, strings.Repeat("G", 43), "/")
 	if err != nil {
 		t.Fatal(err)
 	}
+	who, token := result.Identity, result.SessionToken
 	if who.Role != "viewer" || !who.PlatformAdmin || who.Email != "privilege@example.com" {
 		t.Fatalf("current database identity not re-read: %+v", who)
 	}
 	if _, err = store.pool.Exec(ctx, "UPDATE tenants SET status='suspended' WHERE id=$1", tenantID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = store.CompleteGoogleLogin(ctx, identity); err != ErrUnauthorized {
+	if _, err = store.CompleteGoogleLogin(ctx, identity, strings.Repeat("H", 43), "/"); err != ErrUnauthorized {
 		t.Fatalf("suspended tenant login err = %v", err)
 	}
 	if _, err = store.Session(ctx, token); err != ErrUnauthorized {
@@ -299,15 +399,20 @@ $$;
 CREATE TRIGGER reject_google_auth_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION reject_google_auth_audit();`); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "audit-subject", Email: "audit-failure@example.com", EmailVerified: true})
+	linkToken := strings.Repeat("I", 43)
+	result, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "audit-subject", Email: "audit-failure@example.com", EmailVerified: true}, linkToken, "/")
+	if err != nil || !result.LinkRequired {
+		t.Fatalf("challenge result=%+v err=%v", result, err)
+	}
+	_, _, _, err = store.CompleteGoogleLink(ctx, linkToken, "audit-failure@example.com", "long-test-password-42")
 	if err == nil || errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("audit failure result = %v", err)
 	}
-	var bindings, sessions, audits int
-	if err = store.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM member_external_identities),(SELECT count(*) FROM sessions),(SELECT count(*) FROM audit_logs)`).Scan(&bindings, &sessions, &audits); err != nil {
+	var bindings, sessions, audits, consumed int
+	if err = store.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM member_external_identities),(SELECT count(*) FROM sessions),(SELECT count(*) FROM audit_logs),(SELECT count(*) FROM google_link_challenges WHERE consumed_at IS NOT NULL)`).Scan(&bindings, &sessions, &audits, &consumed); err != nil {
 		t.Fatal(err)
 	}
-	if bindings != 0 || sessions != 0 || audits != 0 {
-		t.Fatalf("audit failure committed bindings=%d sessions=%d audits=%d", bindings, sessions, audits)
+	if bindings != 0 || sessions != 0 || audits != 0 || consumed != 0 {
+		t.Fatalf("audit failure committed bindings=%d sessions=%d audits=%d consumed=%d", bindings, sessions, audits, consumed)
 	}
 }

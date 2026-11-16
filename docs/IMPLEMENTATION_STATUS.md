@@ -4,11 +4,11 @@
 
 ## 2026-11-16 Google 授权登录（本地，schema v41）
 
-企业控制台与平台后台已接入默认关闭的 Google OpenID Connect 登录。服务端固定 Google 端点并实现 state、nonce、PKCE S256、OIDC 签名/issuer/audience/expiry 校验和 verified-email 门禁；尝试记录只保存摘要、短期有效且单次消费。首次授权只绑定已有规范邮箱成员，不自动创建企业、成员、角色或平台权限；以后使用 provider 稳定 subject。完成登录时重新读取当前企业启停、成员角色和平台权限，使用现有 24 小时摘要会话与事务审计。schema v41 新增外部身份和 OAuth 尝试表，并覆盖唯一约束、并发首次绑定、重放/过期、subject 冲突、停用/撤权、审计回滚和 HTTP 安全边界。
+企业控制台与平台后台已接入默认关闭的 Google OpenID Connect 登录。服务端固定 Google 端点并实现 state、nonce、PKCE S256、OIDC 签名/issuer/audience/expiry 校验和 verified-email 门禁。OAuth 尝试只把 state 以 SHA256 摘要保存；回调所需的 nonce 与 PKCE verifier 在数据库短期明文保存、10 分钟内单次消费且不进入日志或浏览器响应。首次授权不再按邮箱自动绑定或创建会话，而是签发只在绑定接口发送的 HttpOnly SameSite=Strict 随机挑战 Cookie，数据库只保存挑战摘要。用户必须再输入同邮箱现有 RelaDock 账号密码；只有密码验证、subject 唯一绑定、挑战消费、24 小时会话和 `account.google_link`/`account.login` 审计全部在同一事务成功才完成绑定。该流程不自动创建企业、成员、角色或平台权限；后续按 provider 稳定 subject 登录，并重新读取当前企业启停、成员角色和平台权限。
 
-浏览器端只在 `/api/auth/google/status` 确认启用后显示入口，企业注册模式隐藏 Google 登录但不清空密码字段；企业和平台返回目标分别固定为 `/` 与 `/admin`。真实本地页面在 1440、768、390 宽度检查无横向溢出或控制台错误。依赖固定为 `github.com/coreos/go-oidc/v3 v3.17.0` 与 `golang.org/x/oauth2 v0.35.0`。当前没有真实 Google Cloud 项目、同意屏幕或凭据，没有执行真实 provider 授权/回调，也没有构建发布包、修改生产环境、迁移生产 schema 或部署前端；因此只能标记为本地实现，不能声称生产 Google 登录可用。
+schema v41 新增外部身份、OAuth 尝试和首次绑定挑战表；自动测试覆盖密码错误后无写入且可重试、过期/重放、并发首次绑定、subject/成员冲突、停用/撤权、审计回滚和 HTTP 安全边界。浏览器端只在 `/api/auth/google/status` 确认启用后显示入口；首次绑定提示独立于会被隐藏的 Google 按钮容器，因此连接器状态读取失败时仍可见。企业和平台返回目标分别固定为 `/` 与 `/admin`。部署 Nginx 模板对精确 callback 路径关闭 access log，避免授权码和 state 查询串落盘。依赖固定为 `github.com/coreos/go-oidc/v3 v3.17.0` 与 `golang.org/x/oauth2 v0.35.0`。当前没有真实 Google Cloud 项目、同意屏幕或凭据，没有执行真实 provider 授权/回调，也没有构建发布包、修改生产环境、迁移生产 schema 或部署前端；因此只能标记为本地实现，不能声称生产 Google 登录可用。
 
-最终 `GOFLAGS=-timeout=20m npm test` 退出 0：Go 全包 `-race` 通过，`internal/platform` 605.821s；Node 155 项中 154 通过、1 项按默认 Linux 安装环境跳过、0 失败。首次聚焦全包验证暴露旧 schema 测试夹具只删 v41 版本记录、未删 v41 表的半降级状态；生产迁移没有该路径，修正 v38/v29 重建夹具后，7 个受影响的升级用例 `-race` 通过（16.692s），随后全仓复跑通过。`npm run vet`、`git diff --check` 均退出 0；敏感字段搜索只命中配置名称、明确占位值、测试 token 以及 provider 内部读取 `id_token` 的必要代码，浏览器资源静态测试确认不含 Client Secret 或 provider token 字段。
+安全复核修正先按 TDD 观察到旧实现会在回调中直接绑定，随后聚焦验证通过：Google 前端与 Nginx 契约 10 项全部通过；`internal/platform` 的 Google/schema v41 race 测试通过（26.091s），`internal/web` Google race 测试通过（20.438s）。修正后的 `GOFLAGS=-timeout=20m npm test` 退出 0：Go 全包 race 通过（`internal/platform` 638.199s、`internal/web` 120.694s），Node 157 项中 156 通过、1 项按默认 Linux 安装环境跳过、0 失败；`npm run vet` 与 `git diff --check` 退出 0。合并其他分支后的最终回归与真实 Google 浏览器授权仍待本轮后续执行，生产边界不变。
 
 ## 2026-11-16 创建规则入口端口禁用态修复（本地）
 
@@ -245,7 +245,7 @@ RelaDock 已经是具备真实 PostgreSQL 状态、租户权限、规则交付�
 
 | 领域 | 当前已实现 | 状态与边界 |
 |---|---|---|
-| 企业与权限 | 企业注册/登录、24 小时会话、邀请、owner/admin/viewer、限时读写 API Key、租户隔离、企业停用、独立平台管理员权限 | 已实现并使用 PostgreSQL；平台权限只能由本机 CLI 授予，企业 owner 不自动获得平台权限 |
+| 企业与权限 | 企业注册/密码登录、可选 Google OIDC 首次密码确认绑定、24 小时会话、邀请、owner/admin/viewer、限时读写 API Key、租户隔离、企业停用、独立平台管理员权限 | 已实现并使用 PostgreSQL；Google 首次授权不直接建会话，必须验证同邮箱现有账号密码。平台权限只能由本机 CLI 授予，企业 owner 不自动获得平台权限 |
 | 转发规则 | TCP、UDP、双协议规则；数据库端口唯一约束；逐规则带宽和流量额度；幂等创建；带版本冲突保护的名称/目标/带宽编辑；暂停、恢复、软删除 | 已实现；创建和编辑统一使用企业工作台对话框。编辑不改变入口节点、传输类型或已分配端口；有活动套餐时带宽只能下调或保持在套餐上限内。规则控制面状态不等于已经转发 |
 | 配置交付 | 事务 Outbox、完整版本化快照、checksum、租约、失败退避、applying 屏障、validated/applied/failed 回报、修订号冲突保护 | 已实现；未知应用结果必须保留屏障，禁止通过清数据库或 Agent journal 假装恢复 |
 | Lightsail 脚本节点 | 允许区域 Linux 目录、实例与专属静态 IP 创建、可为空的最多一次脚本、非空脚本固定来源 SSH、AWS 见证主机密钥、关机、受归属核验的销毁、租约/退避/审计/指标 | 已实现并在生产启用 19 区域；与入口节点/Agent/线路分离。真实 AWS 仅完成只读区域/目录鉴权，未购买资源或验收真实 SSH/限流/销毁，不能标记生产就绪 |

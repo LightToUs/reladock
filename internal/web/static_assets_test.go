@@ -215,12 +215,16 @@ func TestGoogleLoginStaticPresentationPreservesPasswordFlows(t *testing.T) {
 		`id="admin-google-login-entry"`, `id="admin-google-login"`, `id="admin-google-login-message"`,
 		`aria-live="polite"`, `./google-login.js`, `createGoogleLoginController`,
 		`returnTo: '/'`, `returnTo: '/admin'`, `mode === 'login'`,
+		`/api/auth/google/link`, `consumeCallbackResult`, `验证并绑定 Google`,
 		`id="auth-form"`, `id="login-tab"`, `id="register-tab"`, `id="accept-invitation"`,
 		`id="admin-login-form"`, `name="password"`,
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("Google/password login presentation missing %q", required)
 		}
+	}
+	if !strings.Contains(string(enterprisePage), "</div>\n  <p id=\"google-login-message\"") || !strings.Contains(string(adminPage), "</div><p id=\"admin-google-login-message\"") {
+		t.Fatal("Google callback message must remain outside the availability-hidden button wrapper")
 	}
 	for _, forbidden := range []string{"GOOGLE_OIDC_CLIENT_SECRET", "clientSecret", "refresh_token", "id_token"} {
 		if strings.Contains(combined, forbidden) {
