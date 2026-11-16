@@ -72,8 +72,9 @@ async function api(path, { method = 'GET', body, key, signal } = {}) {
 }
 function syncGoogleLoginEntry() { $('#google-login-entry').hidden = !googleLoginAvailable || mode !== 'login'; }
 const googleLogin = createGoogleLoginController({
-  api, returnTo: '/', button: $('#google-login'), message: $('#google-login-message'), location, history,
+  api, returnTo: '/', button: $('#google-login'), linkCancel: $('#google-link-cancel'), message: $('#google-login-message'), location, history,
   onAvailabilityChange: enabled => { googleLoginAvailable = enabled; syncGoogleLoginEntry(); },
+  onLinkCancel: () => { googleLinkPending = false; setMode('login'); $('#auth-message').textContent = ''; },
 });
 function setLogoutPendingUI(pending) { $('#console').inert = pending; $('#console').setAttribute('aria-busy', String(pending)); $('#auth').inert = pending; $('#auth').setAttribute('aria-busy', String(pending)); for (const id of ['login-tab', 'register-tab', 'auth-submit']) $(`#${id}`).disabled = pending; }
 function showAuth() { authSessionGate.invalidate(); workspaceRefreshGate.invalidate(); telemetryHistoryGate.invalidate(); clearCredential();resetBusinessTools();accountMenu.close();identity = undefined; nodeMonitoringPoller?.stop(); nodeMonitoringPoller = undefined; ruleDraft.pending = undefined; ruleEditor.close(); $('#startup-error').hidden = true; $('#auth').hidden = false; $('#console').hidden = true; setLogoutPendingUI(logoutGuard.isPending()); for (const id of ['rules-message','refresh-message','account-tools-message','rule-dialog-status']) $(`#${id}`).textContent = ''; }
@@ -121,7 +122,7 @@ $('#password-form').addEventListener('submit', async event => {
 $('#auth-form').addEventListener('submit', async event => {
   event.preventDefault(); if (!logoutGuard.canLogin()) return; const button = $('#auth-submit'); button.disabled = true;
   const fields = Object.fromEntries(new FormData(event.target)); if (mode === 'login') delete fields.company;
-  try { identity = await api(mode === 'login' && googleLinkPending ? '/api/auth/google/link' : `/api/auth/${mode}`, { method: 'POST', body: fields }); googleLinkPending = false; event.target.reset(); $('#auth-message').textContent = ''; $('#google-login-message').textContent = ''; if (identity.platformAdmin) { location.assign('/admin'); return; } await refresh(); }
+  try { identity = await api(mode === 'login' && googleLinkPending ? '/api/auth/google/link' : `/api/auth/${mode}`, { method: 'POST', body: fields }); googleLinkPending = false; $('#google-link-cancel').hidden = true; event.target.reset(); $('#auth-message').textContent = ''; $('#google-login-message').textContent = ''; if (identity.platformAdmin) { location.assign('/admin'); return; } await refresh(); }
   catch (error) { $('#auth-message').textContent = error.message; } finally { button.disabled = false; }
 });
 $('#logout').addEventListener('click', async () => {

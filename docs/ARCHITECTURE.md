@@ -4,7 +4,7 @@
 
 `internal/googleauth` 使用固定 Google 授权、token 与 JWKS 端点，授权请求带 state、nonce 和 PKCE S256；回调只在 OIDC 签名、issuer、audience、expiry、nonce 与 verified email 全部通过后产生规范身份。provider HTTP 客户端拒绝代理、重定向和无界响应，错误不会回显 token、Client Secret 或上游正文。
 
-`oauth_login_attempts` 只对 state 保存 SHA256 摘要；PKCE verifier 与 nonce 以短期明文保存，因为回调必须把它们交给 provider 校验，记录在 10 分钟内单次消费且不会进入日志或浏览器响应。`google_link_challenges` 只保存随机绑定令牌的 SHA256 摘要、Google subject、规范邮箱、固定返回目标和短期有效期。未绑定 subject 的回调只签发 HttpOnly SameSite=Strict 的绑定 Cookie，不创建 RelaDock 会话；用户必须再提交同邮箱现有账号的密码。密码验证、`member_external_identities` 唯一绑定、会话创建、挑战消费及 `account.google_link`/`account.login` 审计在同一事务完成；失败或冲突全部回滚。后续登录只按 provider + subject 查找成员，并重新核验企业和成员状态、读取当前角色与平台权限。OIDC state Cookie 为跨站顶层 callback 所需的 HttpOnly SameSite=Lax；绑定 Cookie 和成功后的主会话均为 SameSite=Strict。
+`oauth_login_attempts` 只对 state 保存 SHA256 摘要；PKCE verifier 与 nonce 以短期明文保存，因为回调必须把它们交给 provider 校验，记录在 10 分钟内单次消费且不会进入日志或应用错误。nonce 按 OIDC 协议包含在返回浏览器的 Google 授权 URL 中，PKCE verifier 始终只在服务端使用。`google_link_challenges` 只保存随机绑定令牌的 SHA256 摘要、Google subject、规范邮箱、固定返回目标和短期有效期。未绑定 subject 的回调只签发 HttpOnly SameSite=Strict 的绑定 Cookie，不创建 RelaDock 会话；用户必须再提交同邮箱现有账号的密码。密码验证在全平台授权锁外执行，锁内重新核验挑战、密码摘要、企业与成员状态；随后 `member_external_identities` 唯一绑定、会话创建、挑战消费及 `account.google_link`/`account.login` 审计在同一事务完成，失败或冲突全部回滚。后续登录只按 provider + subject 查找成员，并重新核验企业和成员状态、读取当前角色与平台权限。OIDC state Cookie 为跨站顶层 callback 所需的 HttpOnly SameSite=Lax；绑定 Cookie 和成功后的主会话均为 SameSite=Strict。
 
 ## 独立 Lightsail 脚本节点（schema v39/v40）
 

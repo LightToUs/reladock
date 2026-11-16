@@ -20,4 +20,5 @@ test('public-site proxy configuration does not claim the agent listener', () => 
 
 test('Google callback query secrets are excluded from access logs', () => {
   assert.match(nginxConfig, /location\s*=\s*\/api\/auth\/google\/callback\s*\{[^}]*access_log\s+off;/s);
+  assert.match(nginxConfig, /location\s*=\s*\/api\/auth\/google\/callback\s*\{[^}]*error_log\s+\/dev\/null\s+crit;/s);
 });

@@ -64,7 +64,7 @@ Lightsail API 会限流；worker 对未完成操作和可重试 provider 失败�
 
 `PUBLIC_ORIGIN` 必须是浏览器实际访问的完整 HTTPS origin（包含非默认端口，无路径和末尾 `/`）。控制台直接终结 TLS 1.3；不信任 X-Forwarded-* 或 Forwarded 头。错误 Host 与跨 origin 写操作会拒绝。TLS 私钥和公钥证书必须成对配置；证书轮换后重启服务。生产 API 使用 PostgreSQL 共享限流；支付 webhook 另有单进程预算，多副本/高并发前仍须验收容量及上游入口限流。
 
-Google 授权登录为可选连接器。`GOOGLE_OIDC_CLIENT_ID` 与 `GOOGLE_OIDC_CLIENT_SECRET` 都不设置时关闭；只设置一项、Client ID 不是 Google Web 客户端格式或 `PUBLIC_ORIGIN` 不精确时，`--check-config` 和启动都会失败。Google Cloud 中必须把 `${PUBLIC_ORIGIN}/api/auth/google/callback` 登记为精确 Authorized redirect URI，授权范围固定为 `openid email`。Client Secret 只放在权限 0600 的服务端环境文件，不进入浏览器或数据库。首次授权不会按邮箱自动登录或绑定，用户必须再用同邮箱的现有 RelaDock 账号密码完成绑定；随后才按 Google 稳定 subject 登录，邮箱变化不能接管另一身份。反向代理必须像仓库 Nginx 模板一样为精确 callback 路径关闭 access log，避免授权码和 state 查询参数落盘；若使用其他代理，应提供等价的查询串脱敏。真实 Google 项目、同意屏幕、凭据、浏览器回调和生产部署仍需单独配置与验收。
+Google 授权登录为可选连接器。`GOOGLE_OIDC_CLIENT_ID` 与 `GOOGLE_OIDC_CLIENT_SECRET` 都不设置时关闭；只设置一项、Client ID 不是 Google Web 客户端格式或 `PUBLIC_ORIGIN` 不精确时，`--check-config` 和启动都会失败。Google Cloud 中必须把 `${PUBLIC_ORIGIN}/api/auth/google/callback` 登记为精确 Authorized redirect URI，授权范围固定为 `openid email`。Client Secret 只放在权限 0600 的服务端环境文件，不进入浏览器或数据库。首次授权不会按邮箱自动登录或绑定，用户必须再用同邮箱的现有 RelaDock 账号密码完成绑定；随后才按 Google 稳定 subject 登录，邮箱变化不能接管另一身份。反向代理必须像仓库 Nginx 模板一样为精确 callback 路径同时处理 access log 和 error log，避免授权码和 state 查询参数在正常访问或上游失败时落盘；若使用其他代理，应提供等价的查询串脱敏，同时使用不含 URI 的独立健康监控保留上游可观测性。真实 Google 项目、同意屏幕、凭据、浏览器回调和生产部署仍需单独配置与验收。
 
 若前置 Nginx 为官网或紧急修复保留静态 `alias`，不得长期覆盖 `/admin`、`/admin.js`、`/admin.css`、`/node-editor.js` 等控制二进制内嵌管理资源；否则升级二进制后公网仍会返回旧界面。每次控制端发布都应分别比较后端直连与公网管理页，至少核对新菜单/模块引用以及管理 HTML、JS、CSS 摘要。确需临时覆盖时须版本化、记录撤销条件，并在下一次包含该修复的二进制发布时删除覆盖。
 

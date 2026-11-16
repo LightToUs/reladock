@@ -133,17 +133,9 @@ func (s *Store) CompleteGoogleLink(ctx context.Context, linkToken, email, passwo
 		verifyPassword(password, dummyPasswordHash)
 		return Identity{}, "", "", ErrUnauthorized
 	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return Identity{}, "", "", err
-	}
-	defer tx.Rollback(ctx)
-	if err = platformLock(ctx, tx); err != nil {
-		return Identity{}, "", "", err
-	}
 	var subject, providerEmail, returnTo string
-	err = tx.QueryRow(ctx, `SELECT subject,email,return_to FROM google_link_challenges
- WHERE token_hash=$1 AND consumed_at IS NULL AND expires_at>now() FOR UPDATE`, tokenHash(linkToken)).
+	err := s.pool.QueryRow(ctx, `SELECT subject,email,return_to FROM google_link_challenges
+ WHERE token_hash=$1 AND consumed_at IS NULL AND expires_at>now()`, tokenHash(linkToken)).
 		Scan(&subject, &providerEmail, &returnTo)
 	if errors.Is(err, pgx.ErrNoRows) {
 		verifyPassword(password, dummyPasswordHash)
@@ -156,10 +148,9 @@ func (s *Store) CompleteGoogleLink(ctx context.Context, linkToken, email, passwo
 		verifyPassword(password, dummyPasswordHash)
 		return Identity{}, "", "", ErrUnauthorized
 	}
-
 	var memberID, passwordHash string
-	err = tx.QueryRow(ctx, `SELECT m.id,m.password_hash FROM members m JOIN tenants t ON t.id=m.tenant_id
- WHERE m.email=$1 AND t.status='active' FOR SHARE OF m,t`, normalizedEmail).Scan(&memberID, &passwordHash)
+	err = s.pool.QueryRow(ctx, `SELECT m.id,m.password_hash FROM members m JOIN tenants t ON t.id=m.tenant_id
+ WHERE m.email=$1 AND t.status='active'`, normalizedEmail).Scan(&memberID, &passwordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		verifyPassword(password, dummyPasswordHash)
 		return Identity{}, "", "", ErrUnauthorized
@@ -169,6 +160,34 @@ func (s *Store) CompleteGoogleLink(ctx context.Context, linkToken, email, passwo
 	}
 	if !verifyPassword(password, passwordHash) {
 		return Identity{}, "", "", ErrUnauthorized
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Identity{}, "", "", err
+	}
+	defer tx.Rollback(ctx)
+	if err = platformLock(ctx, tx); err != nil {
+		return Identity{}, "", "", err
+	}
+	var currentSubject, currentProviderEmail, currentReturnTo string
+	err = tx.QueryRow(ctx, `SELECT subject,email,return_to FROM google_link_challenges
+ WHERE token_hash=$1 AND consumed_at IS NULL AND expires_at>now() FOR UPDATE`, tokenHash(linkToken)).
+		Scan(&currentSubject, &currentProviderEmail, &currentReturnTo)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && (currentSubject != subject || currentProviderEmail != providerEmail || currentReturnTo != returnTo) {
+		return Identity{}, "", "", ErrUnauthorized
+	}
+	if err != nil {
+		return Identity{}, "", "", err
+	}
+	var currentMemberID, currentPasswordHash string
+	err = tx.QueryRow(ctx, `SELECT m.id,m.password_hash FROM members m JOIN tenants t ON t.id=m.tenant_id
+	 WHERE m.email=$1 AND t.status='active' FOR SHARE OF m,t`, normalizedEmail).Scan(&currentMemberID, &currentPasswordHash)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && (currentMemberID != memberID || currentPasswordHash != passwordHash) {
+		return Identity{}, "", "", ErrUnauthorized
+	}
+	if err != nil {
+		return Identity{}, "", "", err
 	}
 
 	linked := false

@@ -13,6 +13,7 @@ function buttonFixture() {
 
 function controllerFixture(overrides = {}) {
   const button = buttonFixture();
+  const linkCancel = buttonFixture();
   const message = { textContent: '' };
   const location = {
     href: 'https://console.example.com/',
@@ -24,13 +25,15 @@ function controllerFixture(overrides = {}) {
     replaceState(_state, _title, value) { this.replaced = value; },
   };
   const availability = [];
+  let linkCancels = 0;
   const controller = createGoogleLoginController({
     api: async path => path.endsWith('/status') ? { enabled: false } : {},
-    returnTo: '/', button, message, location, history,
+    returnTo: '/', button, linkCancel, message, location, history,
     onAvailabilityChange: enabled => availability.push(enabled),
+    onLinkCancel: () => { linkCancels++; },
     ...overrides,
   });
-  return { controller, button, message, location, history, availability };
+  return { controller, button, linkCancel, message, location, history, availability, linkCancels: () => linkCancels };
 }
 
 test('disabled status keeps Google login hidden', async () => {
@@ -135,7 +138,12 @@ test('first authorization requests existing-account password binding and survive
   fixture.location.href = 'https://console.example.com/?googleAuth=link&keep=1#/overview';
   assert.equal(fixture.controller.consumeCallbackResult(), 'link');
   assert.equal(fixture.message.textContent, '首次使用 Google 登录，请输入现有 RelaDock 账号邮箱和密码完成绑定。');
+  assert.equal(fixture.linkCancel.hidden, false);
   assert.equal(fixture.history.replaced, '/?keep=1#/overview');
   assert.equal(await fixture.controller.load(), false);
   assert.equal(fixture.message.textContent, '首次使用 Google 登录，请输入现有 RelaDock 账号邮箱和密码完成绑定。');
+  fixture.linkCancel.listeners.get('click')({ preventDefault() {} });
+  assert.equal(fixture.linkCancels(), 1);
+  assert.equal(fixture.linkCancel.hidden, true);
+  assert.equal(fixture.message.textContent, '');
 });

@@ -211,8 +211,8 @@ func TestGoogleLoginStaticPresentationPreservesPasswordFlows(t *testing.T) {
 	}
 	combined := string(enterprisePage) + string(adminPage) + string(enterpriseJS) + string(adminJS) + string(module)
 	for _, required := range []string{
-		`id="google-login-entry"`, `id="google-login"`, `id="google-login-message"`,
-		`id="admin-google-login-entry"`, `id="admin-google-login"`, `id="admin-google-login-message"`,
+		`id="google-login-entry"`, `id="google-login"`, `id="google-login-message"`, `id="google-link-cancel"`,
+		`id="admin-google-login-entry"`, `id="admin-google-login"`, `id="admin-google-login-message"`, `id="admin-google-link-cancel"`,
 		`aria-live="polite"`, `./google-login.js`, `createGoogleLoginController`,
 		`returnTo: '/'`, `returnTo: '/admin'`, `mode === 'login'`,
 		`/api/auth/google/link`, `consumeCallbackResult`, `验证并绑定 Google`,

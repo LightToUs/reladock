@@ -1,6 +1,6 @@
 # Google Login Implementation Plan
 
-> **2026-11-16 security amendment:** Independent review found that Google `email_verified` alone cannot prove ownership of a pre-existing RelaDock account, especially because RelaDock registration does not separately verify mailbox ownership. The approved implementation therefore supersedes the direct-email-binding steps below: an unbound callback creates only a 10-minute `google_link_challenges` record with a hashed random token and a Strict, endpoint-scoped Cookie. `POST /api/auth/google/link` must then verify the same existing email and password before binding, creating a session, consuming the challenge, and auditing in one transaction. The Nginx callback location also disables access logging so code/state query values are not persisted. The original task sequence remains as implementation history; this amendment is authoritative wherever it conflicts.
+> **2026-11-16 security amendment:** Independent review found that Google `email_verified` alone cannot prove ownership of a pre-existing RelaDock account, especially because RelaDock registration does not separately verify mailbox ownership. The approved implementation therefore supersedes the direct-email-binding steps below: an unbound callback creates only a 10-minute `google_link_challenges` record with a hashed random token and a Strict, endpoint-scoped Cookie. `POST /api/auth/google/link` must then verify the same existing email and password before binding, creating a session, consuming the challenge, and auditing in one transaction. Password KDF work stays outside the global authorization lock, with challenge/hash/permission rechecks inside. The Nginx callback location suppresses both access and inherited error logging so code/state query values are not persisted, and the UI provides an explicit return to ordinary password login. The original task sequence remains as implementation history; this amendment is authoritative wherever it conflicts.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -368,7 +368,7 @@ Authorized redirect URI: ${PUBLIC_ORIGIN}/api/auth/google/callback
 Scopes: openid email
 ```
 
-State that both variables absent disables the feature, partial configuration fails startup, provider secrets never enter browser/database, first-link requires the existing same-email password, callback access logging must be suppressed, and production Google consent/client/browser callback remains unverified until separately configured and authorized.
+State that both variables absent disables the feature, partial configuration fails startup, provider secrets never enter browser/database, first-link requires the existing same-email password, callback access/error logging must not persist its query string, and production Google consent/client/browser callback remains unverified until separately configured and authorized.
 
 - [ ] **Step 2: Update product and implementation status surgically**
 

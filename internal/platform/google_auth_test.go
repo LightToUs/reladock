@@ -244,6 +244,41 @@ func TestCompleteGoogleLinkRejectsWrongCredentialsWithoutWritesAndAllowsRetry(t 
 	}
 }
 
+func TestCompleteGoogleLinkRejectsWrongPasswordWithoutWaitingForPlatformLock(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	insertGoogleAuthMember(t, store, "lock-free-proof@example.com")
+	linkToken := strings.Repeat("P", 43)
+	if result, err := store.CompleteGoogleLogin(ctx, GoogleIdentity{Subject: "lock-free-proof-subject", Email: "lock-free-proof@example.com", EmailVerified: true}, linkToken, "/"); err != nil || !result.LinkRequired {
+		t.Fatalf("challenge setup = %+v err=%v", result, err)
+	}
+
+	lockTx, err := store.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = platformLock(ctx, lockTx); err != nil {
+		_ = lockTx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, linkErr := store.CompleteGoogleLink(ctx, linkToken, "lock-free-proof@example.com", "wrong-password")
+		done <- linkErr
+	}()
+	select {
+	case linkErr := <-done:
+		_ = lockTx.Rollback(ctx)
+		if linkErr != ErrUnauthorized {
+			t.Fatalf("wrong password err=%v", linkErr)
+		}
+	case <-time.After(3 * time.Second):
+		_ = lockTx.Rollback(ctx)
+		<-done
+		t.Fatal("wrong-password proof waited for the global platform lock")
+	}
+}
+
 func TestCompleteGoogleLinkRejectsExpiredAndReplayedChallenge(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()

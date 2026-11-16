@@ -44,8 +44,9 @@ async function api(path, body, key, signal) {
 }
 const adminGoogleLogin = createGoogleLoginController({
   api: (path, options = {}) => api(path, options.body),
-  returnTo: '/admin', button: $('#admin-google-login'), message: $('#admin-google-login-message'), location, history,
+  returnTo: '/admin', button: $('#admin-google-login'), linkCancel: $('#admin-google-link-cancel'), message: $('#admin-google-login-message'), location, history,
   onAvailabilityChange: enabled => { $('#admin-google-login-entry').hidden = !enabled; },
+  onLinkCancel: () => { adminGoogleLinkPending = false; $('#admin-login-form button').textContent = '登录平台后台'; $('#login-message').textContent = ''; },
 });
 let adminGoogleLinkPending = false;
 function cell(row, value, detail) { const td = row.insertCell(); td.textContent = value; if (detail) { const span = document.createElement('span'); span.className = 'detail'; span.textContent = detail; td.append(span); } return td; }
@@ -260,7 +261,7 @@ $('#rule-filters').addEventListener('submit', async event => { event.preventDefa
 $('#rules-clear-tenant').addEventListener('click', async () => { state.tenantFilter = ''; state.tenantName = ''; state.rulePage = 1; try { await reload(); } catch (error) { message(error.message); } });
 for (const kind of ['tenants', 'rules']) for (const direction of ['prev', 'next']) $(`#${kind}-${direction}`).addEventListener('click', async () => { const key = kind === 'tenants' ? 'tenantPage' : 'rulePage'; state[key] += direction === 'next' ? 1 : -1; try { await reload(); } catch (error) { message(error.message); } });
 async function enter() { const who = await api('/api/auth/me'); if (!who.platformAdmin) { access('denied'); return; } $('#admin-email').textContent = who.email; access('admin'); await reload(); adminNavigation.sync(); startAdminNodeMonitoring(); }
-$('#admin-login-form').addEventListener('submit', async event => { event.preventDefault(); const submit = event.target.querySelector('button'); submit.disabled = true; try { await api(adminGoogleLinkPending ? '/api/auth/google/link' : '/api/auth/login', Object.fromEntries(new FormData(event.target))); adminGoogleLinkPending = false; event.target.reset(); $('#login-message').textContent = ''; $('#admin-google-login-message').textContent = ''; await enter(); } catch (error) { $('#login-message').textContent = error.message; } finally { submit.disabled = false; } });
+$('#admin-login-form').addEventListener('submit', async event => { event.preventDefault(); const submit = event.target.querySelector('button'); submit.disabled = true; try { await api(adminGoogleLinkPending ? '/api/auth/google/link' : '/api/auth/login', Object.fromEntries(new FormData(event.target))); adminGoogleLinkPending = false; $('#admin-google-link-cancel').hidden = true; event.target.reset(); $('#login-message').textContent = ''; $('#admin-google-login-message').textContent = ''; await enter(); } catch (error) { $('#login-message').textContent = error.message; } finally { submit.disabled = false; } });
 async function logout() { lightsailAdmin?.stop(); try { await api('/api/auth/logout', {}); location.assign('/admin'); } catch (error) { message(error.message); } }
 $('#admin-logout').addEventListener('click', logout); $('#denied-logout').addEventListener('click', logout);
 $('#admin-refresh').addEventListener('click', async () => { $('#admin-refresh').disabled = true; try { await reload(); if (state.view === 'plans') await loadPlans(); message('已刷新最新平台数据。'); } catch (error) { message(error.message); } finally { $('#admin-refresh').disabled = false; } });

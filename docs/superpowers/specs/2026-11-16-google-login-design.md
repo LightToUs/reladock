@@ -31,7 +31,7 @@ RelaDock 主会话 Cookie 继续使用 SameSite=Strict。只有短期 OIDC 尝�
 
 授权发起使用同源 `POST /api/auth/google/start`，继续要求 `X-Requested-With: RelaDock` 和现有 Origin/Host 检查。请求体只接受枚举返回目标 `/` 或 `/admin`。服务端返回 Google 授权 URL，浏览器再导航；不能提交任意返回 URL，避免开放重定向。回调为 `GET /api/auth/google/callback`，使用 Google 控制台登记的精确 URI `${PUBLIC_ORIGIN}/api/auth/google/callback`。
 
-Google/OIDC 网络客户端必须有短超时、禁止环境代理承载 Client Secret、限制响应大小、拒绝非成功状态和重定向到非预期主机。提供方错误只向用户显示有界通用文案；令牌、code、state、nonce、verifier 和原始响应不进入日志、审计或 HTTP 错误。前置代理必须对精确 callback 路径关闭查询串访问日志或做等价脱敏。
+Google/OIDC 网络客户端必须有短超时、禁止环境代理承载 Client Secret、限制响应大小、拒绝非成功状态和重定向到非预期主机。提供方错误只向用户显示有界通用文案；令牌、code、state、verifier 和原始响应不进入日志、审计或 HTTP 错误。nonce 按协议包含在 Google 授权 URL 中，但不得进入应用错误或代理日志。前置代理必须对精确 callback 路径同时处理 access/error log，或做等价查询串脱敏。
 
 ## 数据与事务
 
