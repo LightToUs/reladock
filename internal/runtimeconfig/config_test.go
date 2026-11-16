@@ -4,8 +4,26 @@ import "testing"
 
 func TestLocalDefaults(t *testing.T) {
 	c, err := Load(func(string) string { return "" })
-	if err != nil || c.Address != "127.0.0.1:3001" || c.Origin != "http://127.0.0.1:3001" || c.AgentAddress != "127.0.0.1:3002" || c.AllowUnentitledRules || c.Lightsail.Enabled {
+	if err != nil || c.Address != "127.0.0.1:3001" || c.Origin != "http://127.0.0.1:3001" || c.AgentAddress != "127.0.0.1:3002" || c.AllowUnentitledRules || c.Lightsail.Enabled || c.GoogleOIDC.Enabled() {
 		t.Fatalf("local defaults: %+v %v", c, err)
+	}
+}
+
+func TestGoogleOIDCUsesValidatedPublicOrigin(t *testing.T) {
+	values := map[string]string{
+		"GOOGLE_OIDC_CLIENT_ID":     "fixture.apps.googleusercontent.com",
+		"GOOGLE_OIDC_CLIENT_SECRET": "fixture-secret",
+	}
+	c, err := Load(func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := c.GoogleOIDC.RedirectURL, "http://127.0.0.1:3001/api/auth/google/callback"; got != want {
+		t.Fatalf("Google redirect = %q, want %q", got, want)
+	}
+	values["PUBLIC_ORIGIN"] = "https://console.example.com/path"
+	if _, err := Load(func(key string) string { return values[key] }); err == nil {
+		t.Fatal("Google OIDC accepted an invalid PUBLIC_ORIGIN")
 	}
 }
 

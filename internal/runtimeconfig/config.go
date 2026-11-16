@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"reladock/internal/cloud/lightsail"
+	"reladock/internal/googleauth"
 	"strconv"
 	"strings"
 )
@@ -20,6 +21,7 @@ type Config struct {
 	ManagedPKIDir                      string
 	SourceFlowRetentionDays            int
 	Lightsail                          lightsail.Config
+	GoogleOIDC                         googleauth.Config
 }
 
 func Load(get func(string) string) (Config, error) {
@@ -116,6 +118,11 @@ func Load(get func(string) string) (Config, error) {
 	if c.Production && u.Scheme != "https" {
 		return c, errors.New("production requires HTTPS")
 	}
+	googleOIDC, err := googleauth.LoadConfig(get, c.Origin)
+	if err != nil {
+		return c, err
+	}
+	c.GoogleOIDC = googleOIDC
 	bootstrap, err := loadBootstrap(get, c)
 	if err != nil {
 		return c, err
