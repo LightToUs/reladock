@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"reladock/internal/googleauth"
 	"reladock/internal/platform"
 )
 
@@ -37,6 +38,7 @@ type server struct {
 	tronPayments     *TronPayments
 	bootstrap        *BootstrapOptions
 	lightsail        *LightsailOptions
+	googleAuth       googleauth.Provider
 }
 
 type Options struct {
@@ -45,6 +47,7 @@ type Options struct {
 	TronPayments        *TronPayments
 	Bootstrap           *BootstrapOptions
 	Lightsail           *LightsailOptions
+	GoogleAuth          googleauth.Provider
 }
 
 var uuid = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -58,7 +61,7 @@ func NewWithOptions(store *platform.Store, assets fs.FS, origin string, options 
 	if err != nil || parsed.Host == "" {
 		panic("invalid local origin")
 	}
-	s := &server{store: store, assets: assets, origin: origin, host: parsed.Host, limits: make(map[string]window), persistentLimits: options.PersistentRateLimit, payments: options.Payments, tronPayments: options.TronPayments, lightsail: options.Lightsail}
+	s := &server{store: store, assets: assets, origin: origin, host: parsed.Host, limits: make(map[string]window), persistentLimits: options.PersistentRateLimit, payments: options.Payments, tronPayments: options.TronPayments, lightsail: options.Lightsail, googleAuth: options.GoogleAuth}
 	s.bootstrap = options.Bootstrap
 	return http.HandlerFunc(s.serve)
 }
@@ -136,7 +139,7 @@ func (s *server) allowed(r *http.Request) bool {
 	}
 	category := "api"
 	max := 120
-	if strings.HasPrefix(r.URL.Path, "/api/auth/login") || strings.HasPrefix(r.URL.Path, "/api/auth/register") {
+	if strings.HasPrefix(r.URL.Path, "/api/auth/login") || strings.HasPrefix(r.URL.Path, "/api/auth/register") || r.URL.Path == "/api/auth/google/start" || r.URL.Path == googleCallbackPath {
 		category = "auth"
 		max = 10
 	}
@@ -176,13 +179,14 @@ func (s *server) allowed(r *http.Request) bool {
 	return true
 }
 func (s *server) sessionCookie(w http.ResponseWriter, token string) {
-	cookie := &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: strings.HasPrefix(s.origin, "https:"), MaxAge: int(platform.SessionLifetime.Seconds()), Expires: time.Now().Add(platform.SessionLifetime)}
+	cookie := &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.secureCookies(), MaxAge: int(platform.SessionLifetime.Seconds()), Expires: time.Now().Add(platform.SessionLifetime)}
 	if token == "" {
 		cookie.MaxAge = -1
 		cookie.Expires = time.Unix(1, 0)
 	}
 	http.SetCookie(w, cookie)
 }
+func (s *server) secureCookies() bool { return strings.HasPrefix(s.origin, "https:") }
 func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -282,6 +286,9 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	r = r.WithContext(ctx)
+	if s.serveGoogleAuth(w, r) {
+		return
+	}
 	if s.serveInvitationAccept(w, r) {
 		return
 	}

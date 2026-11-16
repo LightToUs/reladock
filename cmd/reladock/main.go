@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"reladock/internal/buildinfo"
+	"reladock/internal/googleauth"
 	"reladock/internal/nodeauth"
 	"reladock/internal/notify"
 	"reladock/internal/observability"
@@ -32,6 +33,13 @@ func main() {
 	cfg, err := runtimeconfig.Load(os.Getenv)
 	if err != nil {
 		log.Fatal(err)
+	}
+	var googleProvider googleauth.Provider
+	if cfg.GoogleOIDC.Enabled() {
+		googleProvider, err = googleauth.New(cfg.GoogleOIDC)
+		if err != nil {
+			log.Fatal("Google OIDC configuration invalid")
+		}
 	}
 	paymentConfig, paymentEnabled, err := payments.ConfigFromEnv()
 	if err != nil {
@@ -137,7 +145,7 @@ func main() {
 	if lightsailRuntime != nil {
 		lightsailWeb = lightsailRuntime.web
 	}
-	server := &http.Server{Addr: cfg.Address, Handler: web.NewWithOptions(store, assets.Files, cfg.Origin, web.Options{PersistentRateLimit: cfg.Production, Payments: paymentHandler, TronPayments: tronPaymentHandler, Bootstrap: bootstrap, Lightsail: lightsailWeb}), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
+	server := &http.Server{Addr: cfg.Address, Handler: web.NewWithOptions(store, assets.Files, cfg.Origin, web.Options{PersistentRateLimit: cfg.Production, Payments: paymentHandler, TronPayments: tronPaymentHandler, Bootstrap: bootstrap, Lightsail: lightsailWeb, GoogleAuth: googleProvider}), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024}
 	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if lightsailRuntime != nil {
