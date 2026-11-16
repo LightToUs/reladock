@@ -430,6 +430,11 @@ tbody tr:hover td { background: #f1f6fd; }
 .auth h1 { font-size: clamp(2rem, 5vw, 3.3rem); }
 .auth form { grid-template-columns: 1fr; margin-top: 28px; }
 .auth > a { display: inline-block; margin-top: 18px; }
+.google-login-entry { margin-top: 20px; }
+.auth-alternative { margin: 0 0 8px; color: var(--muted); font-size: .85rem; text-align: center; }
+.google-login-button { width: 100%; min-height: 44px; border-color: #b9cbe0; background: #e7eef8; color: var(--ink); }
+.google-login-button:hover:not(:disabled) { background: #d9e5f3; }
+.google-login-message { margin-top: 8px; }
 #denied-logout { display: block; margin-top: 20px; }
 footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
 

@@ -89,7 +89,7 @@ func TestAdminNodeVisibilityHasARecoverablePresentation(t *testing.T) {
 
 func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
-	for _, path := range []string{"/admin.js", "/auth-session.js", "/account-menu.js", "/console-navigation.js", "/lightsail-admin.js", "/node-action-dialog.js", "/node-bootstrap.js", "/node-contact-status.js", "/node-content-dialog.js", "/node-editor.js", "/node-visibility.js", "/node-withdrawal.js", "/operations-tools.js", "/resource-mode.js", "/source-flow-logging.js"} {
+	for _, path := range []string{"/admin.js", "/auth-session.js", "/google-login.js", "/account-menu.js", "/console-navigation.js", "/lightsail-admin.js", "/node-action-dialog.js", "/node-bootstrap.js", "/node-contact-status.js", "/node-content-dialog.js", "/node-editor.js", "/node-visibility.js", "/node-withdrawal.js", "/operations-tools.js", "/resource-mode.js", "/source-flow-logging.js"} {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001"+path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -184,6 +184,47 @@ func TestEnterpriseAuthenticationOffersPasswordVisibilityControls(t *testing.T) 
 	} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("password visibility control missing %q", required)
+		}
+	}
+}
+
+func TestGoogleLoginStaticPresentationPreservesPasswordFlows(t *testing.T) {
+	enterprisePage, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminPage, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enterpriseJS, err := fs.ReadFile(assets.Files, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJS, err := fs.ReadFile(assets.Files, "admin.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	module, err := fs.ReadFile(assets.Files, "google-login.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combined := string(enterprisePage) + string(adminPage) + string(enterpriseJS) + string(adminJS) + string(module)
+	for _, required := range []string{
+		`id="google-login-entry"`, `id="google-login"`, `id="google-login-message"`,
+		`id="admin-google-login-entry"`, `id="admin-google-login"`, `id="admin-google-login-message"`,
+		`aria-live="polite"`, `./google-login.js`, `createGoogleLoginController`,
+		`returnTo: '/'`, `returnTo: '/admin'`, `mode === 'login'`,
+		`id="auth-form"`, `id="login-tab"`, `id="register-tab"`, `id="accept-invitation"`,
+		`id="admin-login-form"`, `name="password"`,
+	} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("Google/password login presentation missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"GOOGLE_OIDC_CLIENT_SECRET", "clientSecret", "refresh_token", "id_token"} {
+		if strings.Contains(combined, forbidden) {
+			t.Errorf("browser assets expose provider secret field %q", forbidden)
 		}
 	}
 }

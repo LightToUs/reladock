@@ -260,6 +260,11 @@ button.plan-filter-chip[aria-pressed="true"] { border-color: var(--accent); back
 .auth { width: min(520px, calc(100% - 32px)); margin: 8dvh auto; padding: 34px; border-top-color: var(--accent); }
 .auth form { grid-template-columns: 1fr; }
 .auth h1 { margin: 10px 0 12px; font-size: clamp(38px, 6vw, 58px); }
+.google-login-entry { margin-top: 18px; }
+.auth-alternative { margin: 0 0 8px; color: var(--muted); font-size: 12px; text-align: center; }
+.google-login-button { border-color: #31577f; background: #102c4f; color: var(--text); }
+.google-login-button:hover:not(:disabled) { background: #183f68; }
+.google-login-message { margin-top: 8px; }
 .password-input { position: relative; }
 .password-input input { padding-right: 68px; }
 .password-toggle { position: absolute; right: 7px; bottom: 7px; width: auto; min-width: 50px; min-height: 30px; margin: 0; padding: 4px 8px; border-color: transparent; background: transparent; color: #8fbfff; font-size: 12px; }

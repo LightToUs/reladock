@@ -11,6 +11,7 @@ import { bindNodeVisibilityToggle, nodesForAdminList } from './node-visibility.j
 import { resourceModeLabel } from './resource-mode.js';
 import { adminPlanOfferingLabel, createOfferingMutationRunner, offeringActionDescriptor, offeringRouteLabel, offeringStateLabel, planInputFromFields, priceableOfferings } from './plan-catalog.js';
 import { sourceLoggingConfirmation, sourceLoggingPresentation } from './source-flow-logging.js';
+import { createGoogleLoginController } from './google-login.js';
 const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], monitoring: new Map(), certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '', showHiddenNodes: false };
 let adminNodeMonitoringPoller;
@@ -41,6 +42,11 @@ async function api(path, body, key, signal) {
   if (!response.ok) { if (response.status === 401) access('login'); if (response.status === 403) access('denied'); const error = new Error(data.error || '操作失败'); error.status = response.status; throw error; }
   return data;
 }
+const adminGoogleLogin = createGoogleLoginController({
+  api: (path, options = {}) => api(path, options.body),
+  returnTo: '/admin', button: $('#admin-google-login'), message: $('#admin-google-login-message'), location, history,
+  onAvailabilityChange: enabled => { $('#admin-google-login-entry').hidden = !enabled; },
+});
 function cell(row, value, detail) { const td = row.insertCell(); td.textContent = value; if (detail) { const span = document.createElement('span'); span.className = 'detail'; span.textContent = detail; td.append(span); } return td; }
 function empty(root, span, text) { if (!root.children.length) { const td = root.insertRow().insertCell(); td.colSpan = span; td.className = 'table-empty'; td.textContent = text; } }
 function button(label, task, danger = false) { const el = document.createElement('button'); el.type = 'button'; el.textContent = label; el.className = `secondary${danger ? ' danger' : ''}`; el.addEventListener('click', async () => { el.disabled = true; try { await task(); } catch (error) { message(error.message); } finally { el.disabled = false; } }); return el; }
@@ -436,4 +442,6 @@ $('#cost-form').addEventListener('submit', async event => {
   finally { button.disabled = false; }
 });
 const bootstrapUI = bindNodeBootstrap({api,getNode:id=>state.nodes.find(node=>node.id===id),reload,message});
+adminGoogleLogin.consumeCallbackError();
+void adminGoogleLogin.load();
 enter().catch(error => { if (error.status !== 401 && error.status !== 403) { access('login'); $('#login-message').textContent = error.message; } });

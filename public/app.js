@@ -11,6 +11,7 @@ import { bindConsoleNavigation } from './console-navigation.js';
 import { sourceLoggingPresentation } from './source-flow-logging.js';
 import { bindAccountMenu } from './account-menu.js';
 import { createLogoutGuard, bindPasswordVisibility } from './auth-session.js';
+import { createGoogleLoginController } from './google-login.js';
 const $ = selector => document.querySelector(selector);
 const workspaceNavigation = bindConsoleNavigation({
   root: $('#console'), sidebar: $('#workspace-sidebar'), mobileToggle: $('#workspace-nav-mobile'), collapseToggle: $('#workspace-nav-collapse'),
@@ -26,6 +27,7 @@ const accountMenu = bindAccountMenu({
   onSelect: view => view === 'password' ? openPasswordDialog() : workspaceNavigation.select(view, { focus: true }),
 });
 let mode = 'login';
+let googleLoginAvailable = false;
 let identity;
 const ruleDraft = {};
 let telemetryByRule = new Map();
@@ -67,11 +69,17 @@ async function api(path, { method = 'GET', body, key, signal } = {}) {
   }
   return data;
 }
+function syncGoogleLoginEntry() { $('#google-login-entry').hidden = !googleLoginAvailable || mode !== 'login'; }
+const googleLogin = createGoogleLoginController({
+  api, returnTo: '/', button: $('#google-login'), message: $('#google-login-message'), location, history,
+  onAvailabilityChange: enabled => { googleLoginAvailable = enabled; syncGoogleLoginEntry(); },
+});
 function setLogoutPendingUI(pending) { $('#console').inert = pending; $('#console').setAttribute('aria-busy', String(pending)); $('#auth').inert = pending; $('#auth').setAttribute('aria-busy', String(pending)); for (const id of ['login-tab', 'register-tab', 'auth-submit']) $(`#${id}`).disabled = pending; }
 function showAuth() { authSessionGate.invalidate(); workspaceRefreshGate.invalidate(); telemetryHistoryGate.invalidate(); clearCredential();resetBusinessTools();accountMenu.close();identity = undefined; nodeMonitoringPoller?.stop(); nodeMonitoringPoller = undefined; ruleDraft.pending = undefined; ruleEditor.close(); $('#startup-error').hidden = true; $('#auth').hidden = false; $('#console').hidden = true; setLogoutPendingUI(logoutGuard.isPending()); for (const id of ['rules-message','refresh-message','account-tools-message','rule-dialog-status']) $(`#${id}`).textContent = ''; }
 function showStartupFailure(error) { $('#auth').hidden = true; $('#console').hidden = true; $('#startup-error').hidden = false; $('#startup-error-message').textContent = error.message; }
 function setMode(value) {
   mode = value;
+  syncGoogleLoginEntry();
   authPasswordVisibility.hide();
   $('#company-field').hidden = value !== 'register'; $('#company-field input').required = value === 'register';
   $('#auth-form [name=password]').minLength = value === 'register' ? 12 : 1;
@@ -457,6 +465,8 @@ $('#rule-form').addEventListener('submit', async event => {
   }
 });
 setMode('login');
+googleLogin.consumeCallbackError();
+void googleLogin.load();
 bindAccountTools(api,refresh);
 bindBusinessTools(api,refresh,view=>workspaceNavigation.select(view));
 bindOperations(api,{canWrite:()=>identity&&['owner','admin'].includes(identity.role)});

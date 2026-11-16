@@ -21,6 +21,16 @@ func TestEmbeddedEnterpriseRuleEditorModuleIsAvailable(t *testing.T) {
 	}
 }
 
+func TestGoogleLoginAssetIsEmbedded(t *testing.T) {
+	module, err := Files.ReadFile("google-login.js")
+	if err != nil {
+		t.Fatalf("embedded Google login module is unavailable: %v", err)
+	}
+	if !bytes.Contains(module, []byte("createGoogleLoginController")) {
+		t.Fatal("embedded Google login module does not expose its controller")
+	}
+}
+
 func TestEmbeddedPagesUseSharedBlueBrandMark(t *testing.T) {
 	mark, err := Files.ReadFile("reladock-mark.svg")
 	if err != nil {
