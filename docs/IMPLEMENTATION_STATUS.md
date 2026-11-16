@@ -4,7 +4,7 @@
 
 ## 2026-11-16 AWS Lightsail 一次性脚本节点（生产控制端已启用，只读鉴权通过）
 
-区域选择增量已在本地实现：19 个生产白名单区域按 AWS 官方区域表显示中文位置与原代码，例如“香港（ap-east-1）”“新加坡（ap-southeast-1）”；表单值仍为原始区域代码，未知的新区域回退显示代码而不阻断选择。TDD 先因缺少 `lightsailRegionLabel` 导出失败，实施后 Node 9 项、Lightsail 静态资源契约、`npm run vet` 和 Linux amd64 发布构建通过；候选二进制 SHA256 为 `91d81340d46bc08c1ff1928d262e4d13f171095dc096dea16a79291bef72c7ce`，归档 SHA256 为 `d4baee7ea0481c83c25858def479b4cbdd15a6aacd60606861776a3885c6d6d6`。此段代码尚未切换生产。
+区域选择增量已实现、验证并部署：19 个生产白名单区域按 AWS 官方区域表显示中文位置与原代码，例如“香港（ap-east-1）”“新加坡（ap-southeast-1）”；表单值仍为原始区域代码，未知的新区域回退显示代码而不阻断选择。TDD 先因缺少 `lightsailRegionLabel` 导出失败，实施后 Node 9 项、Lightsail 静态资源契约、`npm run vet` 和 Linux amd64 发布构建通过；提交 `ec2373e` 已推送，候选/安装二进制 SHA256 为 `91d81340d46bc08c1ff1928d262e4d13f171095dc096dea16a79291bef72c7ce`，归档 SHA256 为 `d4baee7ea0481c83c25858def479b4cbdd15a6aacd60606861776a3885c6d6d6`。这是无 schema/配置变更的嵌入前端切换，备份 `/root/reladock-pre-region-label-20261116T022329Z` 包含旧二进制、环境和 systemd 单元及 SHA256 清单。切换脚本及独立复核确认服务 active/enabled、schema v40、Lightsail 实例/任务 `0/0`、公网控制台 200、未登录状态 API 401，公网 `lightsail-admin.js` SHA256 为 `901e28d0db50d8f5ce6acc9515676b577cbecec10ecc5ab4c17e7b81b788b5be` 且包含香港/新加坡映射，warning 0，临时文件已删除。首次未压缩上传被远端重置并仅留下不完整临时文件，核对服务仍 active 后改用压缩传输；第一次独立复核连接也被远端关闭，拆分重连后全部通过，均未发生资源创建。
 
 schema v40 增量已实现、验证并部署：创建脚本允许为空，空脚本使用 `not-requested` 状态，只创建实例并绑定静态 IP，跳过公开端口修改、访问材料获取和 SSH；非空脚本继续保持最多一次与 `unknown` 不重放。只读 `GetRegions` 已在生产服务账号下返回 19 个区域：`ap-east-1`、`ap-northeast-1`、`ap-northeast-2`、`ap-south-1`、`ap-southeast-1`、`ap-southeast-2`、`ap-southeast-3`、`ap-southeast-5`、`ca-central-1`、`eu-central-1`、`eu-north-1`、`eu-south-2`、`eu-west-1`、`eu-west-2`、`eu-west-3`、`sa-east-1`、`us-east-1`、`us-east-2`、`us-west-2`；该结果已作为显式生产白名单，临时探针已删除，未创建资源。
 
