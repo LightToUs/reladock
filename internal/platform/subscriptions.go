@@ -181,10 +181,10 @@ func (s *Store) ListPlans(ctx context.Context, who Identity, ruleID string, page
 	}
 	result := Page[PlanPriceVersion]{Items: []PlanPriceVersion{}, Page: page, PageSize: 50}
 	if ruleID == "" {
-		if err = tx.QueryRow(ctx, `SELECT count(*) FROM plan_price_versions v JOIN line_offerings o ON o.id=v.offering_id JOIN nodes n ON n.id=o.node_id WHERE o.state='published' AND n.status IN ('unprovisioned','ready') AND (n.resource_mode='shared' OR n.dedicated_tenant_id=$1)`, who.TenantID).Scan(&result.Total); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM plan_price_versions v JOIN line_offerings o ON o.id=v.offering_id JOIN nodes n ON n.id=o.node_id WHERE o.state='published' AND n.status IN ('unprovisioned','ready') AND (n.resource_mode='shared' OR n.dedicated_tenant_id=$1 OR (n.resource_mode='dedicated-tenant' AND n.dedicated_tenant_id IS NULL))`, who.TenantID).Scan(&result.Total); err != nil {
 			return result, err
 		}
-		rows, err := tx.Query(ctx, "SELECT "+planSelectColumns+planSelectFrom+" JOIN nodes n ON n.id=o.node_id WHERE o.state='published' AND n.status IN ('unprovisioned','ready') AND (n.resource_mode='shared' OR n.dedicated_tenant_id=$1) ORDER BY v.code,v.version DESC LIMIT 50 OFFSET $2", who.TenantID, (page-1)*50)
+		rows, err := tx.Query(ctx, "SELECT "+planSelectColumns+planSelectFrom+" JOIN nodes n ON n.id=o.node_id WHERE o.state='published' AND n.status IN ('unprovisioned','ready') AND (n.resource_mode='shared' OR n.dedicated_tenant_id=$1 OR (n.resource_mode='dedicated-tenant' AND n.dedicated_tenant_id IS NULL)) ORDER BY v.code,v.version DESC LIMIT 50 OFFSET $2", who.TenantID, (page-1)*50)
 		if err != nil {
 			return result, err
 		}
@@ -344,15 +344,16 @@ func (s *Store) PurchasePlan(ctx context.Context, who Identity, key string, inpu
 var errPlanSaleUnavailable = fmt.Errorf("套餐当前不可销售: %w", ErrConflict)
 
 type preparedPlanPurchase struct {
-	who      Identity
-	key      string
-	input    PurchasePlanInput
-	plan     PlanPriceVersion
-	nodeID   string
-	oldID    string
-	up       int64
-	down     int64
-	existing *RuleSubscription
+	who                Identity
+	key                string
+	input              PurchasePlanInput
+	plan               PlanPriceVersion
+	nodeID             string
+	oldID              string
+	up                 int64
+	down               int64
+	claimDedicatedNode bool
+	existing           *RuleSubscription
 }
 
 // preparePlanPurchase takes every non-wallet lock needed to revalidate a sale.
@@ -430,7 +431,7 @@ func (s *Store) preparePlanPurchase(ctx context.Context, tx pgx.Tx, who Identity
 		if err = lockNode(ctx, tx, nodeID); err != nil {
 			return prepared, err
 		}
-		if err = checkNodeAdmission(ctx, tx, nodeID, who.TenantID); err != nil {
+		if prepared.claimDedicatedNode, err = checkNodeSaleAdmission(ctx, tx, nodeID, who.TenantID, true); err != nil {
 			return prepared, err
 		}
 	}
@@ -489,6 +490,19 @@ func (s *Store) finishPlanPurchase(ctx context.Context, tx pgx.Tx, prepared prep
 	var err error
 	if balance < plan.PriceCents {
 		return RuleSubscription{}, ErrInsufficientBalance
+	}
+	if prepared.claimDedicatedNode {
+		var revision int64
+		err = tx.QueryRow(ctx, `UPDATE nodes SET dedicated_tenant_id=$2,revision=revision+1 WHERE id=$1 AND resource_mode='dedicated-tenant' AND dedicated_tenant_id IS NULL RETURNING revision`, prepared.nodeID, who.TenantID).Scan(&revision)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RuleSubscription{}, fmt.Errorf("企业专属节点已被其他企业分配: %w", ErrConflict)
+		}
+		if err != nil {
+			return RuleSubscription{}, err
+		}
+		if err = platformLog(ctx, tx, &who, "node.dedicated-claim", prepared.nodeID, map[string]any{"tenantId": who.TenantID, "revision": revision}); err != nil {
+			return RuleSubscription{}, err
+		}
 	}
 	balance -= plan.PriceCents
 	if _, err = tx.Exec(ctx, "UPDATE billing_wallets SET balance_cents=$2 WHERE tenant_id=$1", who.TenantID, balance); err != nil {

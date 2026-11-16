@@ -233,6 +233,189 @@ func publishedOffering(t *testing.T, s *Store, admin Identity, code, nodeID stri
 	return offering
 }
 
+func unassignedDedicatedPlanFixture(t *testing.T, priceCents int64) (*Store, Identity, Identity, Identity, string, PlanPriceVersion) {
+	t.Helper()
+	s := subscriptionTestStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	first, _ := register(t, s, "unassigned-first@example.com")
+	second, _ := register(t, s, "unassigned-second@example.com")
+	nodeID := "unassigned-sale"
+	if err := s.AdminAddNode(ctx, admin, NodeInput{ID: nodeID, Name: "Unassigned dedicated", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeDedicatedTenant}); err != nil {
+		t.Fatal(err)
+	}
+	offering := publishedOffering(t, s, admin, "unassigned-sale", nodeID)
+	input := configuredPlan()
+	input.Code = "unassigned-sale"
+	input.OfferingID = offering.ID
+	input.PriceCents = priceCents
+	input.ResourceMode = ResourceModeDedicatedTenant
+	plan, err := s.AdminCreatePlan(ctx, admin, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, admin, first, second, nodeID, plan
+}
+
+func TestUnassignedDedicatedCatalogAndWalletPurchaseClaimsOnce(t *testing.T) {
+	s, _, winner, loser, nodeID, plan := unassignedDedicatedPlanFixture(t, 50)
+	ctx := context.Background()
+	for _, who := range []Identity{winner, loser} {
+		catalog, err := s.ListPlans(ctx, who, "", 1)
+		if err != nil || catalog.Total != 1 || len(catalog.Items) != 1 || catalog.Items[0].ID != plan.ID {
+			t.Fatalf("catalog for %s = %+v err=%v", who.Email, catalog, err)
+		}
+	}
+	if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: winner.TenantID, Key: "unassigned-winner-funds", AmountCents: 100, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	var beforeRevision int64
+	if err := s.pool.QueryRow(ctx, "SELECT revision FROM nodes WHERE id=$1", nodeID).Scan(&beforeRevision); err != nil {
+		t.Fatal(err)
+	}
+	period, err := s.PurchasePlan(ctx, winner, "unassigned-winner-purchase", PurchasePlanInput{PriceVersionID: plan.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owner string
+	var revision, claimAudits, debits, periods int64
+	if err = s.pool.QueryRow(ctx, `SELECT COALESCE(dedicated_tenant_id::text,''),revision,
+	 (SELECT count(*) FROM platform_audit_logs WHERE action='node.dedicated-claim' AND resource_id=$1),
+	 (SELECT count(*) FROM billing_ledger WHERE kind='subscription-debit'),
+	 (SELECT count(*) FROM rule_subscriptions) FROM nodes WHERE id=$1`, nodeID).Scan(&owner, &revision, &claimAudits, &debits, &periods); err != nil {
+		t.Fatal(err)
+	}
+	if owner != winner.TenantID || revision != beforeRevision+1 || claimAudits != 1 || debits != 1 || periods != 1 {
+		t.Fatalf("claim owner=%q revision=%d/%d audits=%d debits=%d periods=%d", owner, revision, beforeRevision, claimAudits, debits, periods)
+	}
+	replay, err := s.PurchasePlan(ctx, winner, "unassigned-winner-purchase", PurchasePlanInput{PriceVersionID: plan.ID})
+	if err != nil || replay.ID != period.ID {
+		t.Fatalf("replay=%+v err=%v", replay, err)
+	}
+	loserCatalog, err := s.ListPlans(ctx, loser, "", 1)
+	if err != nil || loserCatalog.Total != 0 || len(loserCatalog.Items) != 0 {
+		t.Fatalf("bound node remained visible to losing tenant: %+v err=%v", loserCatalog, err)
+	}
+	if _, err = s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: loser.TenantID, Key: "unassigned-loser-funds", AmountCents: 100, Reason: "test", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PurchasePlan(ctx, loser, "unassigned-loser-purchase", PurchasePlanInput{PriceVersionID: plan.ID}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("losing purchase err=%v", err)
+	}
+	var winnerBalance, loserBalance int64
+	if err = s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", winner.TenantID).Scan(&winnerBalance); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", loser.TenantID).Scan(&loserBalance); err != nil {
+		t.Fatal(err)
+	}
+	if winnerBalance != 50 || loserBalance != 100 {
+		t.Fatalf("balances winner=%d loser=%d", winnerBalance, loserBalance)
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM platform_audit_logs WHERE action='node.dedicated-claim' AND resource_id=$1),(SELECT count(*) FROM billing_ledger WHERE kind='subscription-debit'),(SELECT count(*) FROM rule_subscriptions)`, nodeID).Scan(&claimAudits, &debits, &periods); err != nil {
+		t.Fatal(err)
+	}
+	if claimAudits != 1 || debits != 1 || periods != 1 {
+		t.Fatalf("replay/loser duplicated claim audits=%d debits=%d periods=%d", claimAudits, debits, periods)
+	}
+}
+
+func TestDedicatedClaimFailuresPreserveUnassignedNodeAndMoney(t *testing.T) {
+	for _, scenario := range []string{"insufficient", "audit"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, _, who, _, nodeID, plan := unassignedDedicatedPlanFixture(t, 50)
+			ctx := context.Background()
+			if scenario == "audit" {
+				if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: who.TenantID, Key: "claim-audit-funds", AmountCents: 100, Reason: "test", Operator: "test"}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.pool.Exec(ctx, `CREATE FUNCTION reject_dedicated_claim_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.dedicated-claim' THEN RAISE EXCEPTION 'reject claim audit'; END IF; RETURN NEW; END; $$; CREATE TRIGGER reject_dedicated_claim_audit BEFORE INSERT ON platform_audit_logs FOR EACH ROW EXECUTE FUNCTION reject_dedicated_claim_audit()`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := s.PurchasePlan(ctx, who, "claim-failure-"+scenario, PurchasePlanInput{PriceVersionID: plan.ID})
+			if scenario == "insufficient" && !errors.Is(err, ErrInsufficientBalance) || scenario == "audit" && err == nil {
+				t.Fatalf("purchase err=%v", err)
+			}
+			var owner string
+			var balance, claimAudits, debits, periods int64
+			if err = s.pool.QueryRow(ctx, `SELECT COALESCE(n.dedicated_tenant_id::text,''),COALESCE(w.balance_cents,0),
+			 (SELECT count(*) FROM platform_audit_logs WHERE action='node.dedicated-claim' AND resource_id=n.id),
+			 (SELECT count(*) FROM billing_ledger WHERE tenant_id=$2 AND kind='subscription-debit'),
+			 (SELECT count(*) FROM rule_subscriptions WHERE tenant_id=$2)
+			 FROM nodes n LEFT JOIN billing_wallets w ON w.tenant_id=$2 WHERE n.id=$1`, nodeID, who.TenantID).Scan(&owner, &balance, &claimAudits, &debits, &periods); err != nil {
+				t.Fatal(err)
+			}
+			wantBalance := int64(0)
+			if scenario == "audit" {
+				wantBalance = 100
+			}
+			if owner != "" || balance != wantBalance || claimAudits != 0 || debits != 0 || periods != 0 {
+				t.Fatalf("failure mutated owner=%q balance=%d audits=%d debits=%d periods=%d", owner, balance, claimAudits, debits, periods)
+			}
+		})
+	}
+}
+
+func TestUnassignedDedicatedConcurrentPurchasesHaveOneWinner(t *testing.T) {
+	s, _, first, second, nodeID, plan := unassignedDedicatedPlanFixture(t, 50)
+	ctx := context.Background()
+	for i, who := range []Identity{first, second} {
+		if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: who.TenantID, Key: "claim-race-funds-" + string(rune('a'+i)), AmountCents: 100, Reason: "test", Operator: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type purchaseResult struct {
+		who Identity
+		err error
+	}
+	start := make(chan struct{})
+	results := make(chan purchaseResult, 2)
+	var wg sync.WaitGroup
+	for i, who := range []Identity{first, second} {
+		wg.Add(1)
+		go func(i int, who Identity) {
+			defer wg.Done()
+			<-start
+			_, err := s.PurchasePlan(ctx, who, "claim-race-purchase-"+string(rune('a'+i)), PurchasePlanInput{PriceVersionID: plan.ID})
+			results <- purchaseResult{who: who, err: err}
+		}(i, who)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var winner, loser Identity
+	for result := range results {
+		if result.err == nil {
+			winner = result.who
+		} else if errors.Is(result.err, ErrConflict) {
+			loser = result.who
+		} else {
+			t.Fatalf("unexpected purchase error: %v", result.err)
+		}
+	}
+	if winner.TenantID == "" || loser.TenantID == "" || winner.TenantID == loser.TenantID {
+		t.Fatalf("winner=%+v loser=%+v", winner, loser)
+	}
+	var owner string
+	var winnerBalance, loserBalance, claims, debits, periods int64
+	if err := s.pool.QueryRow(ctx, "SELECT dedicated_tenant_id::text FROM nodes WHERE id=$1", nodeID).Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", winner.TenantID).Scan(&winnerBalance); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT balance_cents FROM billing_wallets WHERE tenant_id=$1", loser.TenantID).Scan(&loserBalance); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM platform_audit_logs WHERE action='node.dedicated-claim' AND resource_id=$1),(SELECT count(*) FROM billing_ledger WHERE kind='subscription-debit'),(SELECT count(*) FROM rule_subscriptions)`, nodeID).Scan(&claims, &debits, &periods); err != nil {
+		t.Fatal(err)
+	}
+	if owner != winner.TenantID || winnerBalance != 50 || loserBalance != 100 || claims != 1 || debits != 1 || periods != 1 {
+		t.Fatalf("owner=%q winner=%s balances=%d/%d claims=%d debits=%d periods=%d", owner, winner.TenantID, winnerBalance, loserBalance, claims, debits, periods)
+	}
+}
+
 func TestPurchasePlanAllowsUnprovisionedNodeWithoutClaimingReady(t *testing.T) {
 	s := subscriptionTestStore(t)
 	ctx := context.Background()

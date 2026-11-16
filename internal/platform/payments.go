@@ -266,7 +266,7 @@ func (s *Store) createPlanPaymentOrder(ctx context.Context, who Identity, key st
 		if err = lockNode(ctx, tx, nodeID); err != nil {
 			return PaymentOrder{}, err
 		}
-		if err = checkNodeAdmission(ctx, tx, nodeID, who.TenantID); err != nil {
+		if _, err = checkNodeSaleAdmission(ctx, tx, nodeID, who.TenantID, true); err != nil {
 			return PaymentOrder{}, err
 		}
 	}

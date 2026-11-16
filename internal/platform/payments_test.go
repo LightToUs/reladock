@@ -263,6 +263,68 @@ func TestPlanPaymentUnboundDedicatedAdmissionIsRecheckedAtQuoteAndCallback(t *te
 	paymentBalance(t, s, owner, 1999, 1)
 }
 
+func TestPlanPaymentUnassignedDedicatedQuoteAndPurchase(t *testing.T) {
+	ctx := context.Background()
+	s, _, who, _, nodeID, plan := unassignedDedicatedPlanFixture(t, 1999)
+	var beforeRevision int64
+	if err := s.pool.QueryRow(ctx, "SELECT revision FROM nodes WHERE id=$1", nodeID).Scan(&beforeRevision); err != nil {
+		t.Fatal(err)
+	}
+	order, err := s.CheckoutPlanPayment(ctx, who, "unassigned-plan-quote", PurchasePlanInput{PriceVersionID: plan.ID}, paymentFake{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owner string
+	var revision, claims int64
+	if err = s.pool.QueryRow(ctx, `SELECT COALESCE(dedicated_tenant_id::text,''),revision,(SELECT count(*) FROM platform_audit_logs WHERE action='node.dedicated-claim' AND resource_id=$1) FROM nodes WHERE id=$1`, nodeID).Scan(&owner, &revision, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if owner != "" || revision != beforeRevision || claims != 0 {
+		t.Fatalf("quote claimed owner=%q revision=%d/%d claims=%d", owner, revision, beforeRevision, claims)
+	}
+	if err = s.ApplyStripeEvent(ctx, paymentEvent(t, "evt_unassigned_plan_paid", "checkout.session.completed", paidObject(order))); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.PaymentOrder(ctx, who, order.ID)
+	if err != nil || got.PurchaseState != "purchased" || got.SubscriptionID == "" {
+		t.Fatalf("paid order=%+v err=%v", got, err)
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT dedicated_tenant_id::text,revision,(SELECT count(*) FROM platform_audit_logs WHERE action='node.dedicated-claim' AND resource_id=$1) FROM nodes WHERE id=$1`, nodeID).Scan(&owner, &revision, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if owner != who.TenantID || revision != beforeRevision+1 || claims != 1 {
+		t.Fatalf("paid claim owner=%q revision=%d/%d claims=%d", owner, revision, beforeRevision, claims)
+	}
+}
+
+func TestPlanPaymentUnassignedDedicatedFailureLeavesNodeUnclaimed(t *testing.T) {
+	ctx := context.Background()
+	s, admin, who, _, nodeID, plan := unassignedDedicatedPlanFixture(t, 1999)
+	order, err := s.CheckoutPlanPayment(ctx, who, "unassigned-plan-failure", PurchasePlanInput{PriceVersionID: plan.ID}, paymentFake{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdminSetOfferingState(ctx, admin, plan.OfferingID, OfferingStateInput{ExpectedRevision: 2, State: OfferingStatePaused}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ApplyStripeEvent(ctx, paymentEvent(t, "evt_unassigned_plan_unavailable", "checkout.session.completed", paidObject(order))); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.PaymentOrder(ctx, who, order.ID)
+	if err != nil || got.State != "credited" || got.PurchaseState != "failed" || got.PurchaseError != "unavailable" {
+		t.Fatalf("failed order=%+v err=%v", got, err)
+	}
+	var owner string
+	var claims int64
+	if err = s.pool.QueryRow(ctx, `SELECT COALESCE(dedicated_tenant_id::text,''),(SELECT count(*) FROM platform_audit_logs WHERE action='node.dedicated-claim' AND resource_id=$1) FROM nodes WHERE id=$1`, nodeID).Scan(&owner, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if owner != "" || claims != 0 {
+		t.Fatalf("failed callback claimed owner=%q claims=%d", owner, claims)
+	}
+	paymentBalance(t, s, who, 1999, 1)
+}
+
 func checkoutPlanPayment(t *testing.T, s *Store, who Identity, plan PlanPriceVersion, key string) PaymentOrder {
 	t.Helper()
 	order, err := s.CheckoutPlanPayment(context.Background(), who, key, PurchasePlanInput{PriceVersionID: plan.ID}, paymentFake{})

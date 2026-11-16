@@ -308,36 +308,49 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 }
 
 func checkNodeAdmission(ctx context.Context, tx pgx.Tx, nodeID, tenantID string) error {
+	_, err := checkNodeSaleAdmission(ctx, tx, nodeID, tenantID, false)
+	return err
+}
+
+// checkNodeSaleAdmission validates the node's resource ownership. When
+// allowUnassigned is true, an unassigned dedicated-tenant node is saleable and
+// the returned flag tells the caller that a successful purchase must claim it.
+// This helper is read-only; quotes and failed purchases must never reserve a
+// node merely by validating it.
+func checkNodeSaleAdmission(ctx context.Context, tx pgx.Tx, nodeID, tenantID string, allowUnassigned bool) (bool, error) {
 	var mode ResourceMode
 	var owner string
 	if err := tx.QueryRow(ctx, "SELECT resource_mode,COALESCE(dedicated_tenant_id::text,'') FROM nodes WHERE id=$1", nodeID).Scan(&mode, &owner); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
+			return false, ErrNotFound
 		}
-		return err
+		return false, err
 	}
 	switch mode {
 	case ResourceModeShared:
-		return nil
+		return false, nil
 	case ResourceModeDedicatedTenant:
-		if owner != tenantID {
-			return ErrConflict
+		if owner == "" && allowUnassigned {
+			return true, nil
 		}
-		return nil
+		if owner != tenantID {
+			return false, ErrConflict
+		}
+		return false, nil
 	case ResourceModeDedicatedRule:
 		if owner != tenantID {
-			return ErrConflict
+			return false, ErrConflict
 		}
 		var count int
 		if err := tx.QueryRow(ctx, "SELECT count(*) FROM relay_rules WHERE node_id=$1 AND status<>'deleted'", nodeID).Scan(&count); err != nil {
-			return err
+			return false, err
 		}
 		if count != 0 {
-			return ErrConflict
+			return false, ErrConflict
 		}
-		return nil
+		return false, nil
 	default:
-		return ErrConflict
+		return false, ErrConflict
 	}
 }
 
