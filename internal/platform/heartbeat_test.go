@@ -324,3 +324,28 @@ func TestAdminNodesExposeAgentHeartbeatWithoutCredentialMaterial(t *testing.T) {
 		t.Fatalf("schema version/tables: version=%d rotations=%v upgrades=%v retirements=%v attestations=%v resources=%v err=%v", version, rotationsTable, upgradesTable, retirementsTable, attestationsTable, resourcesTable, err)
 	}
 }
+
+func TestPortRangeCapabilityUsesLatestAuthenticatedHeartbeat(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	fingerprint := strings.Repeat("d", 64)
+	if _, err := s.pool.Exec(ctx, "UPDATE nodes SET certificate_fingerprint=$1 WHERE id='hk-01'", fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := validAgentHeartbeat(time.Now().UTC())
+	heartbeat.PortRangeSupported = true
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	var supported bool
+	if err := s.pool.QueryRow(ctx, "SELECT agent_port_range_supported FROM nodes WHERE id='hk-01'").Scan(&supported); err != nil || !supported {
+		t.Fatalf("range capability supported=%v err=%v", supported, err)
+	}
+	heartbeat.PortRangeSupported = false
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, "SELECT agent_port_range_supported FROM nodes WHERE id='hk-01'").Scan(&supported); err != nil || supported {
+		t.Fatalf("latest heartbeat did not clear range capability=%v err=%v", supported, err)
+	}
+}

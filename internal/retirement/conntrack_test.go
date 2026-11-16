@@ -182,7 +182,7 @@ func TestPurgeRejectsInjectionUnsupportedToolAndUnboundedOutput(t *testing.T) {
 		{Address: "2001:db8::1", Protocol: "tcp", Port: 20001},
 		{Address: "0.0.0.0", Protocol: "tcp", Port: 20001},
 		{Address: "192.0.2.10", Protocol: "both", Port: 20001},
-		{Address: "192.0.2.10", Protocol: "tcp", Port: 1},
+		{Address: "192.0.2.10", Protocol: "tcp", Port: 0},
 	}
 	for _, input := range badAllocations {
 		runner := &scriptedRunner{}

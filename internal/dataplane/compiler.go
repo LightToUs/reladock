@@ -144,7 +144,22 @@ func protocols(p string) []string {
 	return []string{p}
 }
 
-func allocationSchema(version int) bool { return version == 2 || version == 3 }
+func allocationSchema(version int) bool { return version == 2 || version == 3 || version == 4 }
+
+func rulePortEnd(rule platform.ConfigRule, schemaVersion int) (int, bool) {
+	if schemaVersion == 4 {
+		end := rule.ListenPortEnd
+		return end, rule.ListenPort >= 1 && end >= rule.ListenPort && end <= 65535 && end-rule.ListenPort+1 <= 4096
+	}
+	return rule.ListenPort, rule.ListenPortEnd == 0 && rule.ListenPort >= 20000 && rule.ListenPort <= 60000
+}
+
+func portExpression(start, end int) string {
+	if start == end {
+		return fmt.Sprint(start)
+	}
+	return fmt.Sprintf("%d-%d", start, end)
+}
 
 func guardTuple(address, protocol string, port int) string {
 	return fmt.Sprintf("%s/%s/%d", address, protocol, port)
@@ -173,6 +188,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 	loggingRules := 0
 	for i := range cfg.Rules {
 		r := &cfg.Rules[i]
+		end, validPorts := rulePortEnd(*r, cfg.SchemaVersion)
 		if !identifier.MatchString(r.ID) || !identifier.MatchString(r.TenantID) || ids[r.ID] || r.NodeID != cfg.NodeID || r.Version < 1 {
 			return fail("rule identity/version")
 		}
@@ -180,7 +196,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		ruleStatus[r.ID] = r.Status
 		if r.SourceLoggingEnabled {
 			loggingRules++
-			if cfg.SchemaVersion != 3 || r.Status != "pending-agent" {
+			if (cfg.SchemaVersion != 3 && cfg.SchemaVersion != 4) || r.Status != "pending-agent" {
 				return fail("source logging schema or rule status")
 			}
 		}
@@ -190,15 +206,17 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		if r.Protocol != "tcp" && r.Protocol != "udp" && r.Protocol != "both" {
 			return fail("protocol")
 		}
-		if r.ListenPort < 20000 || r.ListenPort > 60000 || r.TargetPort < 1 || r.TargetPort > 65535 || r.BandwidthMbps < 1 || r.BandwidthMbps > 1000 {
+		if !validPorts || r.TargetPort < 1 || r.TargetPort > 65535 || r.BandwidthMbps < 1 || r.BandwidthMbps > 1000 {
 			return fail("port/bandwidth range")
 		}
 		for _, proto := range protocols(r.Protocol) {
-			key := fmt.Sprintf("%s:%d", proto, r.ListenPort)
-			if ports[key] {
-				return fail("duplicate reserved port")
+			for port := r.ListenPort; port <= end; port++ {
+				key := fmt.Sprintf("%s:%d", proto, port)
+				if ports[key] {
+					return fail("duplicate reserved port")
+				}
+				ports[key] = true
 			}
-			ports[key] = true
 		}
 		// Paused rules still undergo literal validation but need no DNS request.
 		if _, e := netip.ParseAddr(r.TargetHost); e == nil {
@@ -233,8 +251,11 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		expected := map[string]string{}
 		activeByTuple := map[string]platform.ConfigAllocation{}
 		for _, r := range cfg.Rules {
+			end, _ := rulePortEnd(r, cfg.SchemaVersion)
 			for _, proto := range protocols(r.Protocol) {
-				expected[fmt.Sprintf("%s:%d", proto, r.ListenPort)] = r.ID
+				for port := r.ListenPort; port <= end; port++ {
+					expected[fmt.Sprintf("%s:%d", proto, port)] = r.ID
+				}
 			}
 		}
 		allocationIDs := map[string]bool{}
@@ -242,7 +263,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		predecessorIDs := map[string]bool{}
 		for _, a := range cfg.Allocations {
 			key := fmt.Sprintf("%s:%d", a.Protocol, a.Port)
-			if !uuid.MatchString(a.ID) || allocationIDs[a.ID] || !identifier.MatchString(a.RuleID) || a.Address != listen.String() || (a.Protocol != "tcp" && a.Protocol != "udp") || a.Port < 20000 || a.Port > 60000 || allocationTuples[key] || expected[key] != a.RuleID || a.PredecessorRetirementID != "" && (!uuid.MatchString(a.PredecessorRetirementID) || predecessorIDs[a.PredecessorRetirementID]) {
+			if !uuid.MatchString(a.ID) || allocationIDs[a.ID] || !identifier.MatchString(a.RuleID) || a.Address != listen.String() || (a.Protocol != "tcp" && a.Protocol != "udp") || a.Port < 1 || a.Port > 65535 || allocationTuples[key] || expected[key] != a.RuleID || a.PredecessorRetirementID != "" && (!uuid.MatchString(a.PredecessorRetirementID) || predecessorIDs[a.PredecessorRetirementID]) {
 				return fail("allocation identity/tuple")
 			}
 			if a.PredecessorRetirementID != "" {
@@ -262,7 +283,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		states := map[string]bool{"waiting-removal": true, "queued": true, "claimed": true, "purging": true, "failed": true}
 		for _, r := range cfg.Retirements {
 			key := fmt.Sprintf("%s:%d", r.Protocol, r.Port)
-			if !uuid.MatchString(r.ID) || retirementIDs[r.ID] || !uuid.MatchString(r.AllocationID) || allocationIDs[r.AllocationID] || !identifier.MatchString(r.RuleID) || r.Address != listen.String() || (r.Protocol != "tcp" && r.Protocol != "udp") || r.Port < 20000 || r.Port > 60000 || allocationTuples[key] || retirementTuples[key] || r.QuarantineGeneration < 1 || r.QuarantineGeneration > cfg.Generation || !states[r.State] {
+			if !uuid.MatchString(r.ID) || retirementIDs[r.ID] || !uuid.MatchString(r.AllocationID) || allocationIDs[r.AllocationID] || !identifier.MatchString(r.RuleID) || r.Address != listen.String() || (r.Protocol != "tcp" && r.Protocol != "udp") || r.Port < 1 || r.Port > 65535 || allocationTuples[key] || retirementTuples[key] || r.QuarantineGeneration < 1 || r.QuarantineGeneration > cfg.Generation || !states[r.State] {
 				return fail("retirement identity/tuple")
 			}
 			retirementIDs[r.ID] = true
@@ -277,7 +298,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		knownPredecessors := map[string]platform.ConfigAllocation{}
 		for _, guard := range o.quarantines {
 			tuple := guardTuple(guard.Address, guard.Protocol, guard.Port)
-			if !uuid.MatchString(guard.ID) || !uuid.MatchString(guard.RetirementID) || guard.Address != listen.String() || (guard.Protocol != "tcp" && guard.Protocol != "udp") || guard.Port < 20000 || guard.Port > 60000 || (guard.State != "purged-pending-ack" && guard.State != "reusable") || localQuarantines[tuple].ID != "" {
+			if !uuid.MatchString(guard.ID) || !uuid.MatchString(guard.RetirementID) || guard.Address != listen.String() || (guard.Protocol != "tcp" && guard.Protocol != "udp") || guard.Port < 1 || guard.Port > 65535 || (guard.State != "purged-pending-ack" && guard.State != "reusable") || localQuarantines[tuple].ID != "" {
 				return fail("local quarantine identity/tuple")
 			}
 			localQuarantines[tuple] = guard
@@ -317,7 +338,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		}
 		for _, guard := range o.retiredGuards {
 			tuple := guardTuple(guard.Address, guard.Protocol, guard.Port)
-			if !uuid.MatchString(guard.ID) || guard.RetirementID != "" || guard.PredecessorRetirementID != "" && !uuid.MatchString(guard.PredecessorRetirementID) || guard.Address != listen.String() || (guard.Protocol != "tcp" && guard.Protocol != "udp") || guard.Port < 20000 || guard.Port > 60000 || guard.State != "failed-candidate" {
+			if !uuid.MatchString(guard.ID) || guard.RetirementID != "" || guard.PredecessorRetirementID != "" && !uuid.MatchString(guard.PredecessorRetirementID) || guard.Address != listen.String() || (guard.Protocol != "tcp" && guard.Protocol != "udp") || guard.Port < 1 || guard.Port > 65535 || guard.State != "failed-candidate" {
 				return fail("historical guard identity/tuple")
 			}
 			if active, ok := activeByTuple[tuple]; ok {
@@ -366,7 +387,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 	}
 	var sourceManifest *sourceflow.Manifest
 	var sourceManifestDigest string
-	if cfg.SchemaVersion == 3 {
+	if loggingRules > 0 {
 		rulesByID := make(map[string]platform.ConfigRule, len(cfg.Rules))
 		for _, rule := range cfg.Rules {
 			rulesByID[rule.ID] = rule
@@ -404,14 +425,17 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 	p := Plan{NodeID: cfg.NodeID, Generation: cfg.Generation, Incarnation: o.incarnation, SNATAddress: snat.String(), Config: cfg, Shaping: o.Shaping, ForwardGuards: forwardGuards, Quarantines: quarantines, SourceFlowManifest: sourceManifest, SourceFlowManifestDigest: sourceManifestDigest}
 	allocations := map[Allocation]bool{}
 	for _, v := range o.retired {
-		if _, e := ipv4(v.Address); e != nil || v.Address != listen.String() || (v.Protocol != "tcp" && v.Protocol != "udp") || v.Port < 20000 || v.Port > 60000 {
+		if _, e := ipv4(v.Address); e != nil || v.Address != listen.String() || (v.Protocol != "tcp" && v.Protocol != "udp") || v.Port < 1 || v.Port > 65535 {
 			return fail("invalid historical allocation")
 		}
 		allocations[v] = true
 	}
 	for _, r := range cfg.Rules {
+		end, _ := rulePortEnd(r, cfg.SchemaVersion)
 		for _, proto := range protocols(r.Protocol) {
-			allocations[Allocation{listen.String(), proto, r.ListenPort}] = true
+			for port := r.ListenPort; port <= end; port++ {
+				allocations[Allocation{listen.String(), proto, port}] = true
+			}
 		}
 	}
 	if allocationSchema(cfg.SchemaVersion) {
@@ -491,13 +515,18 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		h := sha256.Sum256([]byte(r.ID))
 		name := fmt.Sprintf("e_%x", h[:8])
 		ttl := r.ExpiresAt.Sub(p.BuiltAt) - ExpirySafetyMargin
-		fmt.Fprintf(&definitions, " set %s { type inet_service; flags timeout;", name)
+		end, _ := rulePortEnd(r, cfg.SchemaVersion)
+		flags := "timeout"
+		if end != r.ListenPort {
+			flags = "interval,timeout"
+		}
+		fmt.Fprintf(&definitions, " set %s { type inet_service; flags %s;", name, flags)
 		if ttl.Milliseconds() > 0 {
 			timeout := fmt.Sprintf("%dms", ttl.Milliseconds())
 			if ttl.Milliseconds() > math.MaxInt32 {
 				timeout = fmt.Sprintf("%ds", ttl/time.Second)
 			}
-			fmt.Fprintf(&definitions, " elements = { %d timeout %s };", r.ListenPort, timeout)
+			fmt.Fprintf(&definitions, " elements = { %s timeout %s };", portExpression(r.ListenPort, end), timeout)
 		}
 		definitions.WriteString(" }\n")
 		expiryMatch[r.ID] = "ct original proto-dst @" + name + " "
@@ -518,9 +547,11 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		if r.Status == "paused" || exhausted[r.ID] {
 			continue
 		}
+		end, _ := rulePortEnd(r, cfg.SchemaVersion)
+		portExpr := portExpression(r.ListenPort, end)
 		for _, proto := range protocols(r.Protocol) {
-			fmt.Fprintf(&nat, "  ip daddr %s %s dport %d dnat to %s:%d\n", listen, proto, r.ListenPort, r.TargetHost, r.TargetPort)
-			tuple := fmt.Sprintf("meta l4proto %s ct original ip daddr %s ct original proto-dst %d", proto, listen, r.ListenPort)
+			fmt.Fprintf(&nat, "  ip daddr %s %s dport %s dnat to %s:%d\n", listen, proto, portExpr, r.TargetHost, r.TargetPort)
+			tuple := fmt.Sprintf("meta l4proto %s ct original ip daddr %s ct original proto-dst %s", proto, listen, portExpr)
 			fmt.Fprintf(&snatRules, "  ct status dnat %s ip daddr %s %s dport %d snat to %s\n", tuple, r.TargetHost, proto, r.TargetPort, snat)
 			for _, dir := range []string{"original", "reply"} {
 				hash := sha256.Sum256([]byte(r.TenantID + "/" + r.ID + "/" + proto + "/" + dir))

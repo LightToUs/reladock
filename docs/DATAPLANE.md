@@ -44,7 +44,7 @@ Identifiers use literal ASCII letters/digits/underscore/hyphen, length 1–80. N
 
 | Flag | Meaning/default |
 | --- | --- |
-| `--config` | Strict NodeConfig JSON regular file, at most 2 MiB |
+| `--config` | Strict NodeConfig JSON regular file, at most 4 MiB |
 | `--node` | Required expected node identity |
 | `--snat` | Required concrete source NAT IPv4 |
 | `--dry-run` | Compile/print only; default without apply |

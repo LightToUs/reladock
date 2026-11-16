@@ -105,7 +105,7 @@ func compile(cfg platform.NodeConfig, o Options, history []Class) (Plan, error) 
 		return Plan{}, errors.New("invalid shaping configuration or historical classifier collision")
 	}
 	addr, e := netip.ParseAddr(cfg.ListenAddress)
-	if e != nil || !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsLoopback() || (cfg.SchemaVersion != 1 && cfg.SchemaVersion != 2) || cfg.Generation < 1 || cfg.NodeID != o.NodeID || len(cfg.Rules) > 65533 {
+	if e != nil || !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsLoopback() || cfg.SchemaVersion < 1 || cfg.SchemaVersion > 4 || cfg.Generation < 1 || cfg.NodeID != o.NodeID || len(cfg.Rules) > 65533 {
 		return bad()
 	}
 	cfg.Rules = append([]platform.ConfigRule(nil), cfg.Rules...)
@@ -132,7 +132,13 @@ func compile(cfg platform.NodeConfig, o Options, history []Class) (Plan, error) 
 	ports := map[string]bool{}
 	var markings []Marking
 	for _, r := range cfg.Rules {
-		if !id.MatchString(r.ID) || !id.MatchString(r.TenantID) || seen[r.ID] || r.NodeID != cfg.NodeID || r.Version < 1 || (r.Status != "pending-agent" && r.Status != "paused") || (r.Protocol != "tcp" && r.Protocol != "udp" && r.Protocol != "both") || r.ListenPort < 20000 || r.ListenPort > 60000 || r.BandwidthMbps < 1 || r.BandwidthMbps > 1000 || r.BandwidthMbps > o.Lease.LinkMbps {
+		end := r.ListenPort
+		portsValid := r.ListenPort >= 20000 && r.ListenPort <= 60000 && r.ListenPortEnd == 0
+		if cfg.SchemaVersion == 4 {
+			end = r.ListenPortEnd
+			portsValid = r.ListenPort >= 1 && end >= r.ListenPort && end <= 65535 && end-r.ListenPort+1 <= 4096
+		}
+		if !id.MatchString(r.ID) || !id.MatchString(r.TenantID) || seen[r.ID] || r.NodeID != cfg.NodeID || r.Version < 1 || (r.Status != "pending-agent" && r.Status != "paused") || (r.Protocol != "tcp" && r.Protocol != "udp" && r.Protocol != "both") || !portsValid || r.BandwidthMbps < 1 || r.BandwidthMbps > 1000 || r.BandwidthMbps > o.Lease.LinkMbps {
 			return bad()
 		}
 		seen[r.ID] = true
@@ -144,13 +150,19 @@ func compile(cfg platform.NodeConfig, o Options, history []Class) (Plan, error) 
 		marks[c.Mark] = key
 		byIdentity[key] = c
 		for _, proto := range protocols(r.Protocol) {
-			port := fmt.Sprintf("%s/%d", proto, r.ListenPort)
-			if ports[port] {
-				return bad()
+			for value := r.ListenPort; value <= end; value++ {
+				port := fmt.Sprintf("%s/%d", proto, value)
+				if ports[port] {
+					return bad()
+				}
+				ports[port] = true
 			}
-			ports[port] = true
 			if c.Active {
-				markings = append(markings, Marking{RuleID: c.RuleID, TenantID: c.TenantID, Protocol: proto, Mark: c.Mark, Mask: c.Mask, ClassID: c.ClassID, NFT: fmt.Sprintf("oifname \"%s\" ct status dnat meta l4proto %s ct original ip daddr %s ct original proto-dst %d ct direction { original, reply } meta mark set (meta mark & 0x000000ff) | 0x%08x", o.Lease.Device, proto, addr, r.ListenPort, c.Mark)})
+				portExpr := fmt.Sprint(r.ListenPort)
+				if end != r.ListenPort {
+					portExpr = fmt.Sprintf("%d-%d", r.ListenPort, end)
+				}
+				markings = append(markings, Marking{RuleID: c.RuleID, TenantID: c.TenantID, Protocol: proto, Mark: c.Mark, Mask: c.Mask, ClassID: c.ClassID, NFT: fmt.Sprintf("oifname \"%s\" ct status dnat meta l4proto %s ct original ip daddr %s ct original proto-dst %s ct direction { original, reply } meta mark set (meta mark & 0x000000ff) | 0x%08x", o.Lease.Device, proto, addr, portExpr, c.Mark)})
 			}
 		}
 	}

@@ -26,6 +26,8 @@ type applyRecord struct {
 	PayloadBytes []byte `json:"payloadBytes"`
 }
 
+const maxAgentJournalBytes = 12 * 1024 * 1024
+
 // ApplyState owns a private control journal and cross-process cycle lock.
 // The adapter uses a separate dataplane subdirectory and its own kernel lock.
 // All processes for a node/network namespace must use the same state root.
@@ -69,7 +71,7 @@ func (s *ApplyState) load(ctx context.Context) (*applyRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 4<<20 {
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > maxAgentJournalBytes {
 		return nil, errors.New("unsafe agent delivery journal")
 	}
 	f, err := os.Open(path)
@@ -78,7 +80,7 @@ func (s *ApplyState) load(ctx context.Context) (*applyRecord, error) {
 	}
 	defer f.Close()
 	var record applyRecord
-	decoder := json.NewDecoder(io.LimitReader(f, (4<<20)+1))
+	decoder := json.NewDecoder(io.LimitReader(f, maxAgentJournalBytes+1))
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&record); err != nil {
 		return nil, err
@@ -101,7 +103,7 @@ func (s *ApplyState) save(ctx context.Context, record *applyRecord) error {
 	if err != nil {
 		return err
 	}
-	if len(data) > 4<<20 {
+	if len(data) > maxAgentJournalBytes {
 		return errors.New("agent journal exceeds size bound")
 	}
 	f, err := os.CreateTemp(s.dir, ".delivery-*")

@@ -1,5 +1,11 @@
 # 系统架构与技术约束
 
+## 企业专属自定义入口端口段（schema v42 / 配置 schema 4）
+
+`relay_rules` 保存包含式 `listen_port`/`listen_port_end`，`endpoint_allocations` 继续为每个协议/端口保存独立分配身份和数据库唯一键。`node_customer_port_pools` 为每节点、每协议定义允许的客户端口池，迁移默认建立 20000–60000；创建事务在节点锁内同时复核企业专属归属、套餐、端口池、重叠、每规则 4096 数字端口和每节点 10000 协议端点上限，再原子写规则、全部精确 allocation、幂等记录、配置 Outbox 与审计。共享及规则专属节点不接受自定义范围。
+
+包含范围的完整快照使用配置 schema 4。Agent 以当前证书的最新认证心跳声明能力；控制端在能力缺失或身份更换后不出租该快照，不能退化成只应用起始端口。Agent 校验范围与精确 allocation 双射，nftables/tc 使用包含式区间匹配，但 forward guard、quarantine 和来源连接 manifest 保留逐端点身份。一条范围只生成一组规则级计量计数、额度和整形 class。创建后端口身份锁定；本增量不实现原地改段或范围拆分迁移。
+
 ## Google OIDC 身份绑定（schema v41）
 
 `internal/googleauth` 使用固定 Google 授权、token 与 JWKS 端点，授权请求带 state、nonce 和 PKCE S256；回调只在 OIDC 签名、issuer、audience、expiry、nonce 与 verified email 全部通过后产生规范身份。provider HTTP 客户端拒绝代理、重定向和无界响应，错误不会回显 token、Client Secret 或上游正文。
@@ -75,7 +81,7 @@ flowchart TD
 - `cmd/reladock`：连接数据库并执行事务/advisory lock 迁移，连接失败拒绝启动；默认绑定回环，生产模式要求明确 HTTPS origin 与 TLS 证书，公网明文监听被拒绝。
 - `internal/platform`：企业、成员、会话、规则、端口资源、幂等请求与审计。注册与规则操作使用事务；密码采用随机盐的 PBKDF2-SHA256（600000 次），会话使用 256 位随机令牌，仅持久化 SHA256 摘要，24 小时有效，退出立即撤销。
 - `internal/web`：认证、租户写授权、同源/Host 检查、定制请求头、严格 JSON、8 KiB 业务正文限制和 HTTP 超时。开发模式进程内限流，生产模式 PostgreSQL 共享限流；Cookie 为 HttpOnly、SameSite=Strict，HTTPS 下启用 Secure/HSTS。独立支付 webhook 验签原始报文，上限 256 KiB，具有独立预算。
-- 端口按 `(node_id, listen_address, protocol, listen_port)` 数据库主键唯一；节点级事务锁分配 20000–60000 范围最小可用端口。TCP/UDP 可共用相同数字端口；both 同时预留，两者与规则、幂等记录、审计一起提交或回滚。
+- 端口按 `(node_id, listen_address, protocol, listen_port)` 数据库主键唯一；节点级事务锁为自动模式从默认 20000–60000 池分配最小可用单端口。企业专属创建可在每协议池内请求最多 4096 个连续数字端口，并为 TCP/UDP 每个端点建立精确 allocation；both 同时预留，两者与规则、幂等记录、配置和审计一起提交或回滚。
 - 创建规则必须提交企业内唯一的 `Idempotency-Key`（8–128 位字母数字及 `._:-`）；相同规范化请求重放返回原规则，不同请求返回冲突。幂等记录暂不自动过期。
 - 暂停保留端口；删除软删除规则并为每个 TCP/UDP allocation 建立 retirement，入队 schema-2 缺席快照。快照在 raw prerouting 安装新连接 quarantine，并保留 allocation-ID forward guard；平台只有在 applied quarantine 之后才允许领取精确清理任务。apply-only Agent 通过 mTLS 领取并确认任务，本地持久 journal 后按精确五元约束清理 conntrack，复核 quarantine 与零匹配，再持久化 proof、回报并等待 ACK；只有完整闭环才释放 allocation 并允许同一前驱的受控复用。validation-only Agent 不领取清理任务。重复暂停/删除不增加版本或审计。
 - 规则期望版本从 1 开始；企业编辑名称、目标主机、目标端口或逐规则带宽时必须提交当前 `desiredVersion`，旧版本返回冲突。入口节点、传输类型和已分配端口不通过编辑迁移；活动套餐存在时编辑带宽不得超过其版本上限。编辑、版本递增、完整配置快照与 `rule.update` 审计原子提交。仅 applied 回报推进生效版本与 applied_status，校验不推进。节点 generation 与规则版本分开。applied 不代表端到端健康，页面不得显示运行中；无虚构充值、流量或余额。
@@ -103,7 +109,7 @@ flowchart TD
 
 其他节点的最终退役采用不可逆的 `maintenance -> draining -> retired` 状态机。进入 draining 会撤销安装凭证并禁止新建/恢复规则、升级和普通节点修改，但仍允许删除规则、配置重试、Agent 联系与必要的证书轮换，以便完成排空。最终退役要求规则、allocation、未释放 retirement、活动配置与升级均为空，desired/applied generation 一致，并取得与当前证书、内核 boot ID、Agent 启动时间、版本、journal sequence、last-good 摘要及完整 reusable quarantine 集合绑定的短时 mTLS attestation。心跳身份变化会消费旧证明；最终事务再次锁定节点并重算 quarantine 集合后才撤销节点身份。节点、审计、历史 retirement 与 quarantine 证据保留，不提供强制释放捷径。
 
-`config_outbox` 保存不可变 payload、SHA256 checksum、generation、状态、尝试次数与租约。创建/编辑/暂停/恢复/删除规则时，先获取节点事务锁，再更新规则/端口、生成完整快照、写审计，全部原子提交；创建还先获取企业幂等锁，编辑还锁定规则并比较 `desiredVersion`。快照包括节点全部未删除规则及企业标识，暂停规则明确标识，删除通过完整期望集合中缺失表达。当前 payload 上限 2 MiB，历史快照暂不清理。
+`config_outbox` 保存不可变 payload、SHA256 checksum、generation、状态、尝试次数与租约。创建/编辑/暂停/恢复/删除规则时，先获取节点事务锁，再更新规则/端口、生成完整快照、写审计，全部原子提交；创建还先获取企业幂等锁，编辑还锁定规则并比较 `desiredVersion`。快照包括节点全部未删除规则及企业标识，暂停规则明确标识，删除通过完整期望集合中缺失表达。当前 payload 上限 4 MiB；Agent 应用报告上限 4 MiB，持久交付日志上限 12 MiB，历史快照暂不清理。
 
 Agent 领取最新 generation，领取租约 60 秒，最多 5 次。应用前以同一 token/checksum 调用 begin；节点锁与唯一 applying 索引串行化。applying 不因租约过期自动清除，防止旧执行者尚未停止时新任务进入。规则变更可以排队，但 Claim 不绕过应用屏障。陈旧 applied 仅记录其实际版本，不能确认较新删除。失败只能在独立本地 Stable 核对后终结；未知结果保留 Agent journal 和平台屏障。丢失状态或轮换后无法恢复凭据须人工核对，不能通过超时或随意 SQL 清屏障。
 

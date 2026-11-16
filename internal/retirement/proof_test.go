@@ -42,7 +42,7 @@ func TestBuildProofRejectsUnboundOrUnsafeValues(t *testing.T) {
 		"node":         func(v *ProofInput) { v.NodeID = "bad node" },
 		"address":      func(v *ProofInput) { v.Address = "0.0.0.0" },
 		"protocol":     func(v *ProofInput) { v.Protocol = "both" },
-		"port":         func(v *ProofInput) { v.Port = 1 },
+		"port":         func(v *ProofInput) { v.Port = 0 },
 		"generation":   func(v *ProofInput) { v.QuarantineGeneration = 0 },
 		"guard digest": func(v *ProofInput) { v.GuardBeforeDigest = "secret" },
 		"version":      func(v *ProofInput) { v.ConntrackVersion = strings.Repeat("x", 81) },

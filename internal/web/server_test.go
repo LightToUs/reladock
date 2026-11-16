@@ -131,6 +131,49 @@ func TestAuthenticatedRuleFlowAndLogout(t *testing.T) {
 	}
 }
 
+func TestDedicatedTenantRuleHTTPAcceptsCustomPortRange(t *testing.T) {
+	store := testWebStore(t)
+	var assets fs.FS = fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>RelaDock</html>")}}
+	h := New(store, assets, "http://127.0.0.1:3001")
+	registered := request(h, http.MethodPost, "/api/auth/register", `{"company":"Range HTTP","email":"range-http@example.com","password":"long-test-password-42"}`, nil)
+	if registered.Code != http.StatusCreated {
+		t.Fatalf("register: %d %s", registered.Code, registered.Body.String())
+	}
+	who, err := store.Session(context.Background(), registered.Result().Cookies()[0].Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SetPlatformAdmin(context.Background(), who.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	admin, _, err := store.Login(context.Background(), who.Email, "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.AdminAddNode(context.Background(), admin, platform.NodeInput{ID: "range-http", Name: "Range HTTP", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: platform.ResourceModeDedicatedTenant, DedicatedTenantID: who.TenantID}); err != nil {
+		t.Fatal(err)
+	}
+	loggedIn := request(h, http.MethodPost, "/api/auth/login", `{"email":"range-http@example.com","password":"long-test-password-42"}`, nil)
+	if loggedIn.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", loggedIn.Code, loggedIn.Body.String())
+	}
+	created := request(h, http.MethodPost, "/api/rules", `{"name":"Range","protocol":"udp","targetHost":"198.51.100.20","targetPort":443,"bandwidthMbps":100,"nodeId":"range-http","listenPort":40000,"listenPortEnd":41000}`, loggedIn.Result().Cookies()[0])
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", created.Code, created.Body.String())
+	}
+	var rule platform.Rule
+	if err = json.Unmarshal(created.Body.Bytes(), &rule); err != nil {
+		t.Fatal(err)
+	}
+	if rule.ListenPort != 40000 || rule.ListenPortEnd != 41000 {
+		t.Fatalf("response range=%d-%d body=%s", rule.ListenPort, rule.ListenPortEnd, created.Body.String())
+	}
+	invalid := request(h, http.MethodPost, "/api/rules", `{"name":"End only","protocol":"udp","targetHost":"198.51.100.20","targetPort":443,"bandwidthMbps":100,"nodeId":"range-http","listenPortEnd":41000}`, loggedIn.Result().Cookies()[0])
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("end-only status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func TestChangePasswordEndpointKeepsCurrentSessionAndRejectsOldPassword(t *testing.T) {
 	h := testServer(t)
 	registered := request(h, "POST", "/api/auth/register", `{"company":"Password","email":"change-password-http@example.com","password":"long-test-password-42"}`, nil)

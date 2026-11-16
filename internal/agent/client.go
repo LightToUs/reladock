@@ -151,11 +151,11 @@ func (c *Client) claim(ctx context.Context) (bool, error) {
 	if response.StatusCode != 200 {
 		return false, fmt.Errorf("claim rejected: HTTP %d", response.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, (3<<20)+1))
+	body, err := io.ReadAll(io.LimitReader(response.Body, platform.MaxConfigEnvelopeBytes+1))
 	if err != nil {
 		return false, err
 	}
-	if len(body) > 3<<20 {
+	if len(body) > platform.MaxConfigEnvelopeBytes {
 		return false, errors.New("oversized config response")
 	}
 	var job platform.ConfigJob
@@ -253,14 +253,18 @@ func (c *Client) apply(ctx context.Context, record *applyRecord) (bool, error) {
 	cancel()
 	var appliedManifest *sourceflow.Manifest
 	var appliedManifestDigest string
-	if applyErr == nil && cfg.SchemaVersion == 3 {
+	needsSourceManifest := false
+	for _, rule := range cfg.Rules {
+		needsSourceManifest = needsSourceManifest || rule.SourceLoggingEnabled
+	}
+	if applyErr == nil && needsSourceManifest {
 		provider, ok := c.Applier.(sourceFlowManifestProvider)
 		if !ok {
-			return false, errors.New("application fence retained: schema-3 manifest provider unavailable")
+			return false, errors.New("application fence retained: source-flow manifest provider unavailable")
 		}
 		manifest, digest, manifestErr := provider.SourceFlowManifest()
 		if manifestErr != nil || sourceflow.ValidateManifest(manifest, digest) != nil || manifest.NodeID != cfg.NodeID || manifest.Generation != cfg.Generation {
-			return false, errors.New("application fence retained: schema-3 manifest unavailable or invalid")
+			return false, errors.New("application fence retained: source-flow manifest unavailable or invalid")
 		}
 		appliedManifest = &manifest
 		appliedManifestDigest = digest

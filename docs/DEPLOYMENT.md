@@ -74,6 +74,14 @@ Google 授权登录为可选连接器。`GOOGLE_OIDC_CLIENT_ID` 与 `GOOGLE_OIDC
 
 复制校验 Agent 二进制及本节点独立的 `ca.crt`、`agent.crt`、`agent.key`。配置 `agent.env.example` 并安装 `reladock-agent.service`。校验服务使用非特权账号，只有出站 mTLS 联系能力。实际转发命令与此服务分离；`docs/DATAPLANE.md` 描述 Adapter 的限制和验收，不能用校验通过代替规则已生效。
 
+### 自定义入口端口段版本门禁
+
+包含自定义范围的节点配置使用 schema 4。兼容 Agent 通过认证心跳声明范围能力；控制端只在当前证书身份已声明能力后出租范围快照，证书注册、替换、轮换或撤销会清除旧能力并等待新身份重新声明。控制端与旧 Agent 可以先后滚动升级，但范围规则会保持待交付，绝不降级成只转发起始端口。
+
+默认客户端口池仍为每协议 20000–60000；数据库结构允许受审运维另行配置 1–65535 内的池，但当前没有管理页面。创建前必须同时核对云安全组、主机入站策略和任何上游 ACL 覆盖完整范围；平台只管理自身 nftables/tc 对象，不自动开放外部防火墙。每规则最多 4096 个数字端口，每节点最多 10000 个 TCP/UDP 精确端点。一条范围仍共享一个规则级带宽、流量额度、计量和账单，不应按端口推导独立额度。
+
+发布兼容 Agent 后不要静默升级生产节点：先备份二进制、systemd、PKI、control journal、dataplane/shaping 状态及两类 WAL，验证固定发布摘要，再使用既有受控升级或人工安装流程。升级成功需分别看到新版本心跳、范围能力和同 generation 配置 applied；这些事实仍不等于客户端端到端协议健康。真实 Linux 验收至少覆盖范围首/中/末端口、范围外拒绝、TCP/UDP/both、暂停/删除、到期/额度、重启恢复、失败回滚、计量不按端口倍增及精确 retirement。
+
 ### 显式应用模式
 
 来源连接采集还要求 Agent 增加一个与 `--metering-wal-dir` 不同的私有绝对路径 `--source-flow-wal-dir`，并具备 conntrack netlink 所需 `CAP_NET_ADMIN`。未配置该目录时 apply 转发照常工作，但 Agent 不声明来源记录能力，平台不能启用规则。该 WAL 只保存连接元数据和缺口，不得与计费 WAL 共用、删除或手工清空来处理积压。

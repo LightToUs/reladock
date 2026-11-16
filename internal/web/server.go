@@ -107,7 +107,7 @@ func decodeLimit(w http.ResponseWriter, r *http.Request, value any, limit int64)
 		respond(w, 415, map[string]string{"error": "需要 application/json"})
 		return false
 	}
-	if limit < 1 || limit > 2*1024*1024 {
+	if limit < 1 || limit > platform.MaxConfigReportBytes {
 		failure(w, platform.ErrInvalid)
 		return false
 	}

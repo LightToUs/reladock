@@ -76,7 +76,7 @@ var shownPattern = regexp.MustCompile(`^conntrack v1\.4\.[0-9]+ \(conntrack-tool
 
 func normalizeAllocation(input Allocation) (Allocation, error) {
 	address, err := netip.ParseAddr(input.Address)
-	if err != nil || !address.Is4() || !address.IsGlobalUnicast() || address.IsLoopback() || address.String() != input.Address || (input.Protocol != "tcp" && input.Protocol != "udp") || input.Port < 20000 || input.Port > 60000 {
+	if err != nil || !address.Is4() || !address.IsGlobalUnicast() || address.IsLoopback() || address.String() != input.Address || (input.Protocol != "tcp" && input.Protocol != "udp") || input.Port < 1 || input.Port > 65535 {
 		return Allocation{}, fail("state-mismatch")
 	}
 	return Allocation{Address: address.String(), Protocol: input.Protocol, Port: input.Port}, nil

@@ -73,7 +73,7 @@ func (s *Store) ReportProbe(ctx context.Context, nodeID string, result probe.Res
 	var tenantID string
 	var rule Rule
 	var deliveryGeneration int64
-	err = tx.QueryRow(ctx, `SELECT tenant_id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,status,desired_version,applied_version,applied_status,delivery_generation FROM relay_rules WHERE id=$1 AND node_id=$2 FOR SHARE`, result.RuleID, nodeID).Scan(&tenantID, &rule.Name, &rule.Protocol, &rule.TargetHost, &rule.TargetPort, &rule.BandwidthMbps, &rule.NodeID, &rule.ListenPort, &rule.Status, &rule.DesiredVersion, &rule.AppliedVersion, &rule.AppliedStatus, &deliveryGeneration)
+	err = tx.QueryRow(ctx, `SELECT tenant_id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,listen_port_end,status,desired_version,applied_version,applied_status,delivery_generation FROM relay_rules WHERE id=$1 AND node_id=$2 FOR SHARE`, result.RuleID, nodeID).Scan(&tenantID, &rule.Name, &rule.Protocol, &rule.TargetHost, &rule.TargetPort, &rule.BandwidthMbps, &rule.NodeID, &rule.ListenPort, &rule.ListenPortEnd, &rule.Status, &rule.DesiredVersion, &rule.AppliedVersion, &rule.AppliedStatus, &deliveryGeneration)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -108,7 +108,7 @@ func (s *Store) ReportProbe(ctx context.Context, nodeID string, result probe.Res
 	if result.ObservedAt.After(now.Add(MaxProbeFutureSkew)) {
 		return ErrConflict
 	}
-	if len(payload) > 2<<20 {
+	if len(payload) > MaxConfigPayloadBytes {
 		return ErrConflict
 	}
 	hash := sha256.Sum256(payload)
@@ -116,7 +116,7 @@ func (s *Store) ReportProbe(ctx context.Context, nodeID string, result probe.Res
 		return ErrConflict
 	}
 	var cfg NodeConfig
-	if json.Unmarshal(payload, &cfg) != nil || cfg.NodeID != nodeID || cfg.Generation != result.Generation || (cfg.SchemaVersion != 1 && cfg.SchemaVersion != 2) {
+	if json.Unmarshal(payload, &cfg) != nil || cfg.NodeID != nodeID || cfg.Generation != result.Generation || cfg.SchemaVersion < 1 || cfg.SchemaVersion > 4 {
 		return ErrConflict
 	}
 	matches := 0
@@ -125,7 +125,11 @@ func (s *Store) ReportProbe(ctx context.Context, nodeID string, result probe.Res
 			continue
 		}
 		matches++
-		if r.TenantID != tenantID || r.RuleInput != rule.RuleInput || r.Version != rule.DesiredVersion || r.ListenPort != rule.ListenPort || r.Status != "pending-agent" {
+		configEnd := r.ListenPort
+		if cfg.SchemaVersion == 4 {
+			configEnd = r.ListenPortEnd
+		}
+		if r.TenantID != tenantID || r.RuleInput != rule.RuleInput || r.Version != rule.DesiredVersion || r.ListenPort != rule.ListenPort || configEnd != rule.ListenPortEnd || r.Status != "pending-agent" {
 			return ErrConflict
 		}
 	}

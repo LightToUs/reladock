@@ -60,7 +60,7 @@ func normalizeDrainQuarantines(values []DrainQuarantine) ([]DrainQuarantine, err
 	for i := range result {
 		value := &result[i]
 		address, err := netip.ParseAddr(value.Address)
-		if err != nil || !address.Is4() || !address.IsGlobalUnicast() || address.IsLoopback() || address.String() != value.Address || !upgradeIDPattern.MatchString(value.RetirementID) || !upgradeIDPattern.MatchString(value.AllocationID) || seenRetirement[value.RetirementID] || seenAllocation[value.AllocationID] || (value.Protocol != "tcp" && value.Protocol != "udp") || value.Port < 20000 || value.Port > 60000 || !fingerprintPattern.MatchString(value.GuardDigest) || value.GuardDigest != DrainGuardDigest(*value) {
+		if err != nil || !address.Is4() || !address.IsGlobalUnicast() || address.IsLoopback() || address.String() != value.Address || !upgradeIDPattern.MatchString(value.RetirementID) || !upgradeIDPattern.MatchString(value.AllocationID) || seenRetirement[value.RetirementID] || seenAllocation[value.AllocationID] || (value.Protocol != "tcp" && value.Protocol != "udp") || value.Port < 1 || value.Port > 65535 || !fingerprintPattern.MatchString(value.GuardDigest) || value.GuardDigest != DrainGuardDigest(*value) {
 			return nil, ErrInvalid
 		}
 		seenRetirement[value.RetirementID], seenAllocation[value.AllocationID] = true, true

@@ -76,7 +76,7 @@ func TestMTLSAgentEnrollmentValidationAndRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := agent.Client{HTTP: client, BaseURL: srv.URL, NodeID: "hk-01"}
-	heartbeat := platform.AgentHeartbeat{Version: "validation-only/0.8.0", Mode: "validation", StartedAt: time.Now().Add(-time.Minute), CertificateNotAfter: cert.NotAfter, RotationState: "idle"}
+	heartbeat := platform.AgentHeartbeat{PortRangeSupported: true, Version: "validation-only/0.8.0", Mode: "validation", StartedAt: time.Now().Add(-time.Minute), CertificateNotAfter: cert.NotAfter, RotationState: "idle"}
 	if err = runner.ReportHeartbeat(ctx, heartbeat); err != nil {
 		t.Fatalf("agent heartbeat: %v", err)
 	}

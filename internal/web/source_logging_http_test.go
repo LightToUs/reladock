@@ -122,14 +122,15 @@ func TestSourceLoggingHTTPIsAdminOnlyStrictAndVersioned(t *testing.T) {
 }
 
 func TestSourceLoggingConfigReportUsesBoundedExpandedJSONLimit(t *testing.T) {
-	body := `{"payload":"` + strings.Repeat("x", 16*1024) + `"}`
+	payloadSize := 2*1024*1024 + 1024
+	body := `{"payload":"` + strings.Repeat("x", payloadSize) + `"}`
 	req := httptest.NewRequest(http.MethodPost, "https://control.test/agent/config/job/report", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	var value struct {
 		Payload string `json:"payload"`
 	}
 	expanded := httptest.NewRecorder()
-	if !decodeLimit(expanded, req, &value, 2*1024*1024) || len(value.Payload) != 16*1024 {
+	if !decodeLimit(expanded, req, &value, platform.MaxConfigReportBytes) || len(value.Payload) != payloadSize {
 		t.Fatalf("expanded bounded decoder rejected manifest: status=%d body=%s", expanded.Code, expanded.Body.String())
 	}
 	req = httptest.NewRequest(http.MethodPost, "https://control.test/agent/config/job/report", strings.NewReader(body))

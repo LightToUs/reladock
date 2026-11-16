@@ -245,7 +245,7 @@ func (s *Store) ReportUsage(ctx context.Context, nodeID string, input UsageRepor
 		if err != nil {
 			return receipt, err
 		}
-		if len(payload) > 2<<20 {
+		if len(payload) > MaxConfigPayloadBytes {
 			return receipt, ErrForbidden
 		}
 		hash := sha256.Sum256(payload)
@@ -253,7 +253,7 @@ func (s *Store) ReportUsage(ctx context.Context, nodeID string, input UsageRepor
 			return receipt, ErrForbidden
 		}
 		var config NodeConfig
-		if err = json.Unmarshal(payload, &config); err != nil || (config.SchemaVersion != 1 && config.SchemaVersion != 2) || config.NodeID != nodeID || config.Generation != input.ConfigGeneration {
+		if err = json.Unmarshal(payload, &config); err != nil || config.SchemaVersion < 1 || config.SchemaVersion > 4 || config.NodeID != nodeID || config.Generation != input.ConfigGeneration {
 			return receipt, ErrForbidden
 		}
 		authorized := false

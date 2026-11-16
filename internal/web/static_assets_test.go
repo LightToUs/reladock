@@ -702,23 +702,35 @@ func TestEnterpriseDisabledRuleInputsAreVisuallyUnavailable(t *testing.T) {
 	}
 }
 
-func TestEnterpriseUnsupportedCustomPortInputsStayDisabled(t *testing.T) {
+func TestEnterpriseCustomPortInputsAreEligibilityControlled(t *testing.T) {
 	page, err := fs.ReadFile(assets.Files, "index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := string(page)
-	for _, pattern := range []string{
-		`<select[^>]*name="portMode"[^>]*disabled[^>]*>`,
-		`<input[^>]*name="listenPort"[^>]*disabled[^>]*>`,
-		`<input[^>]*name="listenPortEnd"[^>]*disabled[^>]*>`,
+	editor, err := fs.ReadFile(assets.Files, "rule-editor.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := fs.ReadFile(assets.Files, "app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(page) + string(editor) + string(app)
+	for _, required := range []string{
+		`<option value="custom">自定义端口 / 连续端口段</option>`,
+		`resourceMode === 'dedicated-tenant'`,
+		`fields.listenPort = Number(fields.listenPort)`,
+		`fields.listenPortEnd = Number(fields.listenPortEnd)`,
+		`delete fields.portMode`,
 	} {
-		if !regexp.MustCompile(pattern).MatchString(source) {
-			t.Errorf("unsupported custom port control is not disabled: %s", pattern)
+		if !strings.Contains(source, required) {
+			t.Errorf("custom port eligibility/submission contract missing %q", required)
 		}
 	}
-	if !strings.Contains(source, "当前仅支持自动分配入口端口") {
-		t.Fatal("rule dialog does not explain why custom port controls are unavailable")
+	for _, pattern := range []string{`<input[^>]*name="listenPort"`, `<input[^>]*name="listenPortEnd"`} {
+		if !regexp.MustCompile(pattern).MatchString(string(page)) {
+			t.Errorf("custom port input missing: %s", pattern)
+		}
 	}
 }
 

@@ -10,7 +10,113 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestMaximumEndpointSnapshotsFitBoundedDeliveryLimits(t *testing.T) {
+	rules := make([]ConfigRule, 0, 2500)
+	allocations := make([]ConfigAllocation, 0, 10000)
+	for i := 0; i < 2500; i++ {
+		ruleID := fmt.Sprintf("rule-%04d", i)
+		rules = append(rules, ConfigRule{
+			ID: ruleID, TenantID: "00000000-0000-4000-8000-000000000001",
+			RuleInput:  RuleInput{Name: "range", Protocol: "both", TargetHost: "203.0.113.10", TargetPort: 65535, BandwidthMbps: 1000, NodeID: "maximum-endpoints"},
+			ListenPort: 60000, ListenPortEnd: 60001, Version: 1, Status: "pending-agent",
+		})
+		for protocolIndex, protocol := range []string{"tcp", "udp"} {
+			for offset := 0; offset < 2; offset++ {
+				allocationIndex := i*4 + protocolIndex*2 + offset
+				allocations = append(allocations, ConfigAllocation{
+					ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", allocationIndex), RuleID: ruleID,
+					Protocol: protocol, Address: "203.0.113.254", Port: 1 + allocationIndex%65535,
+				})
+			}
+		}
+	}
+	payload, err := json.Marshal(NodeConfig{SchemaVersion: 4, NodeID: "maximum-endpoints", Generation: 1, ListenAddress: "203.0.113.254", Rules: rules, Allocations: allocations, Retirements: []ConfigRetirement{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) > MaxConfigPayloadBytes {
+		t.Fatalf("maximum endpoint snapshot size %d exceeds %d-byte delivery bound", len(payload), MaxConfigPayloadBytes)
+	}
+}
+
+func TestRangeConfigWaitsForCapableAgentAndUsesSchemaV4(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	owner, _ := register(t, s, "range-delivery@example.com")
+	admin, _ := adminIdentity(t, s)
+	addDedicatedRangeNode(t, s, admin, owner, "range-delivery")
+	input := ruleInput("udp")
+	input.NodeID, input.ListenPort, input.ListenPortEnd = "range-delivery", 40000, 40002
+	if _, err := s.CreateRule(ctx, owner, "range-delivery-key", input); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := strings.Repeat("a", 64)
+	if err := s.EnrollNode(ctx, "range-delivery", fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := validAgentHeartbeat(time.Now().UTC())
+	heartbeat.PortRangeSupported = false
+	if err := s.ReportAgentHeartbeat(ctx, "range-delivery", fingerprint, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	if job, err := s.ClaimConfig(ctx, "range-delivery", "legacy-agent", fingerprint); err != nil || job != nil {
+		t.Fatalf("unsupported agent leased range job=%+v err=%v", job, err)
+	}
+	heartbeat.PortRangeSupported = true
+	if err := s.ReportAgentHeartbeat(ctx, "range-delivery", fingerprint, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.ClaimConfig(ctx, "range-delivery", "range-agent", fingerprint)
+	if err != nil || job == nil {
+		t.Fatalf("capable agent claim=%+v err=%v", job, err)
+	}
+	var cfg NodeConfig
+	if err = json.Unmarshal(job.Payload, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SchemaVersion != 4 || len(cfg.Rules) != 1 || cfg.Rules[0].ListenPort != 40000 || cfg.Rules[0].ListenPortEnd != 40002 || len(cfg.Allocations) != 3 {
+		t.Fatalf("range config=%+v", cfg)
+	}
+}
+
+func TestLowSinglePortAlsoRequiresSchemaV4Capability(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	owner, _ := register(t, s, "low-port-delivery@example.com")
+	admin, _ := adminIdentity(t, s)
+	addDedicatedRangeNode(t, s, admin, owner, "low-port-delivery")
+	if _, err := s.pool.Exec(ctx, "UPDATE node_customer_port_pools SET port_start=1,port_end=65535 WHERE node_id='low-port-delivery' AND protocol='tcp'"); err != nil {
+		t.Fatal(err)
+	}
+	input := ruleInput("tcp")
+	input.NodeID, input.ListenPort = "low-port-delivery", 443
+	if _, err := s.CreateRule(ctx, owner, "low-port-delivery-key", input); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := strings.Repeat("b", 64)
+	if err := s.EnrollNode(ctx, "low-port-delivery", fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if job, err := s.ClaimConfig(ctx, "low-port-delivery", "legacy-agent", fingerprint); err != nil || job != nil {
+		t.Fatalf("legacy agent leased low-port schema four job=%+v err=%v", job, err)
+	}
+	heartbeat := validAgentHeartbeat(time.Now().UTC())
+	heartbeat.PortRangeSupported = true
+	if err := s.ReportAgentHeartbeat(ctx, "low-port-delivery", fingerprint, heartbeat); err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.ClaimConfig(ctx, "low-port-delivery", "range-agent", fingerprint)
+	if err != nil || job == nil {
+		t.Fatalf("capable agent claim=%+v err=%v", job, err)
+	}
+	var cfg NodeConfig
+	if err = json.Unmarshal(job.Payload, &cfg); err != nil || cfg.SchemaVersion != 4 || cfg.Rules[0].ListenPortEnd != 443 {
+		t.Fatalf("low-port config=%+v err=%v", cfg, err)
+	}
+}
 
 func TestRuleMutationsEnqueueCompleteVersionedSnapshots(t *testing.T) {
 	s := testStore(t)

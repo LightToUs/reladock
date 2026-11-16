@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 )
 
-const maxStateBytes = 8 * 1024 * 1024
+const maxStateBytes = 16 * 1024 * 1024
 
 // ErrStateUncertain marks an error after the state file has been renamed:
 // callers must not assume the old state remains visible or durable.

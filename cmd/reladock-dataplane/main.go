@@ -71,10 +71,10 @@ func run(ctx context.Context, args []string, out io.Writer, d dependencies) erro
 		if e != nil {
 			return e
 		}
-		if !info.Mode().IsRegular() || info.Size() > 2*1024*1024 {
-			return errors.New("config must be a regular file at most 2 MiB")
+		if !info.Mode().IsRegular() || info.Size() > platform.MaxConfigPayloadBytes {
+			return errors.New("config must be a regular file at most 4 MiB")
 		}
-		dec := json.NewDecoder(io.LimitReader(f, 2*1024*1024+1))
+		dec := json.NewDecoder(io.LimitReader(f, platform.MaxConfigPayloadBytes+1))
 		dec.DisallowUnknownFields()
 		if e = dec.Decode(&cfg); e != nil {
 			return e

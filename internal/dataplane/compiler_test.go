@@ -45,6 +45,44 @@ func fixtureV2() platform.NodeConfig {
 	return c
 }
 
+func fixtureV4() platform.NodeConfig {
+	c := fixtureV2()
+	c.SchemaVersion = 4
+	c.Rules[0].ListenPort = 40000
+	c.Rules[0].ListenPortEnd = 40002
+	c.Allocations = []platform.ConfigAllocation{
+		{ID: "11111111-1111-4111-8111-111111111111", RuleID: c.Rules[0].ID, Protocol: "tcp", Address: c.ListenAddress, Port: 40000},
+		{ID: "22222222-2222-4222-8222-222222222222", RuleID: c.Rules[0].ID, Protocol: "tcp", Address: c.ListenAddress, Port: 40001},
+		{ID: "33333333-3333-4333-8333-333333333333", RuleID: c.Rules[0].ID, Protocol: "tcp", Address: c.ListenAddress, Port: 40002},
+	}
+	c.Retirements = nil
+	return c
+}
+
+func TestCompileV4UsesInclusiveRangeWithOneRuleIdentity(t *testing.T) {
+	p, err := Compile(context.Background(), fixtureV4(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"tcp dport 40000-40002 dnat to 198.51.100.2:443",
+		"ct original proto-dst 40000-40002",
+	} {
+		if !strings.Contains(p.Script, want) {
+			t.Fatalf("missing %q in %s", want, p.Script)
+		}
+	}
+	if len(p.Counters) != 2 || len(p.ForwardGuards) != 3 || len(p.Allocations) != 3 {
+		t.Fatalf("range split rule identity: counters=%d guards=%d allocations=%d", len(p.Counters), len(p.ForwardGuards), len(p.Allocations))
+	}
+
+	broken := fixtureV4()
+	broken.Allocations = append(broken.Allocations[:1], broken.Allocations[2:]...)
+	if _, err = Compile(context.Background(), broken, options()); err == nil {
+		t.Fatal("accepted range with a missing exact allocation")
+	}
+}
+
 func TestCompileBothAndPaused(t *testing.T) {
 	cfg := fixture()
 	paused := cfg.Rules[0]

@@ -130,7 +130,7 @@ ORDER BY r.created_at DESC,r.id LIMIT 50 OFFSET $3`, tenantID, nodeID, (page-1)*
 	defer rows.Close()
 	for rows.Next() {
 		var r ManagedRule
-		if err = rows.Scan(&r.TenantID, &r.Company, &r.ID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.Status, &r.DesiredVersion, &r.AppliedVersion, &r.CreatedAt, &r.UpdatedAt, &r.AppliedStatus, &r.SourceLoggingEnabled, &r.SourceLoggingAppliedEnabled, &r.SourceLoggingAppliedVersion, &r.SourceLoggingAppliedGeneration, &r.SourceLoggingSupported, &r.SourceLoggingAgentMode, &r.SourceLoggingHeartbeatFresh, &r.SourceLoggingStatusFresh, &r.SourceLoggingCollectorStatus); err != nil {
+		if err = rows.Scan(&r.TenantID, &r.Company, &r.ID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.ListenPortEnd, &r.Status, &r.DesiredVersion, &r.AppliedVersion, &r.CreatedAt, &r.UpdatedAt, &r.AppliedStatus, &r.SourceLoggingEnabled, &r.SourceLoggingAppliedEnabled, &r.SourceLoggingAppliedVersion, &r.SourceLoggingAppliedGeneration, &r.SourceLoggingSupported, &r.SourceLoggingAgentMode, &r.SourceLoggingHeartbeatFresh, &r.SourceLoggingStatusFresh, &r.SourceLoggingCollectorStatus); err != nil {
 			return result, err
 		}
 		r.SourceLoggingUnsupported = !r.SourceLoggingSupported || r.SourceLoggingAgentMode != "apply" || !r.SourceLoggingHeartbeatFresh

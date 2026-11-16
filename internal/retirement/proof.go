@@ -40,7 +40,7 @@ func BuildProof(input ProofInput) (platform.RetirementProof, []byte, string, err
 	address, err := netip.ParseAddr(input.Address)
 	if err != nil || !address.Is4() || !address.IsGlobalUnicast() || address.IsLoopback() || address.String() != input.Address ||
 		!proofUUID.MatchString(input.TaskID) || !proofUUID.MatchString(input.AllocationID) || !proofNode.MatchString(input.NodeID) ||
-		(input.Protocol != "tcp" && input.Protocol != "udp") || input.Port < 20000 || input.Port > 60000 || input.QuarantineGeneration < 1 ||
+		(input.Protocol != "tcp" && input.Protocol != "udp") || input.Port < 1 || input.Port > 65535 || input.QuarantineGeneration < 1 ||
 		!proofDigest.MatchString(input.GuardBeforeDigest) || !proofDigest.MatchString(input.GuardAfterDigest) || len(input.ConntrackVersion) < 1 || len(input.ConntrackVersion) > 80 ||
 		input.DeletedEntries < 0 || !proofUUID.MatchString(input.KernelBootID) || input.JournalSequence < 1 || !proofDigest.MatchString(input.GoodDigest) || input.ObservedAt.IsZero() {
 		return platform.RetirementProof{}, nil, "", errors.New("invalid retirement proof input")

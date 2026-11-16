@@ -4,16 +4,55 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"reladock/internal/platform"
+	"reladock/internal/sourceflow"
 )
+
+func TestApplyJournalFitsMaximumConfigAndEndpointManifest(t *testing.T) {
+	state, err := NewApplyState(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := make([]sourceflow.AppliedRule, 0, 10000)
+	for i := 0; i < 10000; i++ {
+		rules = append(rules, sourceflow.AppliedRule{
+			AllocationID: fmt.Sprintf("00000000-0000-4000-8000-%012d", i),
+			TenantID:     "00000000-0000-4000-8000-000000000001",
+			RuleID:       fmt.Sprintf("00000000-0000-4000-8001-%012d", i), RuleVersion: 1,
+			SourceLoggingEnabled: true, Protocol: []string{"tcp", "udp"}[i%2],
+			RelayIP: "203.0.113.254", RelayPort: i + 1,
+			TargetIP: "198.51.100.254", TargetPort: 65535,
+		})
+	}
+	manifest, digest, err := sourceflow.NewManifest("maximum-endpoints", 1, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := json.RawMessage(`"` + strings.Repeat("a", platform.MaxConfigPayloadBytes-2) + `"`)
+	record := &applyRecord{
+		Origin: "https://control.example", NodeID: "maximum-endpoints",
+		Job:    platform.ConfigJob{ID: "00000000-0000-4000-8000-000000000001", NodeID: "maximum-endpoints", Generation: 1, Payload: payload},
+		Report: &platform.ConfigReport{Outcome: "applied", SourceFlowManifest: &manifest, SourceFlowManifestDigest: digest},
+	}
+	if err = state.save(context.Background(), record); err != nil {
+		t.Fatalf("save maximum bounded delivery journal: %v", err)
+	}
+	loaded, err := state.load(context.Background())
+	if err != nil || loaded == nil || len(loaded.Job.Payload) != len(payload) || len(loaded.Report.SourceFlowManifest.Rules) != 10000 {
+		t.Fatalf("load maximum bounded delivery journal: loaded=%v err=%v", loaded != nil, err)
+	}
+}
 
 func TestApplyStateLockAcrossProcesses(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")

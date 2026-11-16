@@ -12,11 +12,20 @@ import (
 	"reladock/internal/sourceflow"
 )
 
+const (
+	// MaxConfigPayloadBytes covers the bounded 10,000 protocol-endpoint node
+	// capacity, including a safe retirement snapshot at that same capacity.
+	MaxConfigPayloadBytes  = 4 * 1024 * 1024
+	MaxConfigReportBytes   = 4 * 1024 * 1024
+	MaxConfigEnvelopeBytes = MaxConfigPayloadBytes + 64*1024
+)
+
 type ConfigRule struct {
 	ID       string `json:"id"`
 	TenantID string `json:"tenantId"`
 	RuleInput
 	ListenPort           int        `json:"listenPort"`
+	ListenPortEnd        int        `json:"listenPortEnd,omitempty"`
 	Version              int64      `json:"version"`
 	Status               string     `json:"status"`
 	SubscriptionID       string     `json:"subscriptionId,omitempty"`
@@ -103,9 +112,17 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 	if sourceFlowSchema {
 		sourceColumn, sourceRuleColumn = "source_logging_enabled", "r.source_logging_enabled"
 	}
-	query := `SELECT id,tenant_id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,desired_version,status,''::text,false,NULL::timestamptz,0::bigint,0::bigint,0::bigint,` + sourceColumn + ` FROM relay_rules WHERE node_id=$1 AND status<>'deleted' ORDER BY id`
+	var rangeSchema bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='relay_rules' AND column_name='listen_port_end')`).Scan(&rangeSchema); err != nil {
+		return err
+	}
+	rangeColumn, rangeRuleColumn := "listen_port", "r.listen_port"
+	if rangeSchema {
+		rangeColumn, rangeRuleColumn = "listen_port_end", "r.listen_port_end"
+	}
+	query := `SELECT id,tenant_id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,` + rangeColumn + `,desired_version,status,''::text,false,NULL::timestamptz,0::bigint,0::bigint,0::bigint,` + sourceColumn + ` FROM relay_rules WHERE node_id=$1 AND status<>'deleted' ORDER BY id`
 	if entitlementSchema {
-		query = `SELECT r.id,r.tenant_id,r.name,r.protocol,r.target_host,r.target_port,r.bandwidth_mbps,r.node_id,r.listen_port,r.desired_version,r.status,COALESCE(p.id::text,''),COALESCE(p.ends_at>clock_timestamp() AND COALESCE(u.upload_bytes,0)::numeric+COALESCE(u.download_bytes,0)::numeric<v.quota_bytes,false),p.ends_at,COALESCE(v.quota_bytes,0),COALESCE(u.upload_bytes,0),COALESCE(u.download_bytes,0),` + sourceRuleColumn + ` FROM relay_rules r LEFT JOIN LATERAL (SELECT p.id,p.price_version_id,p.ends_at FROM rule_subscriptions p WHERE p.rule_id=r.id OR EXISTS(SELECT 1 FROM subscription_usage su WHERE su.subscription_id=p.id AND su.rule_id=r.id) ORDER BY p.ordinal DESC LIMIT 1) p ON true LEFT JOIN plan_price_versions v ON v.id=p.price_version_id LEFT JOIN LATERAL (SELECT SUM(upload_bytes)::bigint AS upload_bytes,SUM(download_bytes)::bigint AS download_bytes FROM subscription_usage su WHERE su.subscription_id=p.id) u ON true WHERE r.node_id=$1 AND r.status<>'deleted' ORDER BY r.id`
+		query = `SELECT r.id,r.tenant_id,r.name,r.protocol,r.target_host,r.target_port,r.bandwidth_mbps,r.node_id,r.listen_port,` + rangeRuleColumn + `,r.desired_version,r.status,COALESCE(p.id::text,''),COALESCE(p.ends_at>clock_timestamp() AND COALESCE(u.upload_bytes,0)::numeric+COALESCE(u.download_bytes,0)::numeric<v.quota_bytes,false),p.ends_at,COALESCE(v.quota_bytes,0),COALESCE(u.upload_bytes,0),COALESCE(u.download_bytes,0),` + sourceRuleColumn + ` FROM relay_rules r LEFT JOIN LATERAL (SELECT p.id,p.price_version_id,p.ends_at FROM rule_subscriptions p WHERE p.rule_id=r.id OR EXISTS(SELECT 1 FROM subscription_usage su WHERE su.subscription_id=p.id AND su.rule_id=r.id) ORDER BY p.ordinal DESC LIMIT 1) p ON true LEFT JOIN plan_price_versions v ON v.id=p.price_version_id LEFT JOIN LATERAL (SELECT SUM(upload_bytes)::bigint AS upload_bytes,SUM(download_bytes)::bigint AS download_bytes FROM subscription_usage su WHERE su.subscription_id=p.id) u ON true WHERE r.node_id=$1 AND r.status<>'deleted' ORDER BY r.id`
 	}
 	rows, err := tx.Query(ctx, query, nodeID)
 	if err != nil {
@@ -114,7 +131,7 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 	for rows.Next() {
 		var r ConfigRule
 		var entitled bool
-		if err = rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.Version, &r.Status, &r.SubscriptionID, &entitled, &r.ExpiresAt, &r.QuotaBytes, &r.UsageUploadBytes, &r.UsageDownloadBytes, &r.SourceLoggingEnabled); err != nil {
+		if err = rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.ListenPortEnd, &r.Version, &r.Status, &r.SubscriptionID, &entitled, &r.ExpiresAt, &r.QuotaBytes, &r.UsageUploadBytes, &r.UsageDownloadBytes, &r.SourceLoggingEnabled); err != nil {
 			rows.Close()
 			return err
 		}
@@ -135,8 +152,11 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 			r.SourceLoggingEnabled = false
 		}
 		cfg.Rules = append(cfg.Rules, r)
-		if r.SourceLoggingEnabled {
+		if r.SourceLoggingEnabled && cfg.SchemaVersion < 3 {
 			cfg.SchemaVersion = 3
+		}
+		if r.ListenPortEnd != r.ListenPort || r.ListenPort < 20000 || r.ListenPort > 60000 {
+			cfg.SchemaVersion = 4
 		}
 	}
 	err = rows.Err()
@@ -159,6 +179,9 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 				return err
 			}
 			cfg.Allocations = append(cfg.Allocations, allocation)
+			if allocation.Port < 20000 || allocation.Port > 60000 {
+				cfg.SchemaVersion = 4
+			}
 		}
 		err = allocationRows.Err()
 		allocationRows.Close()
@@ -176,6 +199,9 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 				return err
 			}
 			cfg.Retirements = append(cfg.Retirements, retirement)
+			if retirement.Port < 20000 || retirement.Port > 60000 {
+				cfg.SchemaVersion = 4
+			}
 		}
 		err = retirementRows.Err()
 		retirementRows.Close()
@@ -183,11 +209,16 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 			return err
 		}
 	}
+	if cfg.SchemaVersion != 4 {
+		for i := range cfg.Rules {
+			cfg.Rules[i].ListenPortEnd = 0
+		}
+	}
 	payload, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	if len(payload) > 2*1024*1024 {
+	if len(payload) > MaxConfigPayloadBytes {
 		return ErrCapacity
 	}
 	hash := sha256.Sum256(payload)
@@ -247,6 +278,22 @@ func (s *Store) ClaimConfig(ctx context.Context, nodeID, agentVersion string, cr
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(job.Payload) > MaxConfigPayloadBytes {
+		return nil, ErrConflict
+	}
+	var desired NodeConfig
+	if err = json.Unmarshal(job.Payload, &desired); err != nil {
+		return nil, err
+	}
+	if desired.SchemaVersion == 4 {
+		var supported bool
+		if err = tx.QueryRow(ctx, "SELECT agent_port_range_supported FROM nodes WHERE id=$1", nodeID).Scan(&supported); err != nil {
+			return nil, err
+		}
+		if !supported {
+			return nil, tx.Commit(ctx)
+		}
 	}
 	job.LeaseToken = sessionToken()
 	job.LeaseUntil = time.Now().Add(time.Minute)
@@ -316,7 +363,7 @@ func (s *Store) ReportConfig(ctx context.Context, nodeID, jobID string, report C
 			return err
 		}
 		if state == "applied" && errorCode == report.ErrorCode {
-			if cfg.SchemaVersion == 3 {
+			if cfg.SchemaVersion == 3 || cfg.SchemaVersion == 4 {
 				var total, matching int
 				if err = tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE manifest_digest=$3) FROM applied_source_flow_rules WHERE node_id=$1 AND config_generation=$2`, nodeID, generation, report.SourceFlowManifestDigest).Scan(&total, &matching); err != nil {
 					return err

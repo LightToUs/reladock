@@ -61,6 +61,21 @@ func TestCompileAcceptsSchemaTwoNodeConfig(t *testing.T) {
 	}
 }
 
+func TestCompileV4RangeUsesOneClassAndRangeMarking(t *testing.T) {
+	cfg := config()
+	cfg.SchemaVersion = 4
+	cfg.Rules[0].Protocol = "tcp"
+	cfg.Rules[0].ListenPort = 40000
+	cfg.Rules[0].ListenPortEnd = 40002
+	p, err := Compile(cfg, options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Classes) != 1 || len(p.Markings) != 1 || !strings.Contains(p.Markings[0].NFT, "ct original proto-dst 40000-40002") {
+		t.Fatalf("range shaping split identity or missed range: %+v", p)
+	}
+}
+
 func join(cmds [][]string) string {
 	var b strings.Builder
 	for _, c := range cmds {
@@ -115,7 +130,7 @@ func TestCompileRejectsInvalidOwnershipTopologyAndInjection(t *testing.T) {
 		"unknown status":   func(c *platform.NodeConfig, _ *Options) { c.Rules[0].Status = "active" },
 		"rule injection":   func(c *platform.NodeConfig, _ *Options) { c.Rules[0].ID = "x\";drop" },
 		"generation":       func(c *platform.NodeConfig, _ *Options) { c.Generation = 0 },
-		"schema":           func(c *platform.NodeConfig, _ *Options) { c.SchemaVersion = 3 },
+		"schema":           func(c *platform.NodeConfig, _ *Options) { c.SchemaVersion = 5 },
 		"bandwidth":        func(c *platform.NodeConfig, _ *Options) { c.Rules[0].BandwidthMbps = 0 },
 		"capacity":         func(c *platform.NodeConfig, o *Options) { o.Lease.LinkMbps = 1; c.Rules[0].BandwidthMbps = 2 },
 		"protocol":         func(c *platform.NodeConfig, _ *Options) { c.Rules[0].Protocol = "ip" },

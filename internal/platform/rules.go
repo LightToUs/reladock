@@ -13,7 +13,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+const maxRulePortRange = 4096
+const maxNodeActiveEndpoints = 10000
 
 type RuleInput struct {
 	Name           string `json:"name"`
@@ -23,6 +27,8 @@ type RuleInput struct {
 	BandwidthMbps  int    `json:"bandwidthMbps"`
 	NodeID         string `json:"nodeId"`
 	SubscriptionID string `json:"subscriptionId,omitempty"`
+	ListenPort     int    `json:"listenPort,omitempty"`
+	ListenPortEnd  int    `json:"listenPortEnd,omitempty"`
 }
 type RuleUpdateInput struct {
 	Name           string `json:"name"`
@@ -35,6 +41,7 @@ type Rule struct {
 	ID string `json:"id"`
 	RuleInput
 	ListenPort                     int       `json:"listenPort"`
+	ListenPortEnd                  int       `json:"listenPortEnd"`
 	Status                         string    `json:"status"`
 	DesiredVersion                 int64     `json:"desiredVersion"`
 	AppliedVersion                 int64     `json:"appliedVersion"`
@@ -81,14 +88,25 @@ func validateRule(input RuleInput) (RuleInput, error) {
 	if input.SubscriptionID != "" && !billingUUID.MatchString(input.SubscriptionID) {
 		return RuleInput{}, ErrInvalid
 	}
+	if input.ListenPort == 0 && input.ListenPortEnd != 0 {
+		return RuleInput{}, ErrInvalid
+	}
+	if input.ListenPort != 0 {
+		if input.ListenPortEnd == 0 {
+			input.ListenPortEnd = input.ListenPort
+		}
+		if input.ListenPort < 1 || input.ListenPortEnd < input.ListenPort || input.ListenPortEnd > 65535 || input.ListenPortEnd-input.ListenPort+1 > maxRulePortRange {
+			return RuleInput{}, ErrInvalid
+		}
+	}
 	return input, nil
 }
 
-const ruleColumns = "id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,status,desired_version,applied_version,created_at,updated_at,applied_status,source_logging_enabled,source_logging_applied_enabled,source_logging_applied_version,source_logging_applied_generation"
+const ruleColumns = "id,name,protocol,target_host,target_port,bandwidth_mbps,node_id,listen_port,listen_port_end,status,desired_version,applied_version,created_at,updated_at,applied_status,source_logging_enabled,source_logging_applied_enabled,source_logging_applied_version,source_logging_applied_generation"
 
 func scanRule(row pgx.Row) (Rule, error) {
 	var r Rule
-	err := row.Scan(&r.ID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.Status, &r.DesiredVersion, &r.AppliedVersion, &r.CreatedAt, &r.UpdatedAt, &r.AppliedStatus, &r.SourceLoggingEnabled, &r.SourceLoggingAppliedEnabled, &r.SourceLoggingAppliedVersion, &r.SourceLoggingAppliedGeneration)
+	err := row.Scan(&r.ID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.ListenPortEnd, &r.Status, &r.DesiredVersion, &r.AppliedVersion, &r.CreatedAt, &r.UpdatedAt, &r.AppliedStatus, &r.SourceLoggingEnabled, &r.SourceLoggingAppliedEnabled, &r.SourceLoggingAppliedVersion, &r.SourceLoggingAppliedGeneration)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -166,7 +184,8 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))", "reladock-node:"+input.NodeID); err != nil {
 		return Rule{}, err
 	}
-	var address, nodeStatus string
+	var address, nodeStatus, dedicatedTenantID string
+	var resourceMode ResourceMode
 	if packageID != "" {
 		// Match usage/renewal lock order: node first, then paid period. Recheck
 		// after waiting so an old renewed/exhausted period cannot gain bindings.
@@ -183,7 +202,7 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 		}
 	}
 	var nodeCapacity int
-	if err = tx.QueryRow(ctx, "SELECT listen_address::text,status,capacity_mbps FROM nodes WHERE id=$1", input.NodeID).Scan(&address, &nodeStatus, &nodeCapacity); errors.Is(err, pgx.ErrNoRows) {
+	if err = tx.QueryRow(ctx, "SELECT listen_address::text,status,capacity_mbps,resource_mode,COALESCE(dedicated_tenant_id::text,'') FROM nodes WHERE id=$1", input.NodeID).Scan(&address, &nodeStatus, &nodeCapacity, &resourceMode, &dedicatedTenantID); errors.Is(err, pgx.ErrNoRows) {
 		return Rule{}, ErrNotFound
 	}
 	if err != nil {
@@ -202,28 +221,71 @@ func (s *Store) CreateRule(ctx context.Context, who Identity, key string, input 
 	if input.Protocol == "both" {
 		protocols = []string{"tcp", "udp"}
 	}
-	var port int
-	err = tx.QueryRow(ctx, `SELECT p FROM generate_series(20000,60000) AS p WHERE NOT EXISTS(SELECT 1 FROM endpoint_allocations e WHERE e.node_id=$1 AND e.listen_address=$2::inet AND e.listen_port=p AND e.protocol=ANY($3::text[])) ORDER BY p LIMIT 1`, input.NodeID, address, protocols).Scan(&port)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Rule{}, ErrCapacity
+	start, end := input.ListenPort, input.ListenPortEnd
+	custom := start != 0
+	if custom {
+		if resourceMode != ResourceModeDedicatedTenant || dedicatedTenantID != who.TenantID {
+			return Rule{}, ErrConflict
+		}
+		for _, protocol := range protocols {
+			var covered bool
+			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM node_customer_port_pools WHERE node_id=$1 AND protocol=$2 AND port_start<=$3 AND port_end>=$4)`, input.NodeID, protocol, start, end).Scan(&covered); err != nil {
+				return Rule{}, err
+			}
+			if !covered {
+				return Rule{}, ErrConflict
+			}
+		}
+		var active int
+		if err = tx.QueryRow(ctx, "SELECT count(*) FROM endpoint_allocations WHERE node_id=$1", input.NodeID).Scan(&active); err != nil {
+			return Rule{}, err
+		}
+		requested := (end - start + 1) * len(protocols)
+		if active > maxNodeActiveEndpoints-requested {
+			return Rule{}, ErrCapacity
+		}
+		var conflicts int
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM endpoint_allocations WHERE node_id=$1 AND listen_address=$2::inet AND protocol=ANY($3::text[]) AND listen_port BETWEEN $4 AND $5`, input.NodeID, address, protocols, start, end).Scan(&conflicts); err != nil {
+			return Rule{}, err
+		}
+		if conflicts != 0 {
+			return Rule{}, ErrConflict
+		}
+	} else {
+		err = tx.QueryRow(ctx, `SELECT p FROM generate_series(20000,60000) AS p WHERE NOT EXISTS(SELECT 1 FROM endpoint_allocations e WHERE e.node_id=$1 AND e.listen_address=$2::inet AND e.listen_port=p AND e.protocol=ANY($3::text[])) ORDER BY p LIMIT 1`, input.NodeID, address, protocols).Scan(&start)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Rule{}, ErrCapacity
+		}
+		if err != nil {
+			return Rule{}, err
+		}
+		end = start
+		var active int
+		if err = tx.QueryRow(ctx, "SELECT count(*) FROM endpoint_allocations WHERE node_id=$1", input.NodeID).Scan(&active); err != nil {
+			return Rule{}, err
+		}
+		if active > maxNodeActiveEndpoints-len(protocols) {
+			return Rule{}, ErrCapacity
+		}
 	}
+	rule, err := scanRule(tx.QueryRow(ctx, `INSERT INTO relay_rules(id,tenant_id,node_id,name,protocol,target_host,target_port,bandwidth_mbps,listen_port,listen_port_end,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending-agent') RETURNING `+ruleColumns, newID(), who.TenantID, input.NodeID, input.Name, input.Protocol, input.TargetHost, input.TargetPort, input.BandwidthMbps, start, end))
 	if err != nil {
 		return Rule{}, err
 	}
-	rule, err := scanRule(tx.QueryRow(ctx, `INSERT INTO relay_rules(id,tenant_id,node_id,name,protocol,target_host,target_port,bandwidth_mbps,listen_port,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending-agent') RETURNING `+ruleColumns, newID(), who.TenantID, input.NodeID, input.Name, input.Protocol, input.TargetHost, input.TargetPort, input.BandwidthMbps, port))
+	_, err = tx.Exec(ctx, `WITH requested AS (
+		SELECT protocol,port FROM unnest($3::text[]) AS protocol CROSS JOIN generate_series($4::integer,$5::integer) AS port
+	), predecessors AS (
+		SELECT r.id,r.protocol,r.listen_port FROM endpoint_retirements r JOIN requested q ON q.protocol=r.protocol AND q.port=r.listen_port
+		WHERE r.node_id=$1 AND r.listen_address=$2::inet AND r.state='released' AND r.quarantine_consumed_at IS NULL FOR UPDATE OF r
+	)
+	INSERT INTO endpoint_allocations(node_id,listen_address,protocol,listen_port,rule_id,tenant_id,predecessor_retirement_id)
+	SELECT $1,$2::inet,q.protocol,q.port,$6,$7,p.id FROM requested q LEFT JOIN predecessors p ON p.protocol=q.protocol AND p.listen_port=q.port`, input.NodeID, address, protocols, start, end, rule.ID, who.TenantID)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && (pgErr.Code == "23505" || pgErr.Code == "23514") {
+			return Rule{}, ErrConflict
+		}
 		return Rule{}, err
-	}
-	for _, protocol := range protocols {
-		var predecessor *string
-		if err = tx.QueryRow(ctx, `SELECT id::text FROM endpoint_retirements WHERE node_id=$1 AND listen_address=$2::inet AND protocol=$3 AND listen_port=$4 AND state='released' AND quarantine_consumed_at IS NULL FOR UPDATE`, input.NodeID, address, protocol, port).Scan(&predecessor); errors.Is(err, pgx.ErrNoRows) {
-			predecessor = nil
-		} else if err != nil {
-			return Rule{}, err
-		}
-		if _, err = tx.Exec(ctx, "INSERT INTO endpoint_allocations(node_id,listen_address,protocol,listen_port,rule_id,tenant_id,predecessor_retirement_id) VALUES($1,$2,$3,$4,$5,$6,$7)", input.NodeID, address, protocol, port, rule.ID, who.TenantID, predecessor); err != nil {
-			return Rule{}, err
-		}
 	}
 	if packageID != "" {
 		if _, err = tx.Exec(ctx, "INSERT INTO subscription_usage(subscription_id,rule_id,tenant_id,node_id) VALUES($1,$2,$3,$4)", packageID, rule.ID, who.TenantID, input.NodeID); err != nil {
@@ -296,7 +358,7 @@ WHERE r.tenant_id=$1 AND r.status<>'deleted' ORDER BY r.created_at DESC,r.id`, w
 	rules := []Rule{}
 	for rows.Next() {
 		var r Rule
-		if err = rows.Scan(&r.ID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.Status, &r.DesiredVersion, &r.AppliedVersion, &r.CreatedAt, &r.UpdatedAt, &r.AppliedStatus, &r.SourceLoggingEnabled, &r.SourceLoggingAppliedEnabled, &r.SourceLoggingAppliedVersion, &r.SourceLoggingAppliedGeneration, &r.SourceLoggingSupported, &r.SourceLoggingAgentMode, &r.SourceLoggingHeartbeatFresh, &r.SourceLoggingStatusFresh, &r.SourceLoggingCollectorStatus); err != nil {
+		if err = rows.Scan(&r.ID, &r.Name, &r.Protocol, &r.TargetHost, &r.TargetPort, &r.BandwidthMbps, &r.NodeID, &r.ListenPort, &r.ListenPortEnd, &r.Status, &r.DesiredVersion, &r.AppliedVersion, &r.CreatedAt, &r.UpdatedAt, &r.AppliedStatus, &r.SourceLoggingEnabled, &r.SourceLoggingAppliedEnabled, &r.SourceLoggingAppliedVersion, &r.SourceLoggingAppliedGeneration, &r.SourceLoggingSupported, &r.SourceLoggingAgentMode, &r.SourceLoggingHeartbeatFresh, &r.SourceLoggingStatusFresh, &r.SourceLoggingCollectorStatus); err != nil {
 			return nil, err
 		}
 		r.SourceLoggingUnsupported = !r.SourceLoggingSupported || r.SourceLoggingAgentMode != "apply" || !r.SourceLoggingHeartbeatFresh

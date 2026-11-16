@@ -72,7 +72,7 @@ func claimIdentity(claim platform.RetirementClaim) RetirementIdentity {
 }
 
 func validRetirementIdentity(identity RetirementIdentity) bool {
-	if !uuid.MatchString(identity.TaskID) || !uuid.MatchString(identity.AllocationID) || !identifier.MatchString(identity.NodeID) || !identifier.MatchString(identity.RuleID) || identity.QuarantineGeneration < 1 || (identity.Protocol != "tcp" && identity.Protocol != "udp") || identity.Port < 20000 || identity.Port > 60000 {
+	if !uuid.MatchString(identity.TaskID) || !uuid.MatchString(identity.AllocationID) || !identifier.MatchString(identity.NodeID) || !identifier.MatchString(identity.RuleID) || identity.QuarantineGeneration < 1 || (identity.Protocol != "tcp" && identity.Protocol != "udp") || identity.Port < 1 || identity.Port > 65535 {
 		return false
 	}
 	address, err := ipv4(identity.Address)

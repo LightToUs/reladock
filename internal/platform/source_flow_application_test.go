@@ -52,7 +52,7 @@ func applySourceFlowJob(t *testing.T, s *Store, job *ConfigJob) NodeConfig {
 	t.Helper()
 	cfg := beginSourceFlowApplication(t, s, job)
 	report := ConfigReport{LeaseToken: job.LeaseToken, Checksum: job.Checksum, Outcome: "applied"}
-	if cfg.SchemaVersion == 3 {
+	if cfg.SchemaVersion == 3 || cfg.SchemaVersion == 4 {
 		manifest, digest := sourceFlowManifestForConfig(t, cfg)
 		report.SourceFlowManifest = &manifest
 		report.SourceFlowManifestDigest = digest
@@ -61,6 +61,25 @@ func applySourceFlowJob(t *testing.T, s *Store, job *ConfigJob) NodeConfig {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func TestValidateSourceFlowApplicationAcceptsSchemaFourRangeManifest(t *testing.T) {
+	cfg := NodeConfig{
+		SchemaVersion: 4, NodeID: "range-node", Generation: 8, ListenAddress: "192.0.2.10",
+		Rules: []ConfigRule{{
+			ID: "11111111-1111-4111-8111-111111111111", TenantID: "22222222-2222-4222-8222-222222222222",
+			RuleInput:  RuleInput{NodeID: "range-node", Protocol: "tcp", TargetHost: "198.51.100.20", TargetPort: 443, BandwidthMbps: 10},
+			ListenPort: 40000, ListenPortEnd: 40002, Version: 1, Status: "pending-agent", SourceLoggingEnabled: true,
+		}},
+	}
+	for port := 40000; port <= 40002; port++ {
+		cfg.Allocations = append(cfg.Allocations, ConfigAllocation{ID: newID(), RuleID: cfg.Rules[0].ID, Protocol: "tcp", Address: cfg.ListenAddress, Port: port})
+	}
+	manifest, digest := sourceFlowManifestForConfig(t, cfg)
+	applied, err := validateSourceFlowApplication(cfg, &manifest, digest)
+	if err != nil || len(applied) != 3 {
+		t.Fatalf("schema four range manifest rejected: applied=%+v err=%v", applied, err)
+	}
 }
 
 func TestSourceFlowManifestApplicationRejectsMismatchAndPersistsExactHistory(t *testing.T) {

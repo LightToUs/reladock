@@ -338,11 +338,20 @@ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, authent
 }
 
 func validateSourceFlowApplication(cfg NodeConfig, manifest *sourceflow.Manifest, digest string) ([]sourceflow.AppliedRule, error) {
-	if cfg.SchemaVersion != 3 {
+	loggingRules := 0
+	for _, rule := range cfg.Rules {
+		if rule.SourceLoggingEnabled {
+			loggingRules++
+		}
+	}
+	if loggingRules == 0 {
 		if manifest != nil || digest != "" {
 			return nil, ErrInvalid
 		}
 		return nil, nil
+	}
+	if cfg.SchemaVersion != 3 && cfg.SchemaVersion != 4 {
+		return nil, ErrInvalid
 	}
 	if manifest == nil || sourceflow.ValidateManifest(*manifest, digest) != nil || manifest.NodeID != cfg.NodeID || manifest.Generation != cfg.Generation {
 		return nil, ErrInvalid

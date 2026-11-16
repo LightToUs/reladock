@@ -87,3 +87,68 @@ func TestValidateConfigAcceptsCompleteSchemaV2AndRejectsIdentityGaps(t *testing.
 		})
 	}
 }
+
+func TestValidateConfigSchemaV4RequiresEveryRangeAllocationExactlyOnce(t *testing.T) {
+	cfg := platform.NodeConfig{
+		SchemaVersion: 4, NodeID: "hk-01", Generation: 4, ListenAddress: "192.0.2.1",
+		Rules: []platform.ConfigRule{{
+			ID: "rule-range", TenantID: "tenant-a",
+			RuleInput:  platform.RuleInput{Name: "Range", Protocol: "udp", TargetHost: "198.51.100.2", TargetPort: 443, BandwidthMbps: 100, NodeID: "hk-01"},
+			ListenPort: 40000, ListenPortEnd: 40002, Version: 1, Status: "pending-agent",
+		}},
+		Allocations: []platform.ConfigAllocation{
+			{ID: "11111111-1111-4111-8111-111111111111", RuleID: "rule-range", Protocol: "udp", Address: "192.0.2.1", Port: 40000},
+			{ID: "22222222-2222-4222-8222-222222222222", RuleID: "rule-range", Protocol: "udp", Address: "192.0.2.1", Port: 40001},
+			{ID: "33333333-3333-4333-8333-333333333333", RuleID: "rule-range", Protocol: "udp", Address: "192.0.2.1", Port: 40002},
+		},
+	}
+	jobFor := func(value platform.NodeConfig) platform.ConfigJob {
+		payload, _ := json.Marshal(value)
+		sum := sha256.Sum256(payload)
+		return platform.ConfigJob{NodeID: value.NodeID, Generation: value.Generation, Payload: payload, Checksum: hex.EncodeToString(sum[:])}
+	}
+	if err := ValidateConfig("hk-01", jobFor(cfg)); err != nil {
+		t.Fatalf("complete range rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*platform.NodeConfig){
+		"missing middle": func(c *platform.NodeConfig) { c.Allocations = append(c.Allocations[:1:1], c.Allocations[2:]...) },
+		"extra endpoint": func(c *platform.NodeConfig) {
+			c.Allocations = append(c.Allocations, platform.ConfigAllocation{ID: "44444444-4444-4444-8444-444444444444", RuleID: "rule-range", Protocol: "udp", Address: "192.0.2.1", Port: 40003})
+		},
+		"wrong protocol": func(c *platform.NodeConfig) { c.Allocations[1].Protocol = "tcp" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := cfg
+			bad.Allocations = append([]platform.ConfigAllocation(nil), cfg.Allocations...)
+			mutate(&bad)
+			if err := ValidateConfig("hk-01", jobFor(bad)); err == nil {
+				t.Fatal("invalid range allocation set accepted")
+			}
+		})
+	}
+}
+
+func TestValidateConfigRequiresSchemaV4ForPortsOutsideLegacyPool(t *testing.T) {
+	cfg := platform.NodeConfig{
+		SchemaVersion: 4, NodeID: "hk-01", Generation: 5, ListenAddress: "192.0.2.1",
+		Rules: []platform.ConfigRule{{
+			ID: "rule-low", TenantID: "tenant-a",
+			RuleInput:  platform.RuleInput{Name: "Low port", Protocol: "tcp", TargetHost: "198.51.100.2", TargetPort: 443, BandwidthMbps: 100, NodeID: "hk-01"},
+			ListenPort: 443, ListenPortEnd: 443, Version: 1, Status: "pending-agent",
+		}},
+		Allocations: []platform.ConfigAllocation{{ID: "11111111-1111-4111-8111-111111111111", RuleID: "rule-low", Protocol: "tcp", Address: "192.0.2.1", Port: 443}},
+	}
+	jobFor := func(value platform.NodeConfig) platform.ConfigJob {
+		payload, _ := json.Marshal(value)
+		sum := sha256.Sum256(payload)
+		return platform.ConfigJob{NodeID: value.NodeID, Generation: value.Generation, Payload: payload, Checksum: hex.EncodeToString(sum[:])}
+	}
+	if err := ValidateConfig("hk-01", jobFor(cfg)); err != nil {
+		t.Fatalf("schema four low port rejected: %v", err)
+	}
+	cfg.SchemaVersion = 2
+	cfg.Rules[0].ListenPortEnd = 0
+	if err := ValidateConfig("hk-01", jobFor(cfg)); err == nil {
+		t.Fatal("legacy schema accepted a port outside its supported pool")
+	}
+}

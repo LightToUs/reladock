@@ -52,8 +52,10 @@ const ruleEditor = createRuleEditor($('#rule-dialog'), $('#rule-form'), {
   title: $('#rule-dialog-title'), description: $('#rule-dialog-description'), submit: $('#rule-submit'),
   status: $('#rule-dialog-status'), allocation: $('#rule-allocation'),
   createButton: $('#rule-create'), cancelButton: $('#rule-dialog-cancel'),
+  portHint: $('#port-range-hint'), getResourceMode: () => $('#node-select').selectedOptions[0]?.dataset.resourceMode || '',
 });
 $('#rule-dialog-close').addEventListener('click', ruleEditor.close);
+$('#node-select').addEventListener('change', () => ruleEditor.syncPortControls($('#node-select').selectedOptions[0]?.dataset.resourceMode || '', true));
 
 async function api(path, { method = 'GET', body, key, signal } = {}) {
   const authToken = authSessionGate.current();
@@ -354,6 +356,7 @@ async function refresh() {
     item.value = period.id;
     item.dataset.nodeId = period.plan.offering?.nodeId || '';
     item.dataset.bandwidth = String(period.plan.bandwidthMbps || 0);
+    item.dataset.resourceMode = period.plan.resourceMode || '';
     const packageNode = nodesByID.get(item.dataset.nodeId);
     item.textContent = `${item.dataset.nodeId || '未知节点'} · ${formatEntryAddress(packageNode?.publicAddress)} · ${period.plan.name} · ${(period.plan.quotaBytes / 1e9).toLocaleString()} GB · ${period.plan.bandwidthMbps} Mbps`;
     selector.append(item);
@@ -367,6 +370,7 @@ async function refresh() {
   }
   if ([...selector.options].some(option => option.value === selected && !option.disabled)) selector.value = selected;
   else { const available = [...selector.options].find(option => !option.disabled); selector.value = available?.value || ''; }
+  ruleEditor.syncPortControls(selector.selectedOptions[0]?.dataset.resourceMode || '');
   $('#rule-create').disabled = !editable || !selector.value;
   if ($('#rule-dialog').open) $('#rule-submit').disabled = !editable || (!ruleEditor.current() && !selector.value);
   $('#refresh-message').textContent = `最近刷新：${new Date().toLocaleTimeString()}。应用确认不等于端到端健康。`;
@@ -375,7 +379,8 @@ async function refresh() {
   for (const rule of data.rules) {
     const row = root.insertRow(); const target = rule.targetHost.includes(':') ? `[${rule.targetHost}]:${rule.targetPort}` : `${rule.targetHost}:${rule.targetPort}`;
     const identityCell = row.insertCell(); appendNodeFact(identityCell, rule.name, `${rule.nodeId} · ${formatEntryAddress(nodesByID.get(rule.nodeId)?.publicAddress, rule.listenPort)}`);
-    for (const value of [rule.listenPort, rule.protocol.toUpperCase(), target,`${rule.bandwidthMbps} Mbps`]) cell(row, value);
+    const listenPorts = rule.listenPortEnd && rule.listenPortEnd !== rule.listenPort ? `${rule.listenPort}–${rule.listenPortEnd}` : String(rule.listenPort);
+    for (const value of [listenPorts, rule.protocol.toUpperCase(), target,`${rule.bandwidthMbps} Mbps`]) cell(row, value);
     const telemetryView = workspace.telemetryAvailable
       ? telemetryPresentation(telemetry.find(item => item.ruleId === rule.id))
       : { total: '遥测不可用', upload: '未知', download: '未知', rate: '未知', rateDetail: '本次加载失败，不表示没有流量。' };
@@ -436,7 +441,16 @@ $('#rule-form').addEventListener('submit', async event => {
   event.preventDefault();
   const button = $('#rule-submit'); const editing = ruleEditor.current(); const session = ruleEditor.session(); button.disabled = true;
   const fields = Object.fromEntries(new FormData(event.target)); fields.targetPort = Number(fields.targetPort); fields.bandwidthMbps = Number(fields.bandwidthMbps);
-  delete fields.listenPort;
+  const portMode = fields.portMode || 'auto';
+  delete fields.portMode;
+  if (portMode === 'custom') {
+    fields.listenPort = Number(fields.listenPort);
+    if (fields.listenPortEnd) fields.listenPortEnd = Number(fields.listenPortEnd);
+    else delete fields.listenPortEnd;
+  } else {
+    delete fields.listenPort;
+    delete fields.listenPortEnd;
+  }
   try {
     let result;
     if (editing) {
@@ -454,7 +468,7 @@ $('#rule-form').addEventListener('submit', async event => {
     if (!ruleEditor.isCurrent(session)) return;
     const message = editing
       ? `规则“${result.rule.name}”已保存为期望版本 ${result.rule.desiredVersion}，等待 Agent 确认。`
-      : `已预留 ${result.rule.protocol.toUpperCase()} 端口 ${result.rule.listenPort}。配置等待 Agent 交付，尚未转发流量。`;
+      : `已预留 ${result.rule.protocol.toUpperCase()} 端口 ${result.rule.listenPortEnd && result.rule.listenPortEnd !== result.rule.listenPort ? `${result.rule.listenPort}–${result.rule.listenPortEnd}` : result.rule.listenPort}。配置等待 Agent 交付，尚未转发流量。`;
     if (result.refreshError) $('#rule-dialog-status').textContent = `${message} 列表刷新失败，请关闭弹窗后重试刷新。`;
     else { $('#rules-message').textContent = message; ruleEditor.close(); }
   }

@@ -14,6 +14,7 @@ type AgentHeartbeat struct {
 	// Negotiated via HTTP header so older strict JSON decoders keep accepting heartbeats.
 	CertificateRotationSupported bool                `json:"-"`
 	SourceFlowSupported          bool                `json:"-"`
+	PortRangeSupported           bool                `json:"-"`
 	Version                      string              `json:"version"`
 	Mode                         string              `json:"mode"`
 	StartedAt                    time.Time           `json:"startedAt"`
@@ -130,7 +131,8 @@ agent_rotation_state=$6,agent_rotation_error_code=$7
 		,agent_kernel_boot_id=NULLIF($8,'')::uuid,agent_journal_sequence=$9
 		,agent_certificate_rotation_supported=$10
 		,agent_source_flow_supported=$11
-WHERE id=$1 AND agent_journal_sequence<=$9`, nodeID, heartbeat.Version, heartbeat.Mode, heartbeat.StartedAt, heartbeat.CertificateNotAfter, heartbeat.RotationState, heartbeat.RotationErrorCode, heartbeat.KernelBootID, heartbeat.JournalSequence, heartbeat.CertificateRotationSupported, heartbeat.SourceFlowSupported)
+		,agent_port_range_supported=$12
+WHERE id=$1 AND agent_journal_sequence<=$9`, nodeID, heartbeat.Version, heartbeat.Mode, heartbeat.StartedAt, heartbeat.CertificateNotAfter, heartbeat.RotationState, heartbeat.RotationErrorCode, heartbeat.KernelBootID, heartbeat.JournalSequence, heartbeat.CertificateRotationSupported, heartbeat.SourceFlowSupported, heartbeat.PortRangeSupported)
 	if err != nil {
 		return err
 	}

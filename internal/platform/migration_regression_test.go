@@ -5,8 +5,44 @@ import (
 	"testing"
 )
 
+func revertSchemaTo41(t *testing.T, s *Store) {
+	t.Helper()
+	if _, err := s.pool.Exec(context.Background(), `
+DROP TRIGGER seed_node_customer_port_pools ON nodes;
+DROP FUNCTION seed_node_customer_port_pools();
+DROP TABLE node_customer_port_pools;
+DROP TRIGGER default_rule_listen_port_end ON relay_rules;
+DROP FUNCTION default_rule_listen_port_end();
+ALTER TABLE relay_rules
+ DROP CONSTRAINT relay_rules_listen_port_range_check,
+ DROP CONSTRAINT relay_rules_listen_port_check,
+ DROP COLUMN listen_port_end,
+ ADD CONSTRAINT relay_rules_listen_port_check CHECK (listen_port BETWEEN 20000 AND 60000);
+ALTER TABLE endpoint_allocations
+ DROP CONSTRAINT endpoint_allocations_listen_port_check,
+ ADD CONSTRAINT endpoint_allocations_listen_port_check CHECK (listen_port BETWEEN 20000 AND 60000);
+ALTER TABLE endpoint_retirements
+ DROP CONSTRAINT endpoint_retirements_listen_port_check,
+ ADD CONSTRAINT endpoint_retirements_listen_port_check CHECK (listen_port BETWEEN 20000 AND 60000);
+ALTER TABLE nodes DROP COLUMN agent_port_range_supported;
+CREATE OR REPLACE FUNCTION clear_node_certificate_renewal() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.certificate_fingerprint IS DISTINCT FROM OLD.certificate_fingerprint THEN
+  NEW.certificate_renewal_fingerprint := NULL;
+  NEW.agent_certificate_rotation_supported := false;
+  NEW.agent_source_flow_supported := false;
+ END IF;
+ RETURN NEW;
+END;
+$$;
+DELETE FROM schema_migrations WHERE version=42;`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func revertSchemaTo40(t *testing.T, s *Store) {
 	t.Helper()
+	revertSchemaTo41(t, s)
 	if _, err := s.pool.Exec(context.Background(), `
 DROP TABLE oauth_login_attempts;
 DROP TABLE member_external_identities;
@@ -33,7 +69,7 @@ func TestMigration41From40PreservesExistingFacts(t *testing.T) {
 	if err := store.pool.QueryRow(ctx, `SELECT (SELECT max(version) FROM schema_migrations),(SELECT count(*) FROM tenants),(SELECT count(*) FROM members),(SELECT count(*) FROM sessions),(SELECT count(*) FROM audit_logs)`).Scan(&version, &tenantsAfter, &membersAfter, &sessionsAfter, &auditsAfter); err != nil {
 		t.Fatal(err)
 	}
-	if version != 41 || tenantsAfter != tenantsBefore || membersAfter != membersBefore || sessionsAfter != sessionsBefore || auditsAfter != auditsBefore {
+	if version != SchemaVersion || tenantsAfter != tenantsBefore || membersAfter != membersBefore || sessionsAfter != sessionsBefore || auditsAfter != auditsBefore {
 		t.Fatalf("migration changed facts: version=%d tenants=%d/%d members=%d/%d sessions=%d/%d audits=%d/%d", version, tenantsAfter, tenantsBefore, membersAfter, membersBefore, sessionsAfter, sessionsBefore, auditsAfter, auditsBefore)
 	}
 	if loaded, err := store.Session(ctx, token); err != nil || loaded.MemberID != who.MemberID {
@@ -41,8 +77,61 @@ func TestMigration41From40PreservesExistingFacts(t *testing.T) {
 	}
 }
 
+func TestMigration42ReconcilesUnrecordedCompatibleSchemaObjects(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	who, _ := register(t, s, "migration42-compatible@example.com")
+	rule, err := s.CreateRule(ctx, who, "migration42-compatible", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revertSchemaTo41(t, s)
+	_, err = s.pool.Exec(ctx, `
+ALTER TABLE relay_rules ADD COLUMN listen_port_end integer;
+UPDATE relay_rules SET listen_port_end=listen_port;
+ALTER TABLE relay_rules ALTER COLUMN listen_port_end SET NOT NULL;
+ALTER TABLE relay_rules DROP CONSTRAINT relay_rules_listen_port_check;
+ALTER TABLE relay_rules ADD CONSTRAINT relay_rules_listen_port_range_check CHECK (listen_port BETWEEN 1 AND 65535 AND listen_port_end BETWEEN listen_port AND 65535 AND listen_port_end-listen_port+1<=4096);
+ALTER TABLE endpoint_allocations DROP CONSTRAINT endpoint_allocations_listen_port_check;
+ALTER TABLE endpoint_allocations ADD CONSTRAINT endpoint_allocations_listen_port_check CHECK (listen_port BETWEEN 1 AND 65535);
+ALTER TABLE endpoint_retirements DROP CONSTRAINT endpoint_retirements_listen_port_check;
+ALTER TABLE endpoint_retirements ADD CONSTRAINT endpoint_retirements_listen_port_check CHECK (listen_port BETWEEN 1 AND 65535);
+ALTER TABLE nodes ADD COLUMN agent_port_range_supported boolean NOT NULL DEFAULT false;
+CREATE TABLE node_customer_port_pools (
+ node_id text NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+ protocol text NOT NULL CHECK (protocol IN ('tcp','udp')),
+ port_start integer NOT NULL,
+ port_end integer NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(node_id,protocol,port_start,port_end),
+ CHECK (port_start BETWEEN 1 AND 65535 AND port_end BETWEEN port_start AND 65535)
+);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE relay_rules SET listen_port_end=listen_port+2 WHERE id=$1`, rule.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Migrate(ctx); err != nil {
+		t.Fatalf("reconcile compatible unrecorded schema: %v", err)
+	}
+	var version, pools, triggers, portEnd int
+	if err = s.pool.QueryRow(ctx, `SELECT
+		(SELECT max(version) FROM schema_migrations),
+		(SELECT count(*) FROM node_customer_port_pools WHERE node_id='hk-01' AND port_start=20000 AND port_end=60000),
+		(SELECT count(DISTINCT trigger_name) FROM information_schema.triggers WHERE trigger_schema=current_schema() AND trigger_name IN ('default_rule_listen_port_end','seed_node_customer_port_pools')),
+		(SELECT listen_port_end FROM relay_rules WHERE id=$1)`, rule.ID).Scan(&version, &pools, &triggers, &portEnd); err != nil {
+		t.Fatal(err)
+	}
+	if version != 42 || pools != 2 || triggers != 2 || portEnd != rule.ListenPort+2 {
+		t.Fatalf("reconciled version=%d pools=%d triggers=%d portEnd=%d", version, pools, triggers, portEnd)
+	}
+}
+
 func revertSchemaTo38(t *testing.T, s *Store) {
 	t.Helper()
+	revertSchemaTo41(t, s)
 	_, err := s.pool.Exec(context.Background(), `
 DROP TABLE oauth_login_attempts;
 DROP TABLE member_external_identities;
@@ -87,6 +176,7 @@ func TestMigration39From38PreservesExistingFacts(t *testing.T) {
 // Fixtures must contain only bound, single-rule subscriptions valid before v30.
 func revertSchemaTo29(t *testing.T, s *Store) {
 	t.Helper()
+	revertSchemaTo41(t, s)
 	_, err := s.pool.Exec(context.Background(), `
 DROP TABLE oauth_login_attempts;
 DROP TABLE member_external_identities;
@@ -198,13 +288,13 @@ func TestMigration29ToCurrentPreservesBillingUsageAndIdentity(t *testing.T) {
 	if version != 29 || primaryKey != "PRIMARY KEY (subscription_id)" || binding != "FOREIGN KEY (subscription_id, rule_id, tenant_id) REFERENCES rule_subscriptions(id, rule_id, tenant_id)" || !ruleRequired {
 		t.Fatalf("not a v29 source: version=%d key=%q binding=%q required=%v", version, primaryKey, binding, ruleRequired)
 	}
-	// Compare complete historical rows, omitting only columns introduced in v32/33.
+	// Compare complete historical rows, omitting only columns introduced after v29.
 	snapshot := func() map[string]string {
 		t.Helper()
 		result := map[string]string{}
 		for _, table := range []string{"billing_wallets", "billing_ledger", "plan_price_versions", "line_offerings", "relay_rules", "rule_subscriptions", "subscription_usage", "nodes", "endpoint_allocations"} {
 			var rows string
-			query := `SELECT COALESCE(jsonb_agg(row ORDER BY row::text),'[]'::jsonb)::text FROM (SELECT to_jsonb(t)-ARRAY['auto_renew','auto_renew_error','renewed_from','certificate_renewal_fingerprint','agent_certificate_rotation_supported','agent_source_flow_supported','source_logging_enabled','source_logging_applied_enabled','source_logging_applied_version','source_logging_applied_generation'] AS row FROM ` + table + ` t) history`
+			query := `SELECT COALESCE(jsonb_agg(row ORDER BY row::text),'[]'::jsonb)::text FROM (SELECT to_jsonb(t)-ARRAY['auto_renew','auto_renew_error','renewed_from','certificate_renewal_fingerprint','agent_certificate_rotation_supported','agent_source_flow_supported','agent_port_range_supported','source_logging_enabled','source_logging_applied_enabled','source_logging_applied_version','source_logging_applied_generation','listen_port_end'] AS row FROM ` + table + ` t) history`
 			if err := s.pool.QueryRow(ctx, query).Scan(&rows); err != nil {
 				t.Fatal(err)
 			}
@@ -233,9 +323,9 @@ func TestMigration29ToCurrentPreservesBillingUsageAndIdentity(t *testing.T) {
 	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM rule_subscriptions WHERE id=$1 AND NOT auto_renew AND auto_renew_error='' AND renewed_from IS NULL`, period.ID).Scan(&defaults); err != nil || defaults != 1 {
 		t.Fatalf("renewal defaults=%d err=%v", defaults, err)
 	}
-	var rotationSupported, sourceFlowSupported bool
+	var rotationSupported, sourceFlowSupported, portRangeSupported bool
 	var renewalFingerprint *string
-	if err = s.pool.QueryRow(ctx, `SELECT agent_certificate_rotation_supported,agent_source_flow_supported,certificate_renewal_fingerprint FROM nodes WHERE id=$1`, rule.NodeID).Scan(&rotationSupported, &sourceFlowSupported, &renewalFingerprint); err != nil || rotationSupported || sourceFlowSupported || renewalFingerprint != nil {
-		t.Fatalf("certificate defaults rotation=%v sourceFlow=%v fingerprint=%v err=%v", rotationSupported, sourceFlowSupported, renewalFingerprint, err)
+	if err = s.pool.QueryRow(ctx, `SELECT agent_certificate_rotation_supported,agent_source_flow_supported,agent_port_range_supported,certificate_renewal_fingerprint FROM nodes WHERE id=$1`, rule.NodeID).Scan(&rotationSupported, &sourceFlowSupported, &portRangeSupported, &renewalFingerprint); err != nil || rotationSupported || sourceFlowSupported || portRangeSupported || renewalFingerprint != nil {
+		t.Fatalf("certificate defaults rotation=%v sourceFlow=%v portRange=%v fingerprint=%v err=%v", rotationSupported, sourceFlowSupported, portRangeSupported, renewalFingerprint, err)
 	}
 }

@@ -52,7 +52,7 @@ func (w *RetirementWorker) now() time.Time {
 
 func validRetirementClaim(claim platform.RetirementClaim, nodeID string) bool {
 	address, err := netip.ParseAddr(claim.Address)
-	return err == nil && address.Is4() && address.IsGlobalUnicast() && !address.IsLoopback() && address.String() == claim.Address && jobIDPattern.MatchString(claim.ID) && jobIDPattern.MatchString(claim.AllocationID) && configIdentifier.MatchString(claim.RuleID) && claim.NodeID == nodeID && nodeIDPattern.MatchString(claim.NodeID) && len(claim.LeaseToken) == 64 && !claim.LeaseUntil.IsZero() && claim.QuarantineGeneration >= 1 && (claim.Protocol == "tcp" || claim.Protocol == "udp") && claim.Port >= 20000 && claim.Port <= 60000
+	return err == nil && address.Is4() && address.IsGlobalUnicast() && !address.IsLoopback() && address.String() == claim.Address && jobIDPattern.MatchString(claim.ID) && jobIDPattern.MatchString(claim.AllocationID) && configIdentifier.MatchString(claim.RuleID) && claim.NodeID == nodeID && nodeIDPattern.MatchString(claim.NodeID) && len(claim.LeaseToken) == 64 && !claim.LeaseUntil.IsZero() && claim.QuarantineGeneration >= 1 && (claim.Protocol == "tcp" || claim.Protocol == "udp") && claim.Port >= 1 && claim.Port <= 65535
 }
 
 // Once is called while Client holds the shared external control lock. It
