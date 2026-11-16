@@ -82,8 +82,12 @@
       <label class="field-wide">目标 IP / 域名<input name="targetHost" required maxlength="253" placeholder="客户落地服务器地址"></label>
       <label>目标端口<input name="targetPort" type="number" min="1" max="65535" value="443" required></label>
       <label>带宽上限 / Mbps<input name="bandwidthMbps" type="number" min="1" max="1000" value="1000" required></label>
+      <label>入口端口方式<select name="portMode" disabled aria-describedby="port-range-hint"><option value="auto">自动分配</option></select></label>
+      <label>入口起始端口<input name="listenPort" type="number" min="1" max="65535" disabled aria-describedby="port-range-hint"></label>
+      <label>入口结束端口<input name="listenPortEnd" type="number" min="1" max="65535" disabled aria-describedby="port-range-hint"></label>
+      <p class="hint muted field-wide" id="port-range-hint">当前仅支持自动分配入口端口；自定义单端口和连续端口段尚未接入。</p>
     </div>
-    <input name="desiredVersion" type="hidden"><input name="listenPort" type="hidden">
+    <input name="desiredVersion" type="hidden">
     <p id="rule-dialog-status" class="error" role="status"></p>
     <div class="dialog-actions"><button id="rule-dialog-cancel" class="secondary" type="button">取消</button><button id="rule-submit" type="submit">预留端口并保存</button></div>
   </form>

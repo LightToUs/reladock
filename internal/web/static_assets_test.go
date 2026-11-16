@@ -643,6 +643,44 @@ func TestEnterpriseRuleManagementUsesOneCreateEditDialog(t *testing.T) {
 	}
 }
 
+func TestEnterpriseDisabledRuleInputsAreVisuallyUnavailable(t *testing.T) {
+	css, err := fs.ReadFile(assets.Files, "app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(css)
+	for _, required := range []string{
+		"#console main .editor-dialog input:disabled",
+		"background: #eef2f7",
+		"color: #73849a",
+		"cursor: not-allowed",
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("disabled rule input visual state missing %q", required)
+		}
+	}
+}
+
+func TestEnterpriseUnsupportedCustomPortInputsStayDisabled(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(page)
+	for _, pattern := range []string{
+		`<select[^>]*name="portMode"[^>]*disabled[^>]*>`,
+		`<input[^>]*name="listenPort"[^>]*disabled[^>]*>`,
+		`<input[^>]*name="listenPortEnd"[^>]*disabled[^>]*>`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(source) {
+			t.Errorf("unsupported custom port control is not disabled: %s", pattern)
+		}
+	}
+	if !strings.Contains(source, "当前仅支持自动分配入口端口") {
+		t.Fatal("rule dialog does not explain why custom port controls are unavailable")
+	}
+}
+
 func TestNodeRowContentActionsUseDialogs(t *testing.T) {
 	page, err := fs.ReadFile(assets.Files, "admin.html")
 	if err != nil {

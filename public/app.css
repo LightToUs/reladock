@@ -378,7 +378,8 @@ button.plan-filter-chip[aria-pressed="true"] { border-color: var(--accent); back
 #console main .editor-dialog { background: var(--surface); color: var(--text); }
 #console main .icon-button { border-color: var(--line); background: var(--surface-active); color: #334b66; }
 #console main .allocation-note { background: #edf5ff; color: #36516f; }
-#console main .editor-dialog select:disabled { background: #eef2f7; color: #73849a; }
+#console main .editor-dialog input:disabled,
+#console main .editor-dialog select:disabled { border-color: #d7dee8; background: #eef2f7; color: #73849a; cursor: not-allowed; opacity: 1; }
 
 /* Harmonized enterprise shell and component hierarchy. */
 #console aside { padding: 24px 18px 22px; border-right: 0; box-shadow: none; }
