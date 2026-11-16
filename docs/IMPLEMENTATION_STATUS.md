@@ -1,6 +1,14 @@
 # 当前实现状态与 AI 交接
 
-> 最后代码与生产控制端核验：2026-11-16。生产控制端运行 `v0.9.13`、数据库 schema v40；Lightsail 连接器已启用 19 个由真实账户只读 `GetRegions` 返回的区域，尚未创建或操作任何付费资源。receive-only TRON 主网连接器已启用并运行自动固化区块扫描；Stripe 生产密钥与独立 Live webhook 已启用。现有入口 Agent 与公开安装包仍为 `v0.9.9`。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量或离机恢复验收完成。
+> 最后代码核验：2026-11-16；最后生产控制端核验仍为此前记录。当前源码 schema v41，生产控制端仍运行 `v0.9.13`、数据库 schema v40，未部署本次 Google 登录。Lightsail 连接器已启用 19 个由真实账户只读 `GetRegions` 返回的区域，尚未创建或操作任何付费资源。receive-only TRON 主网连接器已启用并运行自动固化区块扫描；Stripe 生产密钥与独立 Live webhook 已启用。现有入口 Agent 与公开安装包仍为 `v0.9.9`。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量或离机恢复验收完成。
+
+## 2026-11-16 Google 授权登录（本地，schema v41）
+
+企业控制台与平台后台已接入默认关闭的 Google OpenID Connect 登录。服务端固定 Google 端点并实现 state、nonce、PKCE S256、OIDC 签名/issuer/audience/expiry 校验和 verified-email 门禁；尝试记录只保存摘要、短期有效且单次消费。首次授权只绑定已有规范邮箱成员，不自动创建企业、成员、角色或平台权限；以后使用 provider 稳定 subject。完成登录时重新读取当前企业启停、成员角色和平台权限，使用现有 24 小时摘要会话与事务审计。schema v41 新增外部身份和 OAuth 尝试表，并覆盖唯一约束、并发首次绑定、重放/过期、subject 冲突、停用/撤权、审计回滚和 HTTP 安全边界。
+
+浏览器端只在 `/api/auth/google/status` 确认启用后显示入口，企业注册模式隐藏 Google 登录但不清空密码字段；企业和平台返回目标分别固定为 `/` 与 `/admin`。真实本地页面在 1440、768、390 宽度检查无横向溢出或控制台错误。依赖固定为 `github.com/coreos/go-oidc/v3 v3.17.0` 与 `golang.org/x/oauth2 v0.35.0`。当前没有真实 Google Cloud 项目、同意屏幕或凭据，没有执行真实 provider 授权/回调，也没有构建发布包、修改生产环境、迁移生产 schema 或部署前端；因此只能标记为本地实现，不能声称生产 Google 登录可用。
+
+最终 `GOFLAGS=-timeout=20m npm test` 退出 0：Go 全包 `-race` 通过，`internal/platform` 605.821s；Node 155 项中 154 通过、1 项按默认 Linux 安装环境跳过、0 失败。首次聚焦全包验证暴露旧 schema 测试夹具只删 v41 版本记录、未删 v41 表的半降级状态；生产迁移没有该路径，修正 v38/v29 重建夹具后，7 个受影响的升级用例 `-race` 通过（16.692s），随后全仓复跑通过。`npm run vet`、`git diff --check` 均退出 0；敏感字段搜索只命中配置名称、明确占位值、测试 token 以及 provider 内部读取 `id_token` 的必要代码，浏览器资源静态测试确认不含 Client Secret 或 provider token 字段。
 
 ## 2026-11-16 创建规则入口端口禁用态修复（本地）
 

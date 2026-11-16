@@ -1,5 +1,11 @@
 # 系统架构与技术约束
 
+## Google OIDC 身份绑定（schema v41）
+
+`internal/googleauth` 使用固定 Google 授权、token 与 JWKS 端点，授权请求带 state、nonce 和 PKCE S256；回调只在 OIDC 签名、issuer、audience、expiry、nonce 与 verified email 全部通过后产生规范身份。provider HTTP 客户端拒绝代理、重定向和无界响应，错误不会回显 token、Client Secret 或上游正文。
+
+`oauth_login_attempts` 只保存 state/nonce/verifier/cookie 的摘要、固定返回目标和短期有效期，回调在事务中单次消费。`member_external_identities` 以 provider + subject 唯一绑定成员；首次绑定只查找已有规范邮箱并串行化竞争，不自动注册。完成登录时重新核验企业和成员状态、读取当前角色与平台权限、创建普通 24 小时摘要会话并写账户审计。浏览器尝试 Cookie 为 callback 所需的 HttpOnly SameSite=Lax；成功后的主会话仍为 SameSite=Strict。
+
 ## 独立 Lightsail 脚本节点（schema v39/v40）
 
 `internal/cloud/lightsail` 定义不依赖 AWS SDK 的 provider 合同，AWS adapter 使用 SDK 默认凭据链并按允许区域缓存客户端；`internal/cloud/sshdeploy` 只在内存解析 AWS 临时私钥/证书，固定执行 `/usr/bin/sudo -n /bin/bash -seu`，以 AWS 返回的公钥集合校验 SSH 主机身份。控制端不会把临时密钥写入文件、数据库、审计或 HTTP 响应，输出截断到 32 KiB 并过滤控制序列和常见敏感赋值。
