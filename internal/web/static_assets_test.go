@@ -775,7 +775,7 @@ func TestLightsailAdminPresentationIsSeparateAndExplicitlyAtMostOnce(t *testing.
 	combined := string(page) + string(adminJS) + string(lightsailJS)
 	for _, required := range []string{
 		`data-view="lightsail"`, `data-pane="lightsail"`, `id="lightsail-create-dialog"`,
-		`id="lightsail-stop-dialog"`, `id="lightsail-destroy-dialog"`, `name="script"`,
+		`id="lightsail-stop-dialog"`, `id="lightsail-destroy-dialog"`, `name="script"`, `name="awsInstanceName"`,
 		`maxlength="65536"`, "只执行一次", "未知", "不代表 RelaDock 转发或端到端健康",
 		"./lightsail-admin.js", "bindLightsailAdmin", "createAdaptivePoller", "lightsailRegionLabel", "香港", "新加坡", "ap-east-1", "ap-southeast-1",
 	} {

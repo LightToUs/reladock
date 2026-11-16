@@ -17,7 +17,7 @@ import {
 } from './lightsail-admin.js';
 
 const fields = {
-  name: 'Singapore worker', region: 'ap-southeast-1', availabilityZone: 'ap-southeast-1a',
+  name: '新加坡部署节点', awsInstanceName: 'singapore-worker', region: 'ap-southeast-1', availabilityZone: 'ap-southeast-1a',
   blueprintId: 'debian_12', bundleId: 'small_3_0', script: '#!/bin/bash\necho once\n',
 };
 
@@ -31,7 +31,8 @@ test('AWS region codes are presented with their Chinese locations', () => {
 test('create payload is deterministic and preserves the pasted script exactly once', () => {
   const payload = createLightsailPayload(fields);
   assert.deepEqual(payload, {
-    name: 'Singapore worker',
+    name: '新加坡部署节点',
+    awsInstanceName: 'singapore-worker',
     selection: { region: 'ap-southeast-1', availabilityZone: 'ap-southeast-1a', blueprintId: 'debian_12', bundleId: 'small_3_0' },
     script: '#!/bin/bash\necho once\n',
   });

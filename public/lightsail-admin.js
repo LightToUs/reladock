@@ -40,6 +40,7 @@ const safeInstanceFields = [
 export function createLightsailPayload(fields = {}) {
   return {
     name: String(fields.name || '').trim(),
+    awsInstanceName: String(fields.awsInstanceName || ''),
     selection: {
       region: String(fields.region || ''),
       availabilityZone: String(fields.availabilityZone || ''),

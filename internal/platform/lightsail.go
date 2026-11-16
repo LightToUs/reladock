@@ -18,6 +18,7 @@ var (
 	lightsailIdempotencyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$`)
 	lightsailRegionPattern      = regexp.MustCompile(`^[a-z]{2}(?:-[a-z]+)+-[0-9]+$`)
 	lightsailZonePattern        = regexp.MustCompile(`^[a-z]{2}(?:-[a-z]+)+-[0-9]+[a-z]$`)
+	lightsailInstancePattern    = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]{0,61}[A-Za-z0-9_]$`)
 )
 
 type LightsailCatalogSelection struct {
@@ -28,9 +29,10 @@ type LightsailCatalogSelection struct {
 }
 
 type LightsailCreateInput struct {
-	Name      string                    `json:"name"`
-	Selection LightsailCatalogSelection `json:"selection"`
-	Script    string                    `json:"script"`
+	Name            string                    `json:"name"`
+	AWSInstanceName string                    `json:"awsInstanceName"`
+	Selection       LightsailCatalogSelection `json:"selection"`
+	Script          string                    `json:"script"`
 }
 
 type LightsailInstance struct {
@@ -129,6 +131,7 @@ func validLightsailCreateInput(key string, input LightsailCreateInput) bool {
 	name := strings.TrimSpace(input.Name)
 	selection := input.Selection
 	return lightsailIdempotencyPattern.MatchString(key) && name == input.Name && len(name) >= 1 && len(name) <= 64 && utf8.ValidString(name) &&
+		lightsailInstancePattern.MatchString(input.AWSInstanceName) &&
 		lightsailRegionPattern.MatchString(selection.Region) && lightsailZonePattern.MatchString(selection.AvailabilityZone) && strings.HasPrefix(selection.AvailabilityZone, selection.Region) &&
 		len(selection.BlueprintID) >= 1 && len(selection.BlueprintID) <= 255 && len(selection.BundleID) >= 1 && len(selection.BundleID) <= 255 &&
 		utf8.ValidString(input.Script) && len(input.Script) <= 65536
@@ -136,11 +139,12 @@ func validLightsailCreateInput(key string, input LightsailCreateInput) bool {
 
 func lightsailRequestHash(input LightsailCreateInput, scriptHash string) string {
 	payload, _ := json.Marshal(struct {
-		Name       string
-		Selection  LightsailCatalogSelection
-		ScriptHash string
-		ScriptSize int
-	}{input.Name, input.Selection, scriptHash, len(input.Script)})
+		Name            string
+		AWSInstanceName string
+		Selection       LightsailCatalogSelection
+		ScriptHash      string
+		ScriptSize      int
+	}{input.Name, input.AWSInstanceName, input.Selection, scriptHash, len(input.Script)})
 	digest := sha256.Sum256(payload)
 	return hex.EncodeToString(digest[:])
 }
@@ -173,7 +177,7 @@ func (s *Store) AdminCreateLightsailInstance(ctx context.Context, who Identity, 
 	}
 	id := newID()
 	suffix := strings.ReplaceAll(id, "-", "")[:12]
-	awsName := "reladock-ls-" + suffix
+	awsName := input.AWSInstanceName
 	staticName := "reladock-ip-" + suffix
 	deploymentState := "pending"
 	var scriptBody *string

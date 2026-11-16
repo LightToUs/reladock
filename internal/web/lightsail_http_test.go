@@ -121,7 +121,7 @@ func TestLightsailHTTPCatalogCreateAndStrictBoundaries(t *testing.T) {
 		t.Fatalf("filtered catalog=%+v err=%v", catalog, err)
 	}
 
-	body := `{"name":"API node","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":"echo once\\n"}`
+	body := `{"name":"API node","awsInstanceName":"my-api-node","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":"echo once\\n"}`
 	for name, request := range map[string]*http.Request{
 		"missing key":   lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances", body, cookie, ""),
 		"unknown field": lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances", strings.TrimSuffix(body, "}")+`,"extra":true}`, cookie, "create-extra"),
@@ -133,7 +133,7 @@ func TestLightsailHTTPCatalogCreateAndStrictBoundaries(t *testing.T) {
 			t.Fatalf("%s: %d %s", name, response.Code, response.Body.String())
 		}
 	}
-	oversized := `{"name":"Large","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":"` + strings.Repeat("x", 97*1024) + `"}`
+	oversized := `{"name":"Large","awsInstanceName":"large-node","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":"` + strings.Repeat("x", 97*1024) + `"}`
 	if response := serve(handler, lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances", oversized, cookie, "create-large")); response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized: %d %s", response.Code, response.Body.String())
 	}
@@ -142,11 +142,15 @@ func TestLightsailHTTPCatalogCreateAndStrictBoundaries(t *testing.T) {
 	if createdResponse.Code != http.StatusAccepted || strings.Contains(createdResponse.Body.String(), "echo once") || strings.Contains(createdResponse.Body.String(), "script\"") {
 		t.Fatalf("create: %d %s", createdResponse.Code, createdResponse.Body.String())
 	}
+	var created platform.LightsailInstance
+	if json.Unmarshal(createdResponse.Body.Bytes(), &created) != nil || created.AWSInstanceName != "my-api-node" {
+		t.Fatalf("user AWS instance name was not preserved: %s", createdResponse.Body.String())
+	}
 	listResponse := serve(handler, lightsailRequest(http.MethodGet, "/api/admin/lightsail/instances", "", cookie, ""))
 	if listResponse.Code != http.StatusOK || strings.Contains(listResponse.Body.String(), "echo once") || strings.Contains(listResponse.Body.String(), "script\"") {
 		t.Fatalf("list: %d %s", listResponse.Code, listResponse.Body.String())
 	}
-	emptyBody := `{"name":"Create only","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":""}`
+	emptyBody := `{"name":"Create only","awsInstanceName":"create-only","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":""}`
 	emptyResponse := serve(handler, lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances", emptyBody, cookie, "create-without-script"))
 	var empty platform.LightsailInstance
 	if emptyResponse.Code != http.StatusAccepted || json.Unmarshal(emptyResponse.Body.Bytes(), &empty) != nil || empty.ScriptSize != 0 || empty.DeploymentState != "not-requested" {
@@ -159,7 +163,7 @@ func TestLightsailHTTPRejectsInvalidCatalogBeforeMutationAndSanitizesProviderErr
 	provider := &fakeLightsailCatalogProvider{catalog: lightsailCatalogFixture()}
 	handler := NewWithOptions(store, fstest.MapFS{"index.html": {Data: []byte("ok")}}, "http://127.0.0.1:3001", Options{Lightsail: &LightsailOptions{Config: lightsailHTTPConfig(true), Provider: provider}})
 	cookie := newLightsailAdminSession(t, store, handler, "lightsail-validation@example.com")
-	invalid := `{"name":"Invalid","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"missing","bundleId":"small"},"script":"echo once\\n"}`
+	invalid := `{"name":"Invalid","awsInstanceName":"invalid-node","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"missing","bundleId":"small"},"script":"echo once\\n"}`
 	response := serve(handler, lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances", invalid, cookie, "invalid-catalog"))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid catalog: %d %s", response.Code, response.Body.String())
@@ -180,7 +184,7 @@ func TestLightsailHTTPStopAndDestroyUseRevisionAndExactConfirmation(t *testing.T
 	provider := &fakeLightsailCatalogProvider{catalog: lightsailCatalogFixture()}
 	handler := NewWithOptions(store, fstest.MapFS{"index.html": {Data: []byte("ok")}}, "http://127.0.0.1:3001", Options{Lightsail: &LightsailOptions{Config: lightsailHTTPConfig(true), Provider: provider}})
 	cookie := newLightsailAdminSession(t, store, handler, "lightsail-actions@example.com")
-	body := `{"name":"Action node","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":""}`
+	body := `{"name":"Action node","awsInstanceName":"action-node","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":""}`
 	createdResponse := serve(handler, lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances", body, cookie, "create-action-node"))
 	var instance platform.LightsailInstance
 	if createdResponse.Code != http.StatusAccepted || json.Unmarshal(createdResponse.Body.Bytes(), &instance) != nil {

@@ -17,7 +17,8 @@ func TestMigration40IsCurrentSchemaVersion(t *testing.T) {
 
 func validLightsailCreate(name, script string) LightsailCreateInput {
 	return LightsailCreateInput{
-		Name: name,
+		Name:            name,
+		AWSInstanceName: strings.ToLower(strings.ReplaceAll(name, " ", "-")),
 		Selection: LightsailCatalogSelection{
 			Region: "us-east-1", AvailabilityZone: "us-east-1a", BlueprintID: "debian_12", BundleID: "small_3_0",
 		},
@@ -39,7 +40,7 @@ func TestLightsailAdminCreateIsAuthorizedIdempotentAndSecretSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if !regexp.MustCompile(`^reladock-ls-[a-f0-9]{12}$`).MatchString(created.AWSInstanceName) || created.StaticIPName != "reladock-ip-"+strings.TrimPrefix(created.AWSInstanceName, "reladock-ls-") || created.ScriptSHA256 == "" || created.ScriptSize != len(input.Script) || created.DeploymentState != "pending" {
+	if created.AWSInstanceName != "deploy-node" || !regexp.MustCompile(`^reladock-ip-[a-f0-9]{12}$`).MatchString(created.StaticIPName) || created.ScriptSHA256 == "" || created.ScriptSize != len(input.Script) || created.DeploymentState != "pending" {
 		t.Fatalf("created instance: %+v", created)
 	}
 	replayed, err := store.AdminCreateLightsailInstance(ctx, admin, "create-1", input)
@@ -50,6 +51,11 @@ func TestLightsailAdminCreateIsAuthorizedIdempotentAndSecretSafe(t *testing.T) {
 	changed.Script = "echo changed\n"
 	if _, err = store.AdminCreateLightsailInstance(ctx, admin, "create-1", changed); !errors.Is(err, ErrConflict) {
 		t.Fatalf("changed idempotency payload error = %v", err)
+	}
+	changed = input
+	changed.AWSInstanceName = "another-user-name"
+	if _, err = store.AdminCreateLightsailInstance(ctx, admin, "create-1", changed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed AWS instance name idempotency error = %v", err)
 	}
 	instances, err := store.AdminLightsailInstances(ctx, admin)
 	if err != nil || len(instances) != 1 || instances[0].ID != created.ID {
@@ -75,6 +81,23 @@ func TestLightsailAdminCreateValidatesScriptAndRollsBackOnAuditFailure(t *testin
 		t.Run(name, func(t *testing.T) {
 			if _, err := store.AdminCreateLightsailInstance(ctx, admin, "invalid-"+name, validLightsailCreate("Invalid", script)); !errors.Is(err, ErrInvalid) {
 				t.Fatalf("invalid script error = %v", err)
+			}
+		})
+	}
+	for name, awsName := range map[string]string{
+		"missing":       "",
+		"single char":   "a",
+		"leading dash":  "-node",
+		"trailing dash": "node-",
+		"space":         "my node",
+		"unicode":       "节点一",
+		"too long":      strings.Repeat("a", 64),
+	} {
+		t.Run("AWS name "+name, func(t *testing.T) {
+			input := validLightsailCreate("Invalid AWS name", "")
+			input.AWSInstanceName = awsName
+			if _, err := store.AdminCreateLightsailInstance(ctx, admin, "invalid-aws-name-"+strings.ReplaceAll(name, " ", "-"), input); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("invalid AWS instance name %q error = %v", awsName, err)
 			}
 		})
 	}
