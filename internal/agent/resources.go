@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/bits"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -145,6 +146,10 @@ func (c *ResourceCollector) cpuPercent(readFile func(string) ([]byte, error)) *i
 
 func (c *ResourceCollector) dataplaneState(ctx context.Context, inspector DataplaneInspector) string {
 	if inspector == nil {
+		return "not-applicable"
+	}
+	value := reflect.ValueOf(inspector)
+	if value.Kind() == reflect.Ptr && value.IsNil() {
 		return "not-applicable"
 	}
 	timeout := c.inspectTimeout

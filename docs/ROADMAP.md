@@ -4,10 +4,10 @@
 
 - 2026-11-16 本地 schema v41：可选 Google OIDC 登录、首次授权后的现有账号密码确认、稳定 subject、state/nonce/PKCE、摘要化一次性绑定挑战、企业与平台固定返回目标及现有会话/审计边界已实现。未绑定回调不会创建会话；只有密码确认事务成功后才绑定。连接器默认关闭；尚未配置真实 Google 项目、同意屏幕或生产凭据，也未执行真实浏览器授权回调和生产部署。
 
-- 2026-11-14 本地一条命令安装器可识别完整既有 Agent，并通过 `/dev/tty` 提供“升级 / 不操作”菜单；不操作不依赖发布元数据，升级只替换已验证的 RelaDock 二进制与 systemd 单元，保留身份、环境、WAL、journal 和原 validation/apply 运行模式，候选启动失败自动回滚。残缺、符号链接或身份配置冲突继续失败关闭。尚未发布公开安装包或在生产 VPS 执行该路径。
-
 - 2026-11-12 本地 schema v37：逐规则来源 IP/端口记录开关、schema-3 applied manifest、Linux conntrack NEW 采集、独立有界 WAL、缺口、mTLS 幂等入库、管理员有限查询/隐私审计、接收时间保留清理和持续退化告警已实现。默认关闭，要求显式保留期和独立 Agent WAL；尚未发布/部署兼容 Agent，未用生产客户流量、真实短连接压力或 Linux namespace 完整链路验收。
 
+- 2026-11-15 v0.9.11 已发布并部署：资源采集器把接口中的 typed-nil `*NodeEngine` 视为未启用数据面检查器，上报 `not-applicable`，不再把 validation-only 误报为 `drifted` 并被控制端拒绝。双架构公开归档已反向校验，生产安装元数据已固定到 v0.9.11，真实 `hk-02` 节点已用正式二进制恢复持续心跳并报告该版本；apply 保持禁用，端到端转发仍未验收。
+- 2026-11-15 v0.9.10 已发布：一条命令安装器可区分全新主机、完整既有 Agent 和残缺/冲突状态；完整既有安装显示 `/dev/tty`“升级 / 更换身份并重新安装 / 不操作”菜单。升级验证固定双架构 Release 后只替换 RelaDock 二进制与 systemd 单元，保留身份、环境、WAL 和 journal，候选启动失败自动回滚。身份重装仅允许 validation-only，先持久备份旧身份和节点运行状态，再消费当前 stdin token 注册新身份；apply 活动、启用、配置或 shaping 存在时失败关闭，新注册开始后的不确定结果保留新申请和旧备份。残留单个二进制、单元或悬空符号链接也失败关闭。同日热修复允许其余状态完整的旧版 `agent.crt` + `agent.key` 身份缺少 `identity.pem` 时进入菜单，仍拒绝不安全路径。升级前 apply 活动时恢复并 enable apply，否则默认 enable/start validation-only，并禁用另一模式以保证重启后唯一自动启动。真实旧 VPS 已人工完成旧脚本菜单升级；身份重装的生产入口与真实 VPS 验收边界见 IMPLEMENTATION_STATUS 最新记录。
 - 2026-11-07 本地 v33：新控制端托管 PKI 初始化、已有身份保护、平台发起节点证书更换、新 Agent 心跳接收并执行持久两阶段轮换。用户选择仅本地测试；线上控制台和公开 Agent 安装包尚未更新，当前 HTTP 本地服务不对外生成可用安装命令。验证及既有全量测试失败边界见 IMPLEMENTATION_STATUS.md。
 - v18–v23 节点生命周期：后台一次性安装命令、固定 Release 摘要、本地私钥、mTLS 环境报告；独立活动调度与退避、90 秒心跳、30 天证书提前 7 天两阶段自动轮换；固定目标的持久 Agent 升级任务、多层归档校验、两信号确认和自动二进制回滚；精确 conntrack retirement、持久 proof/ACK 恢复，以及绑定当前证书/boot/process/version/generation/journal/quarantine 集合的 draining 最终证明。发行包还包含 age 加密的控制/节点恢复包创建、临时数据库校验和节点仅暂存校验工具。安装包尚未发布；真实 VPS/systemd、GitHub 可达性、完整安全退役、升级中断、真实离机复制/替换主机恢复和 PKI 签发器高可用仍需验收，不视为生产就绪。
 

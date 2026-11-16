@@ -270,6 +270,13 @@ func (s *server) serveAdmin(w http.ResponseWriter, r *http.Request, who platform
 			return
 		}
 		respond(w, 200, value)
+	case r.Method == "GET" && path == "tenant-options":
+		value, err := s.store.AdminTenantOptions(ctx, who, r.URL.Query().Get("q"))
+		if err != nil {
+			failure(w, err)
+			return
+		}
+		respond(w, 200, value)
 	case r.Method == "POST" && strings.HasPrefix(path, "tenants/"):
 		parts := strings.Split(strings.TrimPrefix(path, "tenants/"), "/")
 		if len(parts) != 2 || !uuid.MatchString(parts[0]) || parts[1] != "access" {

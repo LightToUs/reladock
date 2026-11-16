@@ -98,6 +98,22 @@ func TestResourceCollectorClassifiesReadOnlyDataplaneVerification(t *testing.T) 
 	}
 }
 
+func TestResourceCollectorTreatsTypedNilInspectorAsNotApplicable(t *testing.T) {
+	collector := &ResourceCollector{
+		now:            func() time.Time { return time.Now().UTC() },
+		readFile:       func(string) ([]byte, error) { return nil, os.ErrNotExist },
+		statFS:         func(string) (filesystemUsage, error) { return filesystemUsage{}, os.ErrNotExist },
+		inspectTimeout: time.Millisecond,
+	}
+	var inspector *NodeEngine
+
+	value := collector.Collect(context.Background(), inspector)
+
+	if value.DataplaneState != "not-applicable" {
+		t.Fatalf("typed nil validation inspector reported %q, want not-applicable", value.DataplaneState)
+	}
+}
+
 func TestResourceCollectorRejectsCounterRegressionAndMalformedFiles(t *testing.T) {
 	stat := []string{"cpu  90 0 0 10\n", "cpu  80 0 0 10\n"}
 	collector := &ResourceCollector{
