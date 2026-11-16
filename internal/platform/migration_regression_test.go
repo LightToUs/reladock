@@ -44,11 +44,13 @@ func TestMigration41From40PreservesExistingFacts(t *testing.T) {
 func revertSchemaTo38(t *testing.T, s *Store) {
 	t.Helper()
 	_, err := s.pool.Exec(context.Background(), `
+DROP TABLE oauth_login_attempts;
+DROP TABLE member_external_identities;
 DROP TABLE lightsail_jobs;
 DROP TRIGGER protect_lightsail_create_identity ON lightsail_instances;
 DROP TABLE lightsail_instances;
 DROP FUNCTION protect_lightsail_create_identity();
-DELETE FROM schema_migrations WHERE version=39;`)
+DELETE FROM schema_migrations WHERE version>=39;`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +88,8 @@ func TestMigration39From38PreservesExistingFacts(t *testing.T) {
 func revertSchemaTo29(t *testing.T, s *Store) {
 	t.Helper()
 	_, err := s.pool.Exec(context.Background(), `
+DROP TABLE oauth_login_attempts;
+DROP TABLE member_external_identities;
 DROP TABLE lightsail_jobs;
 DROP TRIGGER protect_lightsail_create_identity ON lightsail_instances;
 DROP TABLE lightsail_instances;
