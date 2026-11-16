@@ -35,7 +35,7 @@ BEGIN
  RETURN NEW;
 END;
 $$;
-DELETE FROM schema_migrations WHERE version=42;`); err != nil {
+DELETE FROM schema_migrations WHERE version>=42;`); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -124,7 +124,7 @@ CREATE TABLE node_customer_port_pools (
 		(SELECT listen_port_end FROM relay_rules WHERE id=$1)`, rule.ID).Scan(&version, &pools, &triggers, &portEnd); err != nil {
 		t.Fatal(err)
 	}
-	if version != 42 || pools != 2 || triggers != 2 || portEnd != rule.ListenPort+2 {
+	if version != SchemaVersion || pools != 2 || triggers != 2 || portEnd != rule.ListenPort+2 {
 		t.Fatalf("reconciled version=%d pools=%d triggers=%d portEnd=%d", version, pools, triggers, portEnd)
 	}
 }

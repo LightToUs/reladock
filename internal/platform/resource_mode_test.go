@@ -458,8 +458,11 @@ func TestMigration26ResourceModeDefaultsAndConstraints(t *testing.T) {
 	if _, err = pool.Exec(ctx, "UPDATE nodes SET resource_mode='shared', dedicated_tenant_id=$1 WHERE id='hk-01'", tenantID); err == nil {
 		t.Fatal("shared node with dedicated tenant was accepted")
 	}
-	if _, err = pool.Exec(ctx, "UPDATE nodes SET resource_mode='dedicated-tenant' WHERE id='hk-01'"); err == nil {
-		t.Fatal("dedicated node without tenant was accepted")
+	if _, err = pool.Exec(ctx, "UPDATE nodes SET resource_mode='dedicated-tenant' WHERE id='hk-01'"); err != nil {
+		t.Fatalf("unassigned dedicated-tenant node was rejected: %v", err)
+	}
+	if _, err = pool.Exec(ctx, "UPDATE nodes SET resource_mode='dedicated-rule' WHERE id='hk-01'"); err == nil {
+		t.Fatal("dedicated-rule node without tenant was accepted")
 	}
 	if _, err = pool.Exec(ctx, "UPDATE nodes SET resource_mode='dedicated-rule', dedicated_tenant_id=$1 WHERE id='hk-01'", tenantID); err != nil {
 		t.Fatalf("valid dedicated node: %v", err)

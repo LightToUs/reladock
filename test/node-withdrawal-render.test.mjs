@@ -13,6 +13,7 @@ function renderNode(node) {
     nodes: [node], state: { nodes: [node], showHiddenNodes: false, monitoring: new Map() },
     $: () => ({ replaceChildren() {}, insertRow: () => row }), nodesForAdminList: nodes => nodes,
     cell: () => ({ classList: { add() {} } }), resourceModeLabel: () => '',
+    dedicatedTenantPresentation: () => '',
     nodeResourcePresentation: presentation, agentContactPresentation: presentation,
     upgradePresentation: presentation, configurationPresentation: presentation,
     probePresentation: presentation, certificatePresentation: presentation,
