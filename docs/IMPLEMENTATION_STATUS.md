@@ -1,14 +1,18 @@
 # 当前实现状态与 AI 交接
 
-> 最后代码核验：2026-11-17；最后生产控制端核验：2026-11-16。生产控制端仍运行 `v0.9.14`、数据库 schema v42；本地候选 schema v43 的待分配企业专属节点尚未部署。按用户明确指令，生产业务数据已重置，目前无节点、规则、交付、线路套餐、订阅、用量、账本、普通支付订单、告警工单或审计记录；保留 1 个企业账号、1 个成员、当前登录会话、0 余额钱包壳和必要的支付重放保护。Lightsail 连接器、receive-only TRON 扫描器和 Stripe Live webhook 配置仍启用，但没有业务资源或余额事实。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量、端口范围数据面或离机恢复验收完成。
+> 最后代码及生产控制端核验：2026-11-17。生产控制端运行 `v0.9.14` 控制端增量提交 `a2fb6a8`、数据库 schema v43，待分配企业专属节点已部署。按用户明确指令，生产业务数据已重置，目前无节点、规则、交付、线路套餐、订阅、用量、账本或普通支付订单；保留 1 个企业账号、1 个成员、当前登录会话、0 余额钱包壳、2 条平台维护审计和必要的支付重放保护。Lightsail 连接器、receive-only TRON 扫描器和 Stripe Live webhook 配置仍启用，但没有业务资源或余额事实。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量、端口范围数据面或离机恢复验收完成。
 
-## 2026-11-17 待分配企业专属节点（本地候选，schema v43）
+## 2026-11-17 待分配企业专属节点（生产控制端已部署，schema v43）
 
 平台管理员新增 `dedicated-tenant` 节点时可不填企业，后台显示“待分配 · 首次成功购买后绑定”；`shared` 仍禁止企业归属，`dedicated-rule` 仍强制企业。未绑定节点的已发布套餐可进入无规则目录，钱包购买或 Stripe 验签回调只有在购买最终成功时才递增节点修订、写 `node.dedicated-claim`、扣款并创建订阅，全部同事务提交。报价、支付订单、余额不足、审计失败和已入账但购买失败均不认领；双企业竞购测试证明只有一个成功，输家余额/账本/订阅不变；同企业幂等重试不重复认领或扣款。
 
 已绑定企业专属节点不能通过普通编辑清空或更换企业。平台管理员专用 `release-dedicated-tenant` 操作按节点修订保护，并在事务内重新检查活动订阅、未删除规则、端口 allocation、未释放 retirement 及 queued/leased/validated/applying/failed 配置；全部清空后才解除并写 `node.dedicated-release`，审计失败整体回滚。退款、争议、到期和规则删除不自动解绑。该增量没有修改 Agent、配置 schema、nftables/tc、真实支付配置、节点或客户流量，不能作为转发或端到端健康验收。
 
-TDD 已完成 schema v42→v43、节点输入/编辑保护、目录隔离、钱包认领与幂等、余额不足和审计回滚、双企业并发、Stripe 报价/成功/业务失败、解绑权限/修订/全部门禁/审计回滚、严格 HTTP，以及前端可选企业、待分配文案和解绑弹窗。首次全仓验证的 Go 全包 `-race` 全部通过（`internal/platform` 688.602s），随后 Node 160 项仅有两个旧 VM 渲染夹具因未注入新增展示函数而失败；补齐夹具后聚焦 2/2 通过，最终 `GOFLAGS=-timeout=20m npm test` 退出 0，Node 159 通过、1 项按默认 Linux 安装环境跳过、0 失败。`npm run vet` 与 `git diff --check` 退出 0。Linux amd64 发布构建通过：归档 SHA256 `1b99fbd4c1c4fe4ba13b47958b13795be8be20f26b723f2446043b882272b390`，控制端 `933edf63065e31ac5a0e9e6a8ad3454e1a674ac5484ea3bbaf95c0776fdb27a4`，管理 CLI `6b16b2f838b0cb85c0bb1f545e54db8c1e91ebe53c237a7331258dd6ff776dd5`，恢复工具 `e605ae2b99ea914ba26267724f325cf771c4693b8ed236e24bc25b7abdf17833`。生产备份迁移演练、切换与线上证据仍待本节后续补充。
+TDD 已完成 schema v42→v43、节点输入/编辑保护、目录隔离、钱包认领与幂等、余额不足和审计回滚、双企业并发、Stripe 报价/成功/业务失败、解绑权限/修订/全部门禁/审计回滚、严格 HTTP，以及前端可选企业、待分配文案和解绑弹窗。首次全仓验证的 Go 全包 `-race` 全部通过（`internal/platform` 688.602s），随后 Node 160 项仅有两个旧 VM 渲染夹具因未注入新增展示函数而失败；补齐夹具后聚焦 2/2 通过，最终 `GOFLAGS=-timeout=20m npm test` 退出 0，Node 159 通过、1 项按默认 Linux 安装环境跳过、0 失败。`npm run vet` 与 `git diff --check` 退出 0。Linux amd64 发布构建通过：归档 SHA256 `1b99fbd4c1c4fe4ba13b47958b13795be8be20f26b723f2446043b882272b390`，控制端 `933edf63065e31ac5a0e9e6a8ad3454e1a674ac5484ea3bbaf95c0776fdb27a4`，管理 CLI `6b16b2f838b0cb85c0bb1f545e54db8c1e91ebe53c237a7331258dd6ff776dd5`，恢复工具 `e605ae2b99ea914ba26267724f325cf771c4693b8ed236e24bc25b7abdf17833`。
+
+生产迁移先用 custom-format 备份 `/var/backups/reladock/20261116T164306Z-unassigned-dedicated-rehearsal-v4/before.dump` 恢复到显式临时数据库；候选迁移到 schema v43 后，账号/成员/会话 `1/1/1`、钱包 `1:0:0`、TRON tombstone/receipt/cursor `1/1/1`、节点/规则/交付/线路/价格/订阅/用量/账本/普通支付均保持原值，约束只允许 `dedicated-tenant` 为空，临时库和临时 dump 已清理。切换停服后即时 v42 回滚备份位于 `/var/backups/reladock/20261116T165042Z-unassigned-dedicated-cutover`，含旧控制端/管理 CLI/恢复工具、环境、systemd、custom-format 数据库、目录清单和 SHA256；旧控制端摘要为 `b8be3d93b0969d5cb54d523082efb0fe334028c3a7e6431bced45069ee9d29bc`，回滚必须同时恢复旧二进制与该 v42 dump。
+
+独立上线复核确认服务 active/enabled、schema v43、三个安装二进制摘要与本地候选一致，迁移前后业务事实 diff 为空。公网 `/`、`/admin`、`/admin.js`、`/node-editor.js`、`/node-action-dialog.js` 和 Google 状态均为 200，未登录 `/api/admin/nodes` 为 401；四个管理资源 SHA256 与源码一致。启动日志只有部署前已存在且本次未擅自改变的 `RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES=true` 明示警告，没有新增 error/fatal/panic。切换脚本所有服务、schema、计数和摘要断言完成后，仅因 `journalctl` 不接受 `+00:00` 时间格式在导出日志步骤退出 1；随后独立日志核验已完成。生产没有创建节点、套餐、支付或流量进行测试，也没有修改 Agent、PKI、WAL、nftables/tc 或网络规则；已登录后台的新增/认领/解绑交互仍待真实业务使用时验收。
 
 ## 2026-11-16 生产业务数据重置
 
