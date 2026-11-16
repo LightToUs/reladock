@@ -4,6 +4,10 @@
 
 ## 2026-11-16 AWS Lightsail 一次性脚本节点（生产控制端已启用，只读鉴权通过）
 
+schema v40 增量已在本地实现并完整验证：创建脚本允许为空，空脚本使用 `not-requested` 状态，只创建实例并绑定静态 IP，跳过公开端口修改、访问材料获取和 SSH；非空脚本继续保持最多一次与 `unknown` 不重放。只读 `GetRegions` 已在生产服务账号下返回 19 个区域：`ap-east-1`、`ap-northeast-1`、`ap-northeast-2`、`ap-south-1`、`ap-southeast-1`、`ap-southeast-2`、`ap-southeast-3`、`ap-southeast-5`、`ca-central-1`、`eu-central-1`、`eu-north-1`、`eu-south-2`、`eu-west-1`、`eu-west-2`、`eu-west-3`、`sa-east-1`、`us-east-1`、`us-east-2`、`us-west-2`；临时探针已删除，未创建资源。此段代码尚未切换生产，生产仍为 schema v39 和单区域白名单。
+
+本地完整验证使用隔离的 `postgres:17-alpine`：`GOFLAGS=-timeout=20m npm test` 退出 0，Go 全包 race 通过（`internal/platform` 597.618s、`internal/web` 99.280s），Node.js 148 项中 147 通过、1 项按默认 Linux 安装环境跳过、0 失败；`npm run vet` 与 `git diff --check` 退出 0。Linux amd64 发布归档 SHA256 为 `7957485a54aa2084498df5941986d7be744f9484112c9ef78836927cb6caddc9`，控制二进制 SHA256 为 `c3d77c67cbb696ca7721c2e10c446e61c3c9bb9297637bfe2e416ceb10a4d4a8`。首次发布构建在沙箱内因 Go 模块缓存锁不可写失败，获准在沙箱外读取/补齐缓存后构建成功。
+
 新增默认关闭、仅平台管理员可用的独立 `#/lightsail` 页面和 API。管理员从服务端允许区域的真实目录中选择活动 Linux 镜像/套餐，提交最多 64 KiB 脚本与幂等键；数据库保存不可变选择、确定的实例/静态 IP 名、脚本摘要和租约任务。worker 依次协调实例、将公开端口收窄为固定来源 TCP/22、分配并绑定一枚专属静态 IP、取得 AWS 临时 SSH 材料与见证主机公钥，然后执行一次脚本。开始执行会在同一事务记录边界并清除待执行正文；跨越边界后的任何不确定结果为 `unknown`，不自动重放。
 
 关机保留静态 IP；销毁仅允许 stopped、当前 revision 和精确实例名确认，且重新核对 `reladock-managed`/本地 UUID 标签、名称与 IP attachment 后按分离、删除、释放收敛，归属不一致进入人工复核。脚本正文、AWS 临时私钥/证书和 provider 原始错误不进入列表、审计或日志。页面 5/30 秒非重叠轮询，失败保留最后结果，并明确云状态/SSH/脚本成功都不代表 RelaDock 转发健康。该模块不会创建平台 `nodes`、Agent、线路或套餐，也不承担按规则扩缩。

@@ -28,7 +28,7 @@ LIGHTSAIL_SSH_SOURCE_CIDR=203.0.113.10/32
 # 可选：LIGHTSAIL_SCRIPT_TIMEOUT=20m
 ```
 
-允许区域必须先在目标 AWS 账户可用或完成 opt-in；控制端不会替账户启用区域。SSH 来源只接受规范的单主机 IPv4 `/32` 或 IPv6 `/128`，应填写控制服务实际出站地址；创建任务会用 `PutInstancePublicPorts` 把实例公开端口集合收窄为该来源的 TCP/22。此窗口持续到实例被关闭或销毁，不是一次连接后自动关口；若还需业务端口，应由脚本或后续受审流程明确处理，不能把它与 RelaDock 数据面防火墙混淆。
+允许区域必须先在目标 AWS 账户可用或完成 opt-in；控制端不会替账户启用区域。生产白名单应由受控的只读 `GetRegions` 结果生成、复核后显式写入，不能接受浏览器任意区域。SSH 来源只接受规范的单主机 IPv4 `/32` 或 IPv6 `/128`，应填写控制服务实际出站地址。脚本留空时任务只创建实例并绑定静态 IP，不调用 `PutInstancePublicPorts`、不取得访问材料且不连接 SSH；填写脚本时才把实例公开端口集合收窄为该来源的 TCP/22。该端口窗口持续到实例被关闭或销毁，不是一次连接后自动关口；若还需业务端口，应由脚本或后续受审流程明确处理，不能把它与 RelaDock 数据面防火墙混淆。
 
 `CreateInstances` 与首次成功执行 `PutInstancePublicPorts` 不是原子操作；两者之间可能短暂保留所选 blueprint 的默认公开端口。真实账户验收必须在隔离账户中测量该窗口、选择默认暴露最小的镜像并核对最终端口集合。当前实现不承诺“零暴露创建”。
 
@@ -54,7 +54,7 @@ lightsail:DeleteInstance
 
 Lightsail API 会限流；worker 对未完成操作和可重试 provider 失败使用有界退避，浏览器目录错误只返回固定 503，不立即循环重试。不要通过缩短 worker 间隔绕过 AWS 限流；AWS 官方建议增加请求间隔，参见 [Lightsail API throttling](https://docs.aws.amazon.com/lightsail/latest/userguide/lightsail-api-throttling.html)。
 
-粘贴脚本属于高敏感部署材料：创建前去除长期密钥和不必要输出。正文只保留到执行边界；开始执行时数据库原子清除正文，之后仅保存摘要、大小、有界脱敏输出和结果。`unknown` 表示可能已经产生副作用，平台绝不重放；先登录 AWS/实例人工核查。关机保留静态 IP 和费用事实；销毁必须先关机、输入完整实例名，并通过标签/绑定核验后按 detach → delete → release 执行。当前没有真实 AWS、付费创建、SSH 或销毁验收，启用前必须在隔离账户和允许区域完成小规格端到端演练与费用告警。
+粘贴脚本属于高敏感部署材料：创建前去除长期密钥和不必要输出。正文只保留到执行边界；开始执行时数据库原子清除正文，之后仅保存摘要、大小、有界脱敏输出和结果。空脚本保存标准空内容摘要但不保存正文，页面显示“未要求执行脚本”。`unknown` 表示非空脚本可能已经产生副作用，平台绝不重放；先登录 AWS/实例人工核查。关机保留静态 IP 和费用事实；销毁必须先关机、输入完整实例名，并通过标签/绑定核验后按 detach → delete → release 执行。当前没有真实 AWS、付费创建、SSH 或销毁验收，启用前必须在隔离账户和允许区域完成小规格端到端演练与费用告警。
 
 开发联调期间可在控制服务环境中显式设置 `RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES=true`。此开关默认关闭，只使 `pending-agent` 规则绕过套餐周期、额度和到期判断；人工暂停、删除、逐规则带宽、真实计量、mTLS、Agent 校验和 applied ACK 仍照常执行。配置不会伪造订阅或账本，开发用量以空 `subscriptionId` 独立上报，并携带配置 generation；关闭开关后，Agent 仍可依据数据库保留且校验摘要的历史版本快照排空已持久化开发 WAL，伪造、不完整或不存在的 generation 会被拒绝。控制服务与 `reladock-admin` 必须使用同一环境文件。开启或关闭后必须重启控制服务，并对相关节点执行配置重试生成新 generation。商业生产必须删除该变量或设为精确的 `false`；其他拼写和值会使服务和运维 CLI 拒绝启动。
 

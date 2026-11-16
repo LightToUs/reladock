@@ -1,12 +1,12 @@
 # 系统架构与技术约束
 
-## 独立 Lightsail 脚本节点（schema v39）
+## 独立 Lightsail 脚本节点（schema v39/v40）
 
 `internal/cloud/lightsail` 定义不依赖 AWS SDK 的 provider 合同，AWS adapter 使用 SDK 默认凭据链并按允许区域缓存客户端；`internal/cloud/sshdeploy` 只在内存解析 AWS 临时私钥/证书，固定执行 `/usr/bin/sudo -n /bin/bash -seu`，以 AWS 返回的公钥集合校验 SSH 主机身份。控制端不会把临时密钥写入文件、数据库、审计或 HTTP 响应，输出截断到 32 KiB 并过滤控制序列和常见敏感赋值。
 
 v39 的 `lightsail_instances` 保存不可变的区域/可用区/镜像/套餐、AWS 实例名、静态 IP 名、脚本摘要与有界执行结果；`lightsail_jobs` 使用单活动任务约束、租约、阶段和退避驱动 create/stop/destroy。创建每一阶段先协调远端同名资源再决定是否发起写操作，以降低响应丢失后的重复创建。实例与静态 IP 均使用确定名称，实例带 `reladock-managed=true` 和本地 UUID 标签。销毁重新读取并核对实例标签、名称和 IP 归属，任何不一致进入人工复核。
 
-脚本执行使用原子边界：`BeginLightsailExecution` 记录开始时间并从数据库清除待执行正文，然后才向 SSH runner 交付内存中的单份脚本。跨越边界后的任何错误为 `unknown` 且不重试脚本；这是最多一次语义，不是恰好一次。关机保留静态 IP；销毁只能从 stopped 状态开始，并按 detach → delete → release 收敛。该资源模型不创建 `nodes`、线路或 Agent 身份，也不进入数据面健康、计费或客户目录。
+v40 允许脚本大小为 0，并使用独立的 `not-requested` 状态。空脚本任务在实例运行后直接协调静态 IP，跳过公开端口修改、访问材料获取和 SSH runner；静态 IP 绑定完成后实例进入 running，但执行时间保持空。非空脚本继续使用原子边界：`BeginLightsailExecution` 记录开始时间并从数据库清除待执行正文，然后才向 SSH runner 交付内存中的单份脚本。跨越边界后的任何错误为 `unknown` 且不重试脚本；这是最多一次语义，不是恰好一次。关机保留静态 IP；销毁只能从 stopped 状态开始，并按 detach → delete → release 收敛。该资源模型不创建 `nodes`、线路或 Agent 身份，也不进入数据面健康、计费或客户目录。
 
 ## 来源连接元数据（schema v34/v37）
 

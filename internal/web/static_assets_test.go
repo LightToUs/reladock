@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -781,6 +782,10 @@ func TestLightsailAdminPresentationIsSeparateAndExplicitlyAtMostOnce(t *testing.
 		if !strings.Contains(combined, required) {
 			t.Errorf("Lightsail admin presentation missing %q", required)
 		}
+	}
+	scriptField := regexp.MustCompile(`<textarea[^>]*name="script"[^>]*>`).FindString(string(page))
+	if scriptField == "" || strings.Contains(scriptField, "required") || !strings.Contains(combined, "可留空") || !strings.Contains(combined, "未要求执行脚本") {
+		t.Errorf("Lightsail optional script presentation is incomplete: %q", scriptField)
 	}
 	for _, forbidden := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", `name="privateKey"`, `name="awsAccessKey"`, `name="awsSecretKey"`} {
 		if strings.Contains(combined, forbidden) {

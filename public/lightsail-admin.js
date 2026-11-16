@@ -1,6 +1,6 @@
 import { createAdaptivePoller } from './node-monitoring.js';
 
-export const LIGHTSAIL_SCRIPT_WARNING = '脚本只执行一次。SSH 开始后若结果为 unknown（未知），平台不会自动重放；请人工核查实例后再决定下一步。';
+export const LIGHTSAIL_SCRIPT_WARNING = '脚本可留空；留空时只创建实例并绑定静态 IP，不开放 SSH。填写脚本时只执行一次；SSH 开始后若结果为 unknown（未知），平台不会自动重放。';
 
 const safeInstanceFields = [
   'id', 'name', 'selection', 'awsInstanceName', 'awsArn', 'staticIpName', 'staticIpAddress',
@@ -77,7 +77,7 @@ export function instancePresentation(instance = {}) {
   }[instance.lifecycleState] || '实例状态未知';
   const deployment = {
     pending: '等待执行脚本', running: '正在执行脚本', succeeded: '脚本执行成功', failed: '脚本执行失败',
-    unknown: '脚本结果未知，不会重放', 'not-started': '脚本尚未开始',
+    unknown: '脚本结果未知，不会重放', 'not-started': '脚本尚未开始', 'not-requested': '未要求执行脚本',
   }[instance.deploymentState] || '脚本状态未知';
   const actions = [];
   if (instance.lifecycleState === 'running') actions.push('stop');
@@ -194,7 +194,7 @@ export function bindLightsailAdmin({ api, documentTarget = globalThis.document, 
       setSafeText(deployment, presentation.deployment);
       const deploymentDetail = documentTarget.createElement('span');
       deploymentDetail.className = 'detail';
-      setSafeText(deploymentDetail, item.errorCode || (item.executionOutput ? item.executionOutput.slice(0, 500) : `脚本 ${item.scriptSize || 0} 字节 · ${formatTime(item.executionStartedAt)}`));
+      setSafeText(deploymentDetail, item.errorCode || (item.executionOutput ? item.executionOutput.slice(0, 500) : (item.deploymentState === 'not-requested' ? '未配置脚本，未开放 SSH' : `脚本 ${item.scriptSize || 0} 字节 · ${formatTime(item.executionStartedAt)}`)));
       deployment.append(deploymentDetail);
       const controls = row.insertCell();
       controls.className = 'table-actions';
@@ -253,7 +253,7 @@ export function bindLightsailAdmin({ api, documentTarget = globalThis.document, 
     try {
       await submitCreate(Object.fromEntries(new FormData(createForm)));
       createDialog.close();
-      onMessage('Lightsail 创建任务已入队；静态 IP 与脚本状态将自动刷新。');
+      onMessage('Lightsail 创建任务已入队；静态 IP 与可选脚本状态将自动刷新。');
       await poller.refresh();
     } catch (error) { setSafeText(createMessage, `${LIGHTSAIL_SCRIPT_WARNING} ${error.message}`); }
     finally { submit.disabled = false; }

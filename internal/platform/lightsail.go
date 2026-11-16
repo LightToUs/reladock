@@ -131,7 +131,7 @@ func validLightsailCreateInput(key string, input LightsailCreateInput) bool {
 	return lightsailIdempotencyPattern.MatchString(key) && name == input.Name && len(name) >= 1 && len(name) <= 64 && utf8.ValidString(name) &&
 		lightsailRegionPattern.MatchString(selection.Region) && lightsailZonePattern.MatchString(selection.AvailabilityZone) && strings.HasPrefix(selection.AvailabilityZone, selection.Region) &&
 		len(selection.BlueprintID) >= 1 && len(selection.BlueprintID) <= 255 && len(selection.BundleID) >= 1 && len(selection.BundleID) <= 255 &&
-		utf8.ValidString(input.Script) && len(input.Script) >= 1 && len(input.Script) <= 65536
+		utf8.ValidString(input.Script) && len(input.Script) <= 65536
 }
 
 func lightsailRequestHash(input LightsailCreateInput, scriptHash string) string {
@@ -175,10 +175,17 @@ func (s *Store) AdminCreateLightsailInstance(ctx context.Context, who Identity, 
 	suffix := strings.ReplaceAll(id, "-", "")[:12]
 	awsName := "reladock-ls-" + suffix
 	staticName := "reladock-ip-" + suffix
+	deploymentState := "pending"
+	var scriptBody *string
+	if input.Script == "" {
+		deploymentState = "not-requested"
+	} else {
+		scriptBody = &input.Script
+	}
 	created, err := scanLightsailInstance(tx.QueryRow(ctx, `INSERT INTO lightsail_instances(
  id,created_by,idempotency_key,request_hash,name,region,availability_zone,blueprint_id,bundle_id,aws_instance_name,static_ip_name,lifecycle_state,deployment_state,script_sha256,script_size,script_body
-) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'requested','pending',$12,$13,$14) RETURNING `+lightsailInstanceColumns,
-		id, who.MemberID, idempotencyKey, requestHash, input.Name, input.Selection.Region, input.Selection.AvailabilityZone, input.Selection.BlueprintID, input.Selection.BundleID, awsName, staticName, scriptHash, len(input.Script), input.Script))
+) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'requested',$12,$13,$14,$15) RETURNING `+lightsailInstanceColumns,
+		id, who.MemberID, idempotencyKey, requestHash, input.Name, input.Selection.Region, input.Selection.AvailabilityZone, input.Selection.BlueprintID, input.Selection.BundleID, awsName, staticName, deploymentState, scriptHash, len(input.Script), scriptBody))
 	if err != nil {
 		return LightsailInstance{}, nodeError(err)
 	}
@@ -500,6 +507,13 @@ func (s *Store) CompleteLightsailJob(ctx context.Context, jobID, leaseToken, sta
 		_, err = tx.Exec(ctx, `UPDATE lightsail_instances SET aws_state='stopped',lifecycle_state='stopped',revision=revision+1,updated_at=clock_timestamp() WHERE id=$1`, instanceID)
 	} else if state == "succeeded" && kind == "destroy" {
 		_, err = tx.Exec(ctx, `UPDATE lightsail_instances SET aws_state='',lifecycle_state='destroyed',static_ip_address=NULL,destroyed_at=clock_timestamp(),revision=revision+1,updated_at=clock_timestamp() WHERE id=$1`, instanceID)
+	} else if state == "succeeded" && kind == "create" {
+		var updatedID string
+		err = tx.QueryRow(ctx, `UPDATE lightsail_instances SET lifecycle_state='running',revision=revision+1,updated_at=clock_timestamp()
+ WHERE id=$1 AND script_size=0 AND deployment_state='not-requested' AND execution_started_at IS NULL RETURNING id::text`, instanceID).Scan(&updatedID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrConflict
+		}
 	} else if state != "succeeded" {
 		_, err = tx.Exec(ctx, `UPDATE lightsail_instances SET lifecycle_state=CASE WHEN $2='manual-review' THEN 'manual-review' ELSE 'error' END,error_code=$3,revision=revision+1,updated_at=clock_timestamp() WHERE id=$1`, instanceID, state, errorCode)
 	}

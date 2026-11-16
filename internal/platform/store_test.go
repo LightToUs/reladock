@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestMigration39IsCurrentSchemaVersionFromStore(t *testing.T) {
-	if SchemaVersion != 39 {
-		t.Fatalf("SchemaVersion = %d, want 39", SchemaVersion)
+func TestMigration40IsCurrentSchemaVersionFromStore(t *testing.T) {
+	if SchemaVersion != 40 {
+		t.Fatalf("SchemaVersion = %d, want 40", SchemaVersion)
 	}
 }
 

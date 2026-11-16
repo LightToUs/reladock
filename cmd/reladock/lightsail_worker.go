@@ -88,6 +88,9 @@ func processLightsailCreate(ctx context.Context, store lightsailJobStore, provid
 		if err = recordRemoteInstance(ctx, store, job, remote); err != nil {
 			return err
 		}
+		if instance.ScriptSize == 0 {
+			return store.AdvanceLightsailJob(ctx, job.ID, job.LeaseToken, job.Stage, "reconcile-static-ip", "")
+		}
 		return store.AdvanceLightsailJob(ctx, job.ID, job.LeaseToken, job.Stage, "configure-ssh-firewall", "")
 
 	case "configure-ssh-firewall":
@@ -146,6 +149,9 @@ func processLightsailCreate(ctx context.Context, store lightsailJobStore, provid
 		}
 		if err = store.UpdateLightsailInstance(ctx, job.ID, job.LeaseToken, job.Stage, platform.LightsailInstanceUpdate{StaticIPAddress: stringPointer(staticIP.IPAddress)}); err != nil {
 			return err
+		}
+		if instance.ScriptSize == 0 {
+			return store.CompleteLightsailJob(ctx, job.ID, job.LeaseToken, "succeeded", "")
 		}
 		return store.AdvanceLightsailJob(ctx, job.ID, job.LeaseToken, job.Stage, "wait-ssh-details", "")
 
@@ -210,6 +216,9 @@ func attachOrAdvanceStaticIP(ctx context.Context, store lightsailJobStore, provi
 		}
 		if err := store.UpdateLightsailInstance(ctx, job.ID, job.LeaseToken, expectedStage, platform.LightsailInstanceUpdate{StaticIPAddress: stringPointer(staticIP.IPAddress)}); err != nil {
 			return err
+		}
+		if instance.ScriptSize == 0 {
+			return store.CompleteLightsailJob(ctx, job.ID, job.LeaseToken, "succeeded", "")
 		}
 		return store.AdvanceLightsailJob(ctx, job.ID, job.LeaseToken, expectedStage, "wait-ssh-details", "")
 	}

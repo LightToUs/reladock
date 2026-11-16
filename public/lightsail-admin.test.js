@@ -31,6 +31,13 @@ test('create payload is deterministic and preserves the pasted script exactly on
   assert.match(LIGHTSAIL_SCRIPT_WARNING, /unknown|未知/);
 });
 
+test('create payload preserves an intentionally empty script', () => {
+  assert.equal(createLightsailPayload({ ...fields, script: '' }).script, '');
+  assert.deepEqual(instancePresentation({ lifecycleState: 'running', deploymentState: 'not-requested' }), {
+    lifecycle: '实例运行中', deployment: '未要求执行脚本', detail: '不代表 RelaDock 转发或端到端健康', actions: ['stop'],
+  });
+});
+
 test('uncertain create retry retains the same idempotency key', async () => {
   const calls = [];
   let attempt = 0;

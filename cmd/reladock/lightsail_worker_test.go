@@ -61,6 +61,7 @@ type fakeLightsailProvider struct {
 	operationErr  error
 	access        lightsail.AccessDetails
 	accessErr     error
+	accessCalls   int
 	createCalls   int
 	createErr     error
 	createdInput  lightsail.CreateInstanceInput
@@ -114,6 +115,7 @@ func (f *fakeLightsailProvider) ReleaseStaticIP(context.Context, string, string)
 	return lightsail.Operation{ID: "op-release", Status: "started"}, nil
 }
 func (f *fakeLightsailProvider) AccessDetails(context.Context, string, string) (lightsail.AccessDetails, error) {
+	f.accessCalls++
 	return f.access, f.accessErr
 }
 func (f *fakeLightsailProvider) StopInstance(context.Context, string, string) (lightsail.Operation, error) {
@@ -144,7 +146,7 @@ func createWorkerJob(stage string) *platform.LightsailJob {
 	return &platform.LightsailJob{
 		ID: "00000000-0000-4000-8000-000000000010", InstanceID: "00000000-0000-4000-8000-000000000011", Kind: "create", State: "leased", Stage: stage,
 		LeaseToken: "00000000-0000-4000-8000-000000000012", ProviderOperationID: "stored-operation",
-		Instance: platform.LightsailInstance{ID: "00000000-0000-4000-8000-000000000011", Name: "Worker", Selection: platform.LightsailCatalogSelection{Region: "us-east-1", AvailabilityZone: "us-east-1a", BlueprintID: "debian", BundleID: "small"}, AWSInstanceName: "reladock-ls-abc123abc123", StaticIPName: "reladock-ip-abc123abc123", StaticIPAddress: "203.0.113.9"},
+		Instance: platform.LightsailInstance{ID: "00000000-0000-4000-8000-000000000011", Name: "Worker", Selection: platform.LightsailCatalogSelection{Region: "us-east-1", AvailabilityZone: "us-east-1a", BlueprintID: "debian", BundleID: "small"}, AWSInstanceName: "reladock-ls-abc123abc123", StaticIPName: "reladock-ip-abc123abc123", StaticIPAddress: "203.0.113.9", ScriptSize: 10},
 	}
 }
 
@@ -253,6 +255,40 @@ func TestLightsailWorkerDeployStagesFirewallBeforeStaticIPAndSSH(t *testing.T) {
 				tc.check(t, tc.provider, store)
 			}
 		})
+	}
+}
+
+func TestLightsailWorkerEmptyScriptSkipsFirewallAndSSH(t *testing.T) {
+	waitInstance := createWorkerJob("wait-instance")
+	waitInstance.Instance.ScriptSize = 0
+	store := &fakeLightsailJobStore{job: waitInstance}
+	provider := &fakeLightsailProvider{
+		operation:     lightsail.Operation{Status: "succeeded"},
+		instanceFound: true,
+		instance:      ownedRemoteInstance(waitInstance, "running"),
+	}
+	runner := &fakeSSHRunner{}
+	if err := processLightsailJob(context.Background(), store, provider, runner, workerConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(store.advanced, []string{"wait-instance->reconcile-static-ip:"}) || provider.firewallCalls != 0 || provider.accessCalls != 0 || len(runner.requests) != 0 {
+		t.Fatalf("empty script wait-instance provider=%+v store=%+v runner=%+v", provider, store, runner)
+	}
+
+	waitAttach := createWorkerJob("wait-attach")
+	waitAttach.Instance.ScriptSize = 0
+	store = &fakeLightsailJobStore{job: waitAttach}
+	provider = &fakeLightsailProvider{
+		operation:     lightsail.Operation{Status: "succeeded"},
+		staticIPFound: true,
+		staticIP:      lightsail.StaticIP{Name: waitAttach.Instance.StaticIPName, IPAddress: waitAttach.Instance.StaticIPAddress, IsAttached: true, AttachedTo: waitAttach.Instance.AWSInstanceName},
+	}
+	runner = &fakeSSHRunner{}
+	if err := processLightsailJob(context.Background(), store, provider, runner, workerConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(store.completed, []string{"succeeded:"}) || len(store.advanced) != 0 || provider.firewallCalls != 0 || provider.accessCalls != 0 || len(runner.requests) != 0 {
+		t.Fatalf("empty script completion provider=%+v store=%+v runner=%+v", provider, store, runner)
 	}
 }
 

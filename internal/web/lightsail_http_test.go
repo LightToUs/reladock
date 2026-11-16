@@ -146,6 +146,12 @@ func TestLightsailHTTPCatalogCreateAndStrictBoundaries(t *testing.T) {
 	if listResponse.Code != http.StatusOK || strings.Contains(listResponse.Body.String(), "echo once") || strings.Contains(listResponse.Body.String(), "script\"") {
 		t.Fatalf("list: %d %s", listResponse.Code, listResponse.Body.String())
 	}
+	emptyBody := `{"name":"Create only","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":""}`
+	emptyResponse := serve(handler, lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances", emptyBody, cookie, "create-without-script"))
+	var empty platform.LightsailInstance
+	if emptyResponse.Code != http.StatusAccepted || json.Unmarshal(emptyResponse.Body.Bytes(), &empty) != nil || empty.ScriptSize != 0 || empty.DeploymentState != "not-requested" {
+		t.Fatalf("empty script create: %d %s", emptyResponse.Code, emptyResponse.Body.String())
+	}
 }
 
 func TestLightsailHTTPRejectsInvalidCatalogBeforeMutationAndSanitizesProviderErrors(t *testing.T) {
@@ -174,7 +180,7 @@ func TestLightsailHTTPStopAndDestroyUseRevisionAndExactConfirmation(t *testing.T
 	provider := &fakeLightsailCatalogProvider{catalog: lightsailCatalogFixture()}
 	handler := NewWithOptions(store, fstest.MapFS{"index.html": {Data: []byte("ok")}}, "http://127.0.0.1:3001", Options{Lightsail: &LightsailOptions{Config: lightsailHTTPConfig(true), Provider: provider}})
 	cookie := newLightsailAdminSession(t, store, handler, "lightsail-actions@example.com")
-	body := `{"name":"Action node","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":"echo once\\n"}`
+	body := `{"name":"Action node","selection":{"region":"us-east-1","availabilityZone":"us-east-1a","blueprintId":"debian","bundleId":"small"},"script":""}`
 	createdResponse := serve(handler, lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances", body, cookie, "create-action-node"))
 	var instance platform.LightsailInstance
 	if createdResponse.Code != http.StatusAccepted || json.Unmarshal(createdResponse.Body.Bytes(), &instance) != nil {
@@ -192,7 +198,7 @@ func TestLightsailHTTPStopAndDestroyUseRevisionAndExactConfirmation(t *testing.T
 	if err = store.CompleteLightsailJob(context.Background(), createJob.ID, createJob.LeaseToken, "succeeded", ""); err != nil {
 		t.Fatal(err)
 	}
-	stop := serve(handler, lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances/"+instance.ID+"/stop", `{"revision":1}`, cookie, ""))
+	stop := serve(handler, lightsailRequest(http.MethodPost, "/api/admin/lightsail/instances/"+instance.ID+"/stop", `{"revision":2}`, cookie, ""))
 	if stop.Code != http.StatusAccepted {
 		t.Fatalf("stop: %d %s", stop.Code, stop.Body.String())
 	}

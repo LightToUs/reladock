@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-func TestMigration39IsCurrentSchemaVersion(t *testing.T) {
-	if SchemaVersion != 39 {
-		t.Fatalf("SchemaVersion = %d, want 39", SchemaVersion)
+func TestMigration40IsCurrentSchemaVersion(t *testing.T) {
+	if SchemaVersion != 40 {
+		t.Fatalf("SchemaVersion = %d, want 40", SchemaVersion)
 	}
 }
 
@@ -69,7 +69,6 @@ func TestLightsailAdminCreateValidatesScriptAndRollsBackOnAuditFailure(t *testin
 	ctx := context.Background()
 	admin, _ := adminIdentity(t, store)
 	for name, script := range map[string]string{
-		"empty":        "",
 		"oversized":    strings.Repeat("x", 65537),
 		"invalid utf8": string([]byte{0xff, 0xfe}),
 	} {
@@ -88,6 +87,35 @@ func TestLightsailAdminCreateValidatesScriptAndRollsBackOnAuditFailure(t *testin
 	var count int
 	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM lightsail_instances WHERE idempotency_key='audit-failure'").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("audit failure left instance count=%d err=%v", count, err)
+	}
+}
+
+func TestLightsailAdminCreateAllowsEmptyScriptWithoutExecutionPayload(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, store)
+	created, err := store.AdminCreateLightsailInstance(ctx, admin, "create-without-script", validLightsailCreate("Create only", ""))
+	if err != nil {
+		t.Fatalf("create without script: %v", err)
+	}
+	if created.ScriptSize != 0 || created.ScriptSHA256 != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" || created.DeploymentState != "not-requested" || created.ExecutionStartedAt != nil {
+		t.Fatalf("empty script state: %+v", created)
+	}
+	var body *string
+	if err = store.pool.QueryRow(ctx, "SELECT script_body FROM lightsail_instances WHERE id=$1", created.ID).Scan(&body); err != nil || body != nil {
+		t.Fatalf("empty script persisted as executable payload: body=%v err=%v", body, err)
+	}
+	job, err := store.ClaimLightsailJob(ctx, time.Minute)
+	if err != nil || job == nil || job.InstanceID != created.ID {
+		t.Fatalf("claim empty-script create: job=%+v err=%v", job, err)
+	}
+	if err = store.CompleteLightsailJob(ctx, job.ID, job.LeaseToken, "succeeded", ""); err != nil {
+		t.Fatalf("complete empty-script create: %v", err)
+	}
+	var lifecycle, deployment string
+	var revision int64
+	if err = store.pool.QueryRow(ctx, "SELECT lifecycle_state,deployment_state,revision FROM lightsail_instances WHERE id=$1", created.ID).Scan(&lifecycle, &deployment, &revision); err != nil || lifecycle != "running" || deployment != "not-requested" || revision != created.Revision+1 {
+		t.Fatalf("completed empty-script state lifecycle=%q deployment=%q revision=%d err=%v", lifecycle, deployment, revision, err)
 	}
 }
 
@@ -193,7 +221,7 @@ func TestLightsailExecutionBoundaryIsAtMostOnceAndLeaseFenced(t *testing.T) {
 	}
 }
 
-func TestMigration39EnforcesLightsailLifecycleConstraints(t *testing.T) {
+func TestMigration40EnforcesLightsailLifecycleConstraints(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	who, _ := register(t, store, "lightsail-schema@example.com")
