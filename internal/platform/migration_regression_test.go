@@ -5,6 +5,42 @@ import (
 	"testing"
 )
 
+func revertSchemaTo40(t *testing.T, s *Store) {
+	t.Helper()
+	if _, err := s.pool.Exec(context.Background(), `
+DROP TABLE oauth_login_attempts;
+DROP TABLE member_external_identities;
+DELETE FROM schema_migrations WHERE version=41;`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMigration41From40PreservesExistingFacts(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	who, token := register(t, store, "migration41-preserve@example.com")
+	var tenantsBefore, membersBefore, sessionsBefore, auditsBefore int
+	if err := store.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM tenants),(SELECT count(*) FROM members),(SELECT count(*) FROM sessions),(SELECT count(*) FROM audit_logs)`).Scan(&tenantsBefore, &membersBefore, &sessionsBefore, &auditsBefore); err != nil {
+		t.Fatal(err)
+	}
+	revertSchemaTo40(t, store)
+	for pass := 0; pass < 2; pass++ {
+		if err := store.Migrate(ctx); err != nil {
+			t.Fatalf("migration pass %d: %v", pass+1, err)
+		}
+	}
+	var version, tenantsAfter, membersAfter, sessionsAfter, auditsAfter int
+	if err := store.pool.QueryRow(ctx, `SELECT (SELECT max(version) FROM schema_migrations),(SELECT count(*) FROM tenants),(SELECT count(*) FROM members),(SELECT count(*) FROM sessions),(SELECT count(*) FROM audit_logs)`).Scan(&version, &tenantsAfter, &membersAfter, &sessionsAfter, &auditsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if version != 41 || tenantsAfter != tenantsBefore || membersAfter != membersBefore || sessionsAfter != sessionsBefore || auditsAfter != auditsBefore {
+		t.Fatalf("migration changed facts: version=%d tenants=%d/%d members=%d/%d sessions=%d/%d audits=%d/%d", version, tenantsAfter, tenantsBefore, membersAfter, membersBefore, sessionsAfter, sessionsBefore, auditsAfter, auditsBefore)
+	}
+	if loaded, err := store.Session(ctx, token); err != nil || loaded.MemberID != who.MemberID {
+		t.Fatalf("preserved session = %+v, err = %v", loaded, err)
+	}
+}
+
 func revertSchemaTo38(t *testing.T, s *Store) {
 	t.Helper()
 	_, err := s.pool.Exec(context.Background(), `
