@@ -738,6 +738,26 @@ func TestAdminConsoleUsesRoutedPagesAndCollapsibleSidebar(t *testing.T) {
 	}
 }
 
+func TestAdminUnifiedConsoleSurfaceIncludesDialogTreatment(t *testing.T) {
+	css, err := fs.ReadFile(assets.Files, "admin.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(css)
+	for _, required := range []string{
+		"--console-canvas: #e9eef6",
+		"--console-workspace: #f4f7fb",
+		"--console-panel: #ffffff",
+		"body.admin-console { background: var(--console-canvas); }",
+		"#admin-shell { position: relative; width: min(1680px, calc(100% - 40px));",
+		".node-dialog-card { background: var(--console-panel); border-radius: 12px; }",
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("admin unified console visual contract missing %q", required)
+		}
+	}
+}
+
 func TestLightsailAdminPresentationIsSeparateAndExplicitlyAtMostOnce(t *testing.T) {
 	page, err := fs.ReadFile(assets.Files, "admin.html")
 	if err != nil {

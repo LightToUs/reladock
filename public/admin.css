@@ -582,3 +582,35 @@ button:active:not(:disabled) { transform: translateY(1px); }
   .section-heading > .inline-actions { width: 100%; }
   .admin-header .account { gap: 8px; }
 }
+
+/* Unified platform frame, promoted from the production UI override. */
+:root {
+  --console-canvas: #e9eef6;
+  --console-workspace: #f4f7fb;
+  --console-panel: #ffffff;
+  --console-radius-xl: 24px;
+}
+body.admin-console { background: var(--console-canvas); }
+#admin-shell { position: relative; width: min(1680px, calc(100% - 40px)); min-height: calc(100svh - 40px); margin: 20px auto; overflow: hidden; border-radius: var(--console-radius-xl); background: var(--console-canvas); box-shadow: 0 24px 70px rgb(31 51 84 / 14%); }
+.admin-nav { position: absolute; inset: 0 auto 0 0; min-height: 100%; border-right: 1px solid var(--table-line); background: var(--console-panel); color: var(--ink); }
+.admin-brand h2 { color: var(--ink); }
+.admin-brand p { color: #738198; }
+.admin-sidebar-collapse { background: #eef3f9; color: #506178; }
+.admin-nav nav [data-view] { border-radius: 10px; color: #526178; }
+.admin-nav nav [data-view]:hover { background: #edf4ff; color: #174f99; }
+.admin-nav nav [data-view].selected { background: var(--accent); color: #ffffff; }
+.workspace-link { color: #526178; }
+.admin-main { min-height: calc(100svh - 40px); background: var(--console-workspace); }
+.admin-header { background: rgb(255 255 255 / 96%); }
+[data-pane] > section,
+.metric,
+.quick-actions button,
+.node-dialog-card { background: var(--console-panel); border-radius: 12px; }
+.metric { box-shadow: 0 8px 24px rgb(31 51 84 / 6%); }
+.metric strong { color: var(--accent); }
+.scroll { background: var(--console-panel); border-radius: 12px; }
+@media (max-width: 860px) {
+  #admin-shell { width: 100%; min-height: 100svh; margin: 0; overflow: visible; border-radius: 0; box-shadow: none; }
+  .admin-nav { position: sticky; min-height: 0; border-right: 0; box-shadow: 0 12px 30px rgb(31 51 84 / 10%); }
+  .admin-main, #admin-shell.sidebar-collapsed .admin-main { width: 100%; min-height: 100svh; margin-left: 0; }
+}
