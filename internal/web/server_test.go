@@ -484,3 +484,56 @@ func TestAdminWithdrawNodeRegistrationHTTP(t *testing.T) {
 		})
 	}
 }
+
+func TestAdminReleaseDedicatedTenantNodeHTTP(t *testing.T) {
+	store, pool := subscriptionHTTPStore(t)
+	ctx := context.Background()
+	admin, _, err := store.Register(ctx, "Release operator", "release-http-admin@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SetPlatformAdmin(ctx, admin.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	admin, adminToken, err := store.Login(ctx, admin.Email, "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, ownerToken, err := store.Register(ctx, "Release customer", "release-http-customer@example.com", "long-test-password-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.AdminAddNode(ctx, admin, platform.NodeInput{ID: "release-http", Name: "Release HTTP", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: platform.ResourceModeDedicatedTenant, DedicatedTenantID: owner.TenantID}); err != nil {
+		t.Fatal(err)
+	}
+	assets := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("tenant")}, "admin.html": &fstest.MapFile{Data: []byte("platform admin")}}
+	h := New(store, assets, "http://127.0.0.1:3001")
+	adminCookie := &http.Cookie{Name: cookieName, Value: adminToken}
+	ownerCookie := &http.Cookie{Name: cookieName, Value: ownerToken}
+	path := "/api/admin/nodes/release-http/release-dedicated-tenant"
+	if rec := request(h, http.MethodPost, path, `{"revision":1}`, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated release=%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(h, http.MethodPost, path, `{"revision":1}`, ownerCookie); rec.Code != http.StatusForbidden {
+		t.Fatalf("tenant release=%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(h, http.MethodPost, path, `{"revision":1,"force":true}`, adminCookie); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown field accepted=%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(h, http.MethodPost, path, `{"revision":2}`, adminCookie); rec.Code != http.StatusConflict {
+		t.Fatalf("stale release=%d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(h, http.MethodPost, path, `{"revision":1}`, adminCookie); rec.Code != http.StatusConflict {
+		t.Fatalf("queued delivery release=%d %s", rec.Code, rec.Body.String())
+	}
+	if _, err = pool.Exec(ctx, "UPDATE config_outbox SET state='applied' WHERE node_id='release-http'"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := request(h, http.MethodPost, path, `{"revision":1}`, adminCookie); rec.Code != http.StatusOK {
+		t.Fatalf("release=%d %s", rec.Code, rec.Body.String())
+	}
+	listed := request(h, http.MethodGet, "/api/admin/nodes", "", adminCookie)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"id":"release-http"`) || !strings.Contains(listed.Body.String(), `"dedicatedTenantId":""`) {
+		t.Fatalf("released node missing=%d %s", listed.Code, listed.Body.String())
+	}
+}

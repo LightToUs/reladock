@@ -28,40 +28,42 @@ type NodeInput struct {
 type ManagedNode struct {
 	CertificateRotationSupported bool `json:"certificateRotationSupported"`
 	Node
-	DedicatedTenantID            string               `json:"dedicatedTenantId"`
-	ListenAddress                string               `json:"listenAddress"`
-	PublicAddress                string               `json:"publicAddress"`
-	CapacityMbps                 int                  `json:"capacityMbps"`
-	Revision                     int64                `json:"revision"`
-	Hidden                       bool                 `json:"hidden"`
-	VisibilityRevision           int64                `json:"visibilityRevision"`
-	CertificateFingerprint       string               `json:"certificateFingerprint"`
-	CertificateRotationRequested bool                 `json:"certificateRotationRequested"`
-	ContactStatus                string               `json:"contactStatus"`
-	AgentMode                    string               `json:"agentMode"`
-	AgentStartedAt               *time.Time           `json:"agentStartedAt"`
-	HeartbeatAt                  *time.Time           `json:"heartbeatAt"`
-	CertificateNotAfter          *time.Time           `json:"certificateNotAfter"`
-	RotationState                string               `json:"rotationState"`
-	RotationErrorCode            string               `json:"rotationErrorCode"`
-	RotationErrorSince           *time.Time           `json:"rotationErrorSince"`
-	ProbeStatus                  string               `json:"probeStatus"`
-	ProbeObservedAt              *time.Time           `json:"probeObservedAt"`
-	Upgrade                      *AgentUpgradeSummary `json:"upgrade"`
-	UpgradeTargetVersion         string               `json:"upgradeTargetVersion"`
-	UpgradeEligible              bool                 `json:"upgradeEligible"`
-	UpgradeBlockedReason         string               `json:"upgradeBlockedReason"`
-	Withdrawable                 bool                 `json:"withdrawable"`
-	RetirementEligible           bool                 `json:"retirementEligible"`
-	RetirementReasons            []string             `json:"retirementReasons"`
-	ResourceStatus               string               `json:"resourceStatus"`
-	ResourceObservedAt           *time.Time           `json:"resourceObservedAt"`
-	CPUPercent                   *int                 `json:"cpuPercent"`
-	MemoryPercent                *int                 `json:"memoryPercent"`
-	DiskPercent                  *int                 `json:"diskPercent"`
-	ConntrackPercent             *int                 `json:"conntrackPercent"`
-	ClockSkewSeconds             *int                 `json:"clockSkewSeconds"`
-	DataplaneState               string               `json:"dataplaneState"`
+	DedicatedTenantID              string               `json:"dedicatedTenantId"`
+	ListenAddress                  string               `json:"listenAddress"`
+	PublicAddress                  string               `json:"publicAddress"`
+	CapacityMbps                   int                  `json:"capacityMbps"`
+	Revision                       int64                `json:"revision"`
+	Hidden                         bool                 `json:"hidden"`
+	VisibilityRevision             int64                `json:"visibilityRevision"`
+	CertificateFingerprint         string               `json:"certificateFingerprint"`
+	CertificateRotationRequested   bool                 `json:"certificateRotationRequested"`
+	ContactStatus                  string               `json:"contactStatus"`
+	AgentMode                      string               `json:"agentMode"`
+	AgentStartedAt                 *time.Time           `json:"agentStartedAt"`
+	HeartbeatAt                    *time.Time           `json:"heartbeatAt"`
+	CertificateNotAfter            *time.Time           `json:"certificateNotAfter"`
+	RotationState                  string               `json:"rotationState"`
+	RotationErrorCode              string               `json:"rotationErrorCode"`
+	RotationErrorSince             *time.Time           `json:"rotationErrorSince"`
+	ProbeStatus                    string               `json:"probeStatus"`
+	ProbeObservedAt                *time.Time           `json:"probeObservedAt"`
+	Upgrade                        *AgentUpgradeSummary `json:"upgrade"`
+	UpgradeTargetVersion           string               `json:"upgradeTargetVersion"`
+	UpgradeEligible                bool                 `json:"upgradeEligible"`
+	UpgradeBlockedReason           string               `json:"upgradeBlockedReason"`
+	Withdrawable                   bool                 `json:"withdrawable"`
+	RetirementEligible             bool                 `json:"retirementEligible"`
+	RetirementReasons              []string             `json:"retirementReasons"`
+	DedicatedTenantReleaseEligible bool                 `json:"dedicatedTenantReleaseEligible"`
+	DedicatedTenantReleaseReasons  []string             `json:"dedicatedTenantReleaseReasons"`
+	ResourceStatus                 string               `json:"resourceStatus"`
+	ResourceObservedAt             *time.Time           `json:"resourceObservedAt"`
+	CPUPercent                     *int                 `json:"cpuPercent"`
+	MemoryPercent                  *int                 `json:"memoryPercent"`
+	DiskPercent                    *int                 `json:"diskPercent"`
+	ConntrackPercent               *int                 `json:"conntrackPercent"`
+	ClockSkewSeconds               *int                 `json:"clockSkewSeconds"`
+	DataplaneState                 string               `json:"dataplaneState"`
 }
 
 func normalizeNode(input NodeInput) (NodeInput, error) {
@@ -146,8 +148,98 @@ func (s *Store) AdminNodes(ctx context.Context, who Identity) ([]ManagedNode, er
 			return nil, err
 		}
 		items[i].RetirementEligible = len(items[i].RetirementReasons) == 0
+		items[i].DedicatedTenantReleaseReasons = []string{}
+		if items[i].ResourceMode == ResourceModeDedicatedTenant && items[i].DedicatedTenantID != "" {
+			items[i].DedicatedTenantReleaseReasons, err = s.dedicatedTenantReleaseReasons(ctx, tx, items[i].ID)
+			if err != nil {
+				return nil, err
+			}
+			items[i].DedicatedTenantReleaseEligible = len(items[i].DedicatedTenantReleaseReasons) == 0
+		}
 	}
 	return items, nil
+}
+
+func (s *Store) dedicatedTenantReleaseReasons(ctx context.Context, tx pgx.Tx, id string) ([]string, error) {
+	reasons := []string{}
+	checks := []struct {
+		reason string
+		query  string
+	}{
+		{"active-subscription", `SELECT EXISTS(SELECT 1 FROM rule_subscriptions p JOIN plan_price_versions v ON v.id=p.price_version_id JOIN line_offerings o ON o.id=v.offering_id WHERE o.node_id=$1 AND p.ends_at>clock_timestamp() AND p.final_upload_bytes IS NULL)`},
+		{"undeleted-rule", `SELECT EXISTS(SELECT 1 FROM relay_rules WHERE node_id=$1 AND status<>'deleted')`},
+		{"endpoint-allocation", `SELECT EXISTS(SELECT 1 FROM endpoint_allocations WHERE node_id=$1)`},
+		{"endpoint-retirement", `SELECT EXISTS(SELECT 1 FROM endpoint_retirements WHERE node_id=$1 AND state<>'released')`},
+	}
+	for _, check := range checks {
+		var blocked bool
+		if err := tx.QueryRow(ctx, check.query, id).Scan(&blocked); err != nil {
+			return nil, err
+		}
+		if blocked {
+			reasons = append(reasons, check.reason)
+		}
+	}
+	rows, err := tx.Query(ctx, `SELECT DISTINCT state FROM config_outbox WHERE node_id=$1 AND state IN ('queued','leased','validated','applying','failed') ORDER BY state`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var state string
+		if err = rows.Scan(&state); err != nil {
+			return nil, err
+		}
+		reasons = append(reasons, "config-"+state)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return reasons, nil
+}
+
+func (s *Store) AdminReleaseDedicatedTenantNode(ctx context.Context, who Identity, id string, revision int64) error {
+	if !nodeIDPattern.MatchString(id) || revision < 1 {
+		return ErrInvalid
+	}
+	tx, err := s.adminTx(ctx, who)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err = lockNode(ctx, tx, id); err != nil {
+		return err
+	}
+	var current int64
+	var mode ResourceMode
+	var owner string
+	err = tx.QueryRow(ctx, `SELECT revision,resource_mode,COALESCE(dedicated_tenant_id::text,'') FROM nodes WHERE id=$1 FOR UPDATE`, id).Scan(&current, &mode, &owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if current != revision {
+		return ErrConflict
+	}
+	if mode != ResourceModeDedicatedTenant || owner == "" {
+		return ErrConflict
+	}
+	reasons, err := s.dedicatedTenantReleaseReasons(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if len(reasons) != 0 {
+		return ErrConflict
+	}
+	if _, err = tx.Exec(ctx, `UPDATE nodes SET dedicated_tenant_id=NULL,revision=revision+1 WHERE id=$1`, id); err != nil {
+		return err
+	}
+	if err = platformLog(ctx, tx, &who, "node.dedicated-release", id, map[string]any{"tenantId": owner, "revision": current + 1}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) AdminSetNodeVisibility(ctx context.Context, who Identity, id string, visibilityRevision int64, hidden bool) error {

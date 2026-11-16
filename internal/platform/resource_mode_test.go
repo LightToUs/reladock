@@ -164,6 +164,180 @@ DELETE FROM schema_migrations WHERE version=43;`); err != nil {
 	}
 }
 
+func dedicatedReleaseFixture(t *testing.T, s *Store, nodeID string) (Identity, Identity, int64) {
+	t.Helper()
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	owner, _ := register(t, s, nodeID+"@example.com")
+	if err := s.AdminAddNode(ctx, admin, NodeInput{ID: nodeID, Name: "Release fixture", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeDedicatedTenant, DedicatedTenantID: owner.TenantID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, "UPDATE config_outbox SET state='applied' WHERE node_id=$1", nodeID); err != nil {
+		t.Fatal(err)
+	}
+	var revision int64
+	if err := s.pool.QueryRow(ctx, "SELECT revision FROM nodes WHERE id=$1", nodeID).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	return admin, owner, revision
+}
+
+func hasReleaseReason(reasons []string, want string) bool {
+	for _, reason := range reasons {
+		if reason == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAdminReleaseDedicatedTenantNodeAuthorizationRevisionAndAudit(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	admin, owner, revision := dedicatedReleaseFixture(t, s, "release-success")
+	if err := s.AdminReleaseDedicatedTenantNode(ctx, owner, "release-success", revision); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("tenant release err=%v", err)
+	}
+	if err := s.AdminReleaseDedicatedTenantNode(ctx, admin, "release-success", revision+1); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale release err=%v", err)
+	}
+	nodes, err := s.AdminNodes(ctx, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, node := range nodes {
+		if node.ID == "release-success" {
+			found = true
+			if !node.DedicatedTenantReleaseEligible || len(node.DedicatedTenantReleaseReasons) != 0 {
+				t.Fatalf("release eligibility=%v reasons=%v", node.DedicatedTenantReleaseEligible, node.DedicatedTenantReleaseReasons)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("release node missing")
+	}
+	if err = s.AdminReleaseDedicatedTenantNode(ctx, admin, "release-success", revision); err != nil {
+		t.Fatal(err)
+	}
+	var dedicatedOwner, auditTenant string
+	var afterRevision, audits int64
+	if err = s.pool.QueryRow(ctx, `SELECT COALESCE(n.dedicated_tenant_id::text,''),n.revision,
+	 (SELECT count(*) FROM platform_audit_logs WHERE action='node.dedicated-release' AND resource_id=n.id),
+	 COALESCE((SELECT details->>'tenantId' FROM platform_audit_logs WHERE action='node.dedicated-release' AND resource_id=n.id ORDER BY id DESC LIMIT 1),'')
+	 FROM nodes n WHERE n.id=$1`, "release-success").Scan(&dedicatedOwner, &afterRevision, &audits, &auditTenant); err != nil {
+		t.Fatal(err)
+	}
+	if dedicatedOwner != "" || afterRevision != revision+1 || audits != 1 || auditTenant != owner.TenantID {
+		t.Fatalf("owner=%q revision=%d audits=%d auditTenant=%q", dedicatedOwner, afterRevision, audits, auditTenant)
+	}
+	if err = s.AdminReleaseDedicatedTenantNode(ctx, admin, "release-success", revision+1); !errors.Is(err, ErrConflict) {
+		t.Fatalf("already unassigned release err=%v", err)
+	}
+}
+
+func TestAdminReleaseDedicatedTenantNodeAuditFailureRollsBack(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	admin, owner, revision := dedicatedReleaseFixture(t, s, "release-audit")
+	if _, err := s.pool.Exec(ctx, `CREATE FUNCTION reject_dedicated_release_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action='node.dedicated-release' THEN RAISE EXCEPTION 'reject release audit'; END IF; RETURN NEW; END; $$; CREATE TRIGGER reject_dedicated_release_audit BEFORE INSERT ON platform_audit_logs FOR EACH ROW EXECUTE FUNCTION reject_dedicated_release_audit()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AdminReleaseDedicatedTenantNode(ctx, admin, "release-audit", revision); err == nil {
+		t.Fatal("release committed despite audit failure")
+	}
+	var dedicatedOwner string
+	var afterRevision, audits int64
+	if err := s.pool.QueryRow(ctx, `SELECT dedicated_tenant_id::text,revision,(SELECT count(*) FROM platform_audit_logs WHERE action='node.dedicated-release' AND resource_id=$1) FROM nodes WHERE id=$1`, "release-audit").Scan(&dedicatedOwner, &afterRevision, &audits); err != nil {
+		t.Fatal(err)
+	}
+	if dedicatedOwner != owner.TenantID || afterRevision != revision || audits != 0 {
+		t.Fatalf("rollback owner=%q revision=%d audits=%d", dedicatedOwner, afterRevision, audits)
+	}
+}
+
+func TestAdminReleaseDedicatedTenantNodeBlockers(t *testing.T) {
+	configStates := []string{"queued", "leased", "validated", "applying", "failed"}
+	for _, state := range configStates {
+		t.Run("config-"+state, func(t *testing.T) {
+			s := testStore(t)
+			ctx := context.Background()
+			admin, _, revision := dedicatedReleaseFixture(t, s, "release-"+state)
+			if _, err := s.pool.Exec(ctx, "UPDATE config_outbox SET state=$2 WHERE node_id=$1", "release-"+state, state); err != nil {
+				t.Fatal(err)
+			}
+			nodes, err := s.AdminNodes(ctx, admin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range nodes {
+				if node.ID == "release-"+state && (node.DedicatedTenantReleaseEligible || !hasReleaseReason(node.DedicatedTenantReleaseReasons, "config-"+state)) {
+					t.Fatalf("state=%s eligible=%v reasons=%v", state, node.DedicatedTenantReleaseEligible, node.DedicatedTenantReleaseReasons)
+				}
+			}
+			if err = s.AdminReleaseDedicatedTenantNode(ctx, admin, "release-"+state, revision); !errors.Is(err, ErrConflict) {
+				t.Fatalf("state=%s release err=%v", state, err)
+			}
+		})
+	}
+
+	for _, blocker := range []string{"active-subscription", "undeleted-rule", "endpoint-allocation", "endpoint-retirement"} {
+		t.Run(blocker, func(t *testing.T) {
+			s := subscriptionTestStore(t)
+			ctx := context.Background()
+			admin, owner, revision := dedicatedReleaseFixture(t, s, "release-"+blocker)
+			nodeID := "release-" + blocker
+			switch blocker {
+			case "active-subscription":
+				offering := publishedOffering(t, s, admin, "release-subscription", nodeID)
+				input := configuredPlan()
+				input.Code = "release-subscription"
+				input.OfferingID = offering.ID
+				input.ResourceMode = ResourceModeDedicatedTenant
+				plan, err := s.AdminCreatePlan(ctx, admin, input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: owner.TenantID, Key: "release-subscription-funds", AmountCents: 100, Reason: "test", Operator: "test"}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = s.PurchasePlan(ctx, owner, "release-subscription-buy", PurchasePlanInput{PriceVersionID: plan.ID}); err != nil {
+					t.Fatal(err)
+				}
+			case "undeleted-rule", "endpoint-allocation", "endpoint-retirement":
+				ruleInput := ruleInput("tcp")
+				ruleInput.NodeID = nodeID
+				rule, err := s.CreateRule(ctx, owner, "release-blocker-"+blocker, ruleInput)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if blocker == "endpoint-retirement" {
+					var allocationID, address, protocol string
+					var port int
+					if err = s.pool.QueryRow(ctx, "SELECT allocation_id::text,host(listen_address),protocol,listen_port FROM endpoint_allocations WHERE rule_id=$1 LIMIT 1", rule.ID).Scan(&allocationID, &address, &protocol, &port); err != nil {
+						t.Fatal(err)
+					}
+					if _, err = s.pool.Exec(ctx, `INSERT INTO endpoint_retirements(id,allocation_id,node_id,rule_id,tenant_id,listen_address,protocol,listen_port,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'waiting-removal')`, newID(), allocationID, nodeID, rule.ID, owner.TenantID, address, protocol, port); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			nodes, err := s.AdminNodes(ctx, admin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range nodes {
+				if node.ID == nodeID && (node.DedicatedTenantReleaseEligible || !hasReleaseReason(node.DedicatedTenantReleaseReasons, blocker)) {
+					t.Fatalf("blocker=%s eligible=%v reasons=%v", blocker, node.DedicatedTenantReleaseEligible, node.DedicatedTenantReleaseReasons)
+				}
+			}
+			if err = s.AdminReleaseDedicatedTenantNode(ctx, admin, nodeID, revision); !errors.Is(err, ErrConflict) {
+				t.Fatalf("blocker=%s release err=%v", blocker, err)
+			}
+		})
+	}
+}
+
 func TestDedicatedTenantNodeAdmission(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
