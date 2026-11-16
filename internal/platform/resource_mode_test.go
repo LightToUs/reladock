@@ -28,7 +28,7 @@ func TestResourceModeNormalization(t *testing.T) {
 	}
 }
 
-func TestNodeResourceModeAdministration(t *testing.T) {
+func TestAdminNodeResourceModeValidationAndMutation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	admin, _ := adminIdentity(t, s)
@@ -52,12 +52,20 @@ func TestNodeResourceModeAdministration(t *testing.T) {
 	if err := s.AdminAddNode(ctx, admin, badShared); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("shared owner: %v", err)
 	}
+	unassigned := dedicated
+	unassigned.ID = "unassigned-dedicated"
+	unassigned.DedicatedTenantID = ""
+	if err := s.AdminAddNode(ctx, admin, unassigned); err != nil {
+		t.Fatalf("unassigned dedicated tenant: %v", err)
+	}
 	badDedicated := dedicated
-	badDedicated.ID = "bad-dedicated-owner"
+	badDedicated.ID = "bad-dedicated-rule"
+	badDedicated.ResourceMode = ResourceModeDedicatedRule
 	badDedicated.DedicatedTenantID = ""
 	if err := s.AdminAddNode(ctx, admin, badDedicated); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("missing dedicated owner: %v", err)
+		t.Fatalf("missing dedicated-rule owner: %v", err)
 	}
+	badDedicated.ResourceMode = ResourceModeDedicatedTenant
 	badDedicated.ID = "unknown-dedicated-owner"
 	badDedicated.DedicatedTenantID = newID()
 	if err := s.AdminAddNode(ctx, admin, badDedicated); !errors.Is(err, ErrInvalid) {
@@ -88,8 +96,12 @@ func TestNodeResourceModeAdministration(t *testing.T) {
 	if err = s.DeleteRule(ctx, owner, rule.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.AdminUpdateNode(ctx, admin, shared, 2); err != nil {
-		t.Fatalf("empty-after-delete owner update: %v", err)
+	if err = s.AdminUpdateNode(ctx, admin, shared, 2); !errors.Is(err, ErrConflict) {
+		t.Fatalf("bound owner changed through generic edit: %v", err)
+	}
+	shared.DedicatedTenantID = ""
+	if err = s.AdminUpdateNode(ctx, admin, shared, 2); !errors.Is(err, ErrConflict) {
+		t.Fatalf("bound owner cleared through generic edit: %v", err)
 	}
 
 	nodes, err := s.AdminNodes(ctx, admin)
@@ -107,6 +119,48 @@ func TestNodeResourceModeAdministration(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("dedicated node missing from admin inventory")
+	}
+}
+
+func TestMigration43AllowsOnlyUnassignedDedicatedTenantNodes(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	admin, _ := adminIdentity(t, s)
+	owner, _ := register(t, s, "migration43-owner@example.com")
+	assigned := NodeInput{ID: "migration43-assigned", Name: "Assigned", Region: "Test", ListenAddress: "0.0.0.0", CapacityMbps: 1000, ResourceMode: ResourceModeDedicatedTenant, DedicatedTenantID: owner.TenantID}
+	if err := s.AdminAddNode(ctx, admin, assigned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `ALTER TABLE nodes DROP CONSTRAINT nodes_resource_mode_owner_check;
+ALTER TABLE nodes ADD CONSTRAINT nodes_resource_mode_owner_check CHECK (
+ (resource_mode='shared' AND dedicated_tenant_id IS NULL) OR
+ (resource_mode IN ('dedicated-tenant','dedicated-rule') AND dedicated_tenant_id IS NOT NULL)
+);
+DELETE FROM schema_migrations WHERE version=43;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	var assignedOwner string
+	if err := s.pool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 43 {
+		t.Fatalf("schema version=%d want=43", version)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT dedicated_tenant_id::text FROM nodes WHERE id=$1`, assigned.ID).Scan(&assignedOwner); err != nil || assignedOwner != owner.TenantID {
+		t.Fatalf("assigned owner=%q err=%v", assignedOwner, err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO nodes(id,name,region,status,listen_address,capacity_mbps,resource_mode,dedicated_tenant_id) VALUES('migration43-unassigned','Unassigned','Test','unprovisioned','0.0.0.0',1000,'dedicated-tenant',NULL)`); err != nil {
+		t.Fatalf("unassigned dedicated tenant rejected: %v", err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET resource_mode='shared',dedicated_tenant_id=$2 WHERE id=$1`, assigned.ID, owner.TenantID); err == nil {
+		t.Fatal("shared node with owner was accepted")
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET resource_mode='dedicated-rule',dedicated_tenant_id=NULL WHERE id=$1`, assigned.ID); err == nil {
+		t.Fatal("unassigned dedicated-rule node was accepted")
 	}
 }
 

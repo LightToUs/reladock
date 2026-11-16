@@ -10,8 +10,8 @@ import (
 )
 
 func TestMigration40IsCurrentSchemaVersion(t *testing.T) {
-	if SchemaVersion != 42 {
-		t.Fatalf("SchemaVersion = %d, want 42", SchemaVersion)
+	if SchemaVersion != 43 {
+		t.Fatalf("SchemaVersion = %d, want 43", SchemaVersion)
 	}
 }
 

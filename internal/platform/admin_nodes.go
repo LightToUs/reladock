@@ -76,7 +76,9 @@ func normalizeNode(input NodeInput) (NodeInput, error) {
 		if input.DedicatedTenantID != "" {
 			return input, ErrInvalid
 		}
-	} else if !billingUUID.MatchString(input.DedicatedTenantID) {
+	} else if mode == ResourceModeDedicatedRule && !billingUUID.MatchString(input.DedicatedTenantID) {
+		return input, ErrInvalid
+	} else if mode == ResourceModeDedicatedTenant && input.DedicatedTenantID != "" && !billingUUID.MatchString(input.DedicatedTenantID) {
 		return input, ErrInvalid
 	}
 	if !nodeIDPattern.MatchString(input.ID) || !utf8.ValidString(input.Name) || utf8.RuneCountInString(input.Name) < 1 || utf8.RuneCountInString(input.Name) > 120 || !utf8.ValidString(input.Region) || utf8.RuneCountInString(input.Region) < 1 || utf8.RuneCountInString(input.Region) > 80 || net.ParseIP(input.ListenAddress) == nil || input.CapacityMbps < 1 || input.CapacityMbps > 1000000 {
@@ -367,7 +369,8 @@ func (s *Store) mutateNode(ctx context.Context, actor *Identity, id string, revi
 			return err
 		}
 		modeChanged := input.ResourceMode != currentMode || input.DedicatedTenantID != currentOwner
-		if maxBandwidth > input.CapacityMbps || input.ListenAddress != bind && count > 0 || modeChanged && count > 0 {
+		boundTenantChanged := currentMode == ResourceModeDedicatedTenant && currentOwner != "" && modeChanged
+		if maxBandwidth > input.CapacityMbps || input.ListenAddress != bind && count > 0 || modeChanged && count > 0 || boundTenantChanged {
 			return ErrConflict
 		}
 		if _, err = tx.Exec(ctx, "UPDATE nodes SET name=$2,region=$3,listen_address=$4,public_address=NULLIF($5,'')::inet,capacity_mbps=$6,resource_mode=$7,dedicated_tenant_id=NULLIF($8,'')::uuid WHERE id=$1", id, input.Name, input.Region, input.ListenAddress, input.PublicAddress, input.CapacityMbps, input.ResourceMode, input.DedicatedTenantID); err != nil {
