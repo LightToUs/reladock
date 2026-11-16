@@ -9,6 +9,7 @@ import {
   createLightsailPayload,
   createLightsailSubmission,
   instancePresentation,
+  lightsailRegionLabel,
   pollingDelay,
   safeInstanceView,
   setSafeText,
@@ -19,6 +20,13 @@ const fields = {
   name: 'Singapore worker', region: 'ap-southeast-1', availabilityZone: 'ap-southeast-1a',
   blueprintId: 'debian_12', bundleId: 'small_3_0', script: '#!/bin/bash\necho once\n',
 };
+
+test('AWS region codes are presented with their Chinese locations', () => {
+  assert.equal(lightsailRegionLabel('ap-east-1'), '香港（ap-east-1）');
+  assert.equal(lightsailRegionLabel('ap-southeast-1'), '新加坡（ap-southeast-1）');
+  assert.equal(lightsailRegionLabel('us-east-1'), '美国弗吉尼亚北部（us-east-1）');
+  assert.equal(lightsailRegionLabel('future-region-1'), 'future-region-1');
+});
 
 test('create payload is deterministic and preserves the pasted script exactly once', () => {
   const payload = createLightsailPayload(fields);

@@ -2,6 +2,34 @@ import { createAdaptivePoller } from './node-monitoring.js';
 
 export const LIGHTSAIL_SCRIPT_WARNING = '脚本可留空；留空时只创建实例并绑定静态 IP，不开放 SSH。填写脚本时只执行一次；SSH 开始后若结果为 unknown（未知），平台不会自动重放。';
 
+const lightsailRegionLocations = Object.freeze({
+  'ap-east-1': '香港',
+  'ap-northeast-1': '日本东京',
+  'ap-northeast-2': '韩国首尔',
+  'ap-south-1': '印度孟买',
+  'ap-southeast-1': '新加坡',
+  'ap-southeast-2': '澳大利亚悉尼',
+  'ap-southeast-3': '印度尼西亚雅加达',
+  'ap-southeast-5': '马来西亚',
+  'ca-central-1': '加拿大中部',
+  'eu-central-1': '德国法兰克福',
+  'eu-north-1': '瑞典斯德哥尔摩',
+  'eu-south-2': '西班牙',
+  'eu-west-1': '爱尔兰',
+  'eu-west-2': '英国伦敦',
+  'eu-west-3': '法国巴黎',
+  'sa-east-1': '巴西圣保罗',
+  'us-east-1': '美国弗吉尼亚北部',
+  'us-east-2': '美国俄亥俄',
+  'us-west-2': '美国俄勒冈',
+});
+
+export function lightsailRegionLabel(region) {
+  const code = String(region || '');
+  const location = lightsailRegionLocations[code];
+  return location ? `${location}（${code}）` : code;
+}
+
 const safeInstanceFields = [
   'id', 'name', 'selection', 'awsInstanceName', 'awsArn', 'staticIpName', 'staticIpAddress',
   'awsState', 'lifecycleState', 'deploymentState', 'scriptSha256', 'scriptSize',
@@ -237,7 +265,7 @@ export function bindLightsailAdmin({ api, documentTarget = globalThis.document, 
     setSafeText(statusDetail, presentation.detail);
     createButton.disabled = !status.enabled;
     if (!status.enabled) { catalogLoader.cancel(); return false; }
-    setSelect(region, (status.allowedRegions || []).map(value => ({ value, label: value })), '无允许区域');
+    setSelect(region, (status.allowedRegions || []).map(value => ({ value, label: lightsailRegionLabel(value) })), '无允许区域');
     if (region.value) await catalogLoader.load(region.value);
     return isCurrent();
   };
