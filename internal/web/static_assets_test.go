@@ -274,8 +274,16 @@ func TestResourceModeControlsAndIndependentPackageCopyAreStatic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	combinedAdmin := string(adminPage) + string(adminJS) + string(planCatalog)
-	for _, required := range []string{`name="resourceMode"`, `name="dedicatedTenantId"`, "共享资源", "企业专属资源", "规则专属资源", "dedicatedTenantId", "resourceModeLabel", "tenant.id"} {
+	nodeEditor, err := fs.ReadFile(assets.Files, "node-editor.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeActions, err := fs.ReadFile(assets.Files, "node-action-dialog.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	combinedAdmin := string(adminPage) + string(adminJS) + string(planCatalog) + string(nodeEditor) + string(nodeActions)
+	for _, required := range []string{`name="resourceMode"`, `name="dedicatedTenantId"`, "共享资源", "企业专属资源", "规则专属资源", "dedicatedTenantId", "resourceModeLabel", "tenant.id", "企业专属资源可留空", "待分配 · 首次成功购买后绑定", "release-dedicated-tenant", "解除企业绑定"} {
 		if !strings.Contains(combinedAdmin, required) {
 			t.Errorf("admin resource mode presentation missing %q", required)
 		}

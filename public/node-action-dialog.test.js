@@ -14,6 +14,17 @@ test('certificate rotation requires capable enrolled agent and reports a request
   assert.equal(nodeActionDescriptor('rotate-certificate', {...node, certificateRotationRequested: true}), null);
 });
 
+test('dedicated tenant release requires a bound eligible node and uses the guarded route', () => {
+  const node = { id: 'hk-01', name: '香港', revision: 9, resourceMode: 'dedicated-tenant', dedicatedTenantId: 'tenant-01', dedicatedTenantReleaseEligible: true, dedicatedTenantReleaseReasons: [] };
+  const action = nodeActionDescriptor('release-dedicated-tenant', node);
+  assert.equal(action.path, '/api/admin/nodes/hk-01/release-dedicated-tenant');
+  assert.deepEqual(action.body, { revision: 9 });
+  assert.equal(action.danger, true);
+  assert.match(action.description, /不会自动停止/);
+  assert.equal(nodeActionDescriptor('release-dedicated-tenant', { ...node, dedicatedTenantId: '' }), null);
+  assert.equal(nodeActionDescriptor('release-dedicated-tenant', { ...node, dedicatedTenantReleaseEligible: false, dedicatedTenantReleaseReasons: ['active-subscription'] }), null);
+});
+
 class Control extends EventTarget {
   constructor() {
     super();

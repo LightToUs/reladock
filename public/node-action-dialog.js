@@ -1,5 +1,6 @@
 export function nodeActionDescriptor(kind, node) {
   if (kind === 'withdraw-registration' && !node.withdrawable) return null;
+  if (kind === 'release-dedicated-tenant' && (node.resourceMode !== 'dedicated-tenant' || !node.dedicatedTenantId || !node.dedicatedTenantReleaseEligible)) return null;
   if (kind === 'rotate-certificate' && (!node.certificateFingerprint || !node.certificateRotationSupported || node.certificateRotationRequested || ['draining', 'retired'].includes(node.status))) return null;
   const definitions = {
     'rotate-certificate': {
@@ -47,6 +48,11 @@ export function nodeActionDescriptor(kind, node) {
       description: '仅从未部署且没有任何业务或运行历史的空节点可以撤销登记；此操作不可恢复。',
       successText: '未部署的空节点登记已撤销。',
     },
+    'release-dedicated-tenant': {
+      title: '解除企业绑定', confirmLabel: '确认解除绑定', danger: true,
+      description: '仅在没有有效套餐、规则、端口占用、回收任务或未完成配置时清除企业归属。不会自动停止已有流量，也不会删除企业、节点或历史记录。',
+      successText: '企业绑定已解除，节点恢复为待分配。',
+    },
     'revoke-certificate': {
       title: '撤销节点证书', confirmLabel: '确认撤销证书', danger: true,
       description: '撤销当前证书的 Agent 接入权限，不会停止已有数据面流量。',
@@ -74,6 +80,22 @@ export function nodeActionDescriptor(kind, node) {
   };
 }
 
+const dedicatedReleaseReasons = {
+  'active-subscription': '仍有有效套餐',
+  'undeleted-rule': '仍有未删除规则',
+  'endpoint-allocation': '仍有端口占用',
+  'endpoint-retirement': '仍有未完成端口回收',
+  'config-queued': '配置等待交付',
+  'config-leased': '配置已被 Agent 领取',
+  'config-validated': '配置已校验但尚未应用',
+  'config-applying': '配置正在应用',
+  'config-failed': '配置交付失败待处理',
+};
+
+export function dedicatedTenantReleaseReasonText(reasons = []) {
+  return reasons.map(reason => dedicatedReleaseReasons[reason] || `未知门禁 ${reason}`);
+}
+
 export function createNodeActionRunner({ kind, node, getNode, mutate, conflictMessage, onRefresh = () => {}, onSuccess = () => {} }) {
   let representedNode = node;
   return async () => {
@@ -83,7 +105,7 @@ export function createNodeActionRunner({ kind, node, getNode, mutate, conflictMe
     if (saved) { await onSuccess(); return; }
     const current = getNode(node.id);
     const refreshedAction = current && nodeActionDescriptor(kind, current);
-    if (!refreshedAction) throw new Error('当前节点状态已不允许此操作，请刷新后重试。');
+    if (!refreshedAction) throw new Error(conflictMessage() || '当前节点状态已不允许此操作，请刷新后重试。');
     representedNode = current;
     onRefresh(refreshedAction);
     throw new Error(conflictMessage() || '操作冲突，请检查最新状态后重新确认。');

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { bindNodeEditor } from './node-editor.js';
+import { bindNodeEditor, dedicatedTenantPresentation } from './node-editor.js';
 
 class Control extends EventTarget {
   click() { this.dispatchEvent(new Event('click')); }
@@ -101,10 +101,34 @@ test('edit action opens the same dialog with node values and locked identity', (
 	assert.equal(ui.fields.resourceMode.value, 'dedicated-tenant');
 	assert.equal(ui.fields.dedicatedTenantId.value, '9bd89fc7-b8ce-4b79-904f-e71bd4540751');
 	assert.equal(ui.fields.dedicatedTenantId.disabled, false);
-	assert.equal(ui.fields.dedicatedTenantId.required, true);
+	assert.equal(ui.fields.dedicatedTenantId.required, false);
   assert.equal(ui.fields.id.readOnly, true);
   assert.equal(ui.fields.name.focused, true);
   assert.equal(ui.status.textContent, '');
+});
+
+test('dedicated tenant is optional while dedicated rule still requires an owner', () => {
+  const ui = fixture();
+  bindNodeEditor(ui);
+
+  ui.fields.resourceMode.value = 'dedicated-tenant';
+  ui.fields.resourceMode.change();
+  assert.equal(ui.fields.dedicatedTenantId.disabled, false);
+  assert.equal(ui.fields.dedicatedTenantId.required, false);
+  assert.equal(ui.fields.dedicatedTenantId.value, '');
+
+  ui.fields.dedicatedTenantId.value = '9bd89fc7-b8ce-4b79-904f-e71bd4540751';
+  ui.fields.resourceMode.value = 'dedicated-rule';
+  ui.fields.resourceMode.change();
+  assert.equal(ui.fields.dedicatedTenantId.disabled, false);
+  assert.equal(ui.fields.dedicatedTenantId.required, true);
+  assert.equal(ui.fields.dedicatedTenantId.value, '9bd89fc7-b8ce-4b79-904f-e71bd4540751');
+});
+
+test('resource owner presentation distinguishes pending allocation from shared capacity', () => {
+  assert.equal(dedicatedTenantPresentation({ resourceMode: 'shared', dedicatedTenantId: '' }), '所有企业可分配');
+  assert.equal(dedicatedTenantPresentation({ resourceMode: 'dedicated-tenant', dedicatedTenantId: '' }), '待分配 · 首次成功购买后绑定');
+  assert.equal(dedicatedTenantPresentation({ resourceMode: 'dedicated-tenant', dedicatedTenantId: 'tenant-01' }), '企业 tenant-01');
 });
 
 test('switching to shared clears a previous dedicated tenant before create', () => {

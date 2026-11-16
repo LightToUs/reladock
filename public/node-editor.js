@@ -1,5 +1,11 @@
 const fieldNames = ['id', 'name', 'region', 'listenAddress', 'publicAddress', 'capacityMbps', 'resourceMode', 'dedicatedTenantId'];
 
+export function dedicatedTenantPresentation(node) {
+  if (node.resourceMode === 'dedicated-tenant' && !node.dedicatedTenantId) return '待分配 · 首次成功购买后绑定';
+  if (node.dedicatedTenantId) return `企业 ${node.dedicatedTenantId}`;
+  return '所有企业可分配';
+}
+
 export function bindNodeEditor({ dialog, form, title, save, status, createButton, cancelButton }) {
   let editingNode = null;
   let session = 0;
@@ -9,7 +15,7 @@ export function bindNodeEditor({ dialog, form, title, save, status, createButton
   function syncDedicatedTenant() {
     const shared = resourceMode.value === 'shared';
     dedicatedTenant.disabled = shared;
-    dedicatedTenant.required = !shared;
+    dedicatedTenant.required = resourceMode.value === 'dedicated-rule';
     if (shared) dedicatedTenant.value = '';
   }
 

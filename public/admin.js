@@ -3,9 +3,9 @@ import { bindNodeBootstrap } from './node-bootstrap.js';
 import { bindConsoleNavigation } from './console-navigation.js';
 import { bindLightsailAdmin } from './lightsail-admin.js';
 import { agentContactPresentation, certificatePresentation, configurationPresentation, probePresentation } from './node-contact-status.js';
-import { bindNodeActionDialog, createNodeActionRunner, nodeActionDescriptor } from './node-action-dialog.js';
+import { bindNodeActionDialog, createNodeActionRunner, dedicatedTenantReleaseReasonText, nodeActionDescriptor } from './node-action-dialog.js';
 import { bindNodeContentDialog, bindNodeDeliveryDialog, runDialogSession } from './node-content-dialog.js';
-import { bindNodeEditor } from './node-editor.js';
+import { bindNodeEditor, dedicatedTenantPresentation } from './node-editor.js';
 import { createAdaptivePoller, loadAllOperationNodes, nodeMonitoringPresentation } from './node-monitoring.js';
 import { bindNodeVisibilityToggle, nodesForAdminList } from './node-visibility.js';
 import { resourceModeLabel } from './resource-mode.js';
@@ -87,7 +87,7 @@ async function reload() {
 function renderSummary(data) { $('#stat-tenants').textContent = data.tenants; $('#stat-suspended').textContent = `${data.suspendedTenants} 家已停用`; $('#stat-nodes').textContent = data.nodes; $('#stat-maintenance').textContent = `${data.maintenanceNodes} 个维护中`; $('#stat-rules').textContent = data.rules; $('#stat-paused').textContent = `${data.pausedRules} 条已暂停`; $('#stat-failed').textContent = data.failedDeliveries; }
 async function mutate(path, body, success) {
   try { await api(path, body); }
-  catch (error) { if (error.status === 409) { await reload(); const nodeId = /^\/api\/admin\/nodes\/([^/]+)\//.exec(path)?.[1]; const latest = state.nodes.find(node => node.id === nodeId); const detail = path.endsWith('/start-draining') ? '节点必须先进入维护；排空一旦开始不可恢复分配。' : path.endsWith('/finalize-retirement') ? `尚未满足最终退役门禁：${retirementReasonText(latest?.retirementReasons).join('；') || '状态已经变化'}。` : path.endsWith('/withdraw-registration') ? '节点存在接入历史或关联资源，不能撤销登记；请先清理关联资源，已接入节点需安全退役。' : path.endsWith('/visibility') ? '节点显示状态已被其他页面修改。' : '有规则的节点不可更换绑定地址或降低至规则速率以下。'; message(`操作冲突，已载入最新数据，请重新确认后操作。${detail}`); return false; } throw error; }
+  catch (error) { if (error.status === 409) { await reload(); const nodeId = /^\/api\/admin\/nodes\/([^/]+)\//.exec(path)?.[1]; const latest = state.nodes.find(node => node.id === nodeId); const detail = path.endsWith('/start-draining') ? '节点必须先进入维护；排空一旦开始不可恢复分配。' : path.endsWith('/finalize-retirement') ? `尚未满足最终退役门禁：${retirementReasonText(latest?.retirementReasons).join('；') || '状态已经变化'}。` : path.endsWith('/withdraw-registration') ? '节点存在接入历史或关联资源，不能撤销登记；请先清理关联资源，已接入节点需安全退役。' : path.endsWith('/release-dedicated-tenant') ? `尚未满足解除企业绑定门禁：${dedicatedTenantReleaseReasonText(latest?.dedicatedTenantReleaseReasons).join('；') || '状态或修订号已经变化'}。` : path.endsWith('/visibility') ? '节点显示状态已被其他页面修改。' : '有规则的节点不可更换绑定地址或降低至规则速率以下。'; message(`操作冲突，已载入最新数据，请重新确认后操作。${detail}`); return false; } throw error; }
   message(success);
   try { await reload(); } catch (error) { message(`${success} 列表刷新失败，请点击刷新查看结果：${error.message}`); }
   return true;
@@ -155,7 +155,7 @@ function startAdminNodeMonitoring() {
 function renderNodes(nodes) {
   const root = $('#admin-nodes'); root.replaceChildren();
   for (const node of nodesForAdminList(nodes, state.showHiddenNodes)) {
-    const row = root.insertRow(); row.dataset.nodeId = node.id; cell(row, node.name, node.hidden ? `${node.id} · 已隐藏` : node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`); cell(row, resourceModeLabel(node.resourceMode), node.dedicatedTenantId ? `企业 ${node.dedicatedTenantId}` : '所有企业可分配');
+    const row = root.insertRow(); row.dataset.nodeId = node.id; cell(row, node.name, node.hidden ? `${node.id} · 已隐藏` : node.id); cell(row, node.region, node.publicAddress || '计划公网 IP 未填写'); cell(row, `${node.capacityMbps} Mbps`); cell(row, resourceModeLabel(node.resourceMode), dedicatedTenantPresentation(node));
     const resource = nodeResourcePresentation(node); cell(row, resource.label, resource.detail);
     const contact = agentContactPresentation(node.contactStatus); const agentDetail = `${contact.detail}${node.agentMode ? `；${node.agentMode}` : ''}`; const contactCell = cell(row, contact.label, agentDetail); contactCell.classList.add('agent-status', `agent-status-${contact.tone}`);
     monitoringCell(row, node.id, 'rate'); monitoringCell(row, node.id, 'traffic'); monitoringCell(row, node.id, 'runtime'); monitoringCell(row, node.id, 'resources'); monitoringCell(row, node.id, 'observed');
@@ -171,7 +171,14 @@ function renderNodes(nodes) {
       controls.append(visibilityControl(node));
       continue;
     }
-    controls.append(button('编辑', () => editNode(node)), button(node.status === 'maintenance' ? '恢复分配' : '进入维护', () => openNodeAction(node.status === 'maintenance' ? 'enable' : 'maintenance', node)), button('手动证书管理', () => editCertificate(node)), button('重试交付', () => openNodeAction('retry', node)), deliveryControl(node));
+    controls.append(button('编辑', () => editNode(node)));
+    if (node.resourceMode === 'dedicated-tenant' && node.dedicatedTenantId) {
+      const release = button('解除企业绑定', () => openNodeAction('release-dedicated-tenant', node), true);
+      release.disabled = !node.dedicatedTenantReleaseEligible;
+      if (release.disabled) release.title = `暂不可解除：${dedicatedTenantReleaseReasonText(node.dedicatedTenantReleaseReasons).join('；') || '等待服务端重新核验'}`;
+      controls.append(release);
+    }
+    controls.append(button(node.status === 'maintenance' ? '恢复分配' : '进入维护', () => openNodeAction(node.status === 'maintenance' ? 'enable' : 'maintenance', node)), button('手动证书管理', () => editCertificate(node)), button('重试交付', () => openNodeAction('retry', node)), deliveryControl(node));
     if (node.certificateFingerprint) {
       const rotate = button(node.certificateRotationRequested ? '等待证书更换' : '自动更换证书', () => openNodeAction('rotate-certificate', node));
       rotate.disabled = !node.certificateRotationSupported || node.certificateRotationRequested;
