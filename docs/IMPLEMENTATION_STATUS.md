@@ -2,6 +2,14 @@
 
 > 最后代码及生产控制端核验：2026-11-17。生产控制端运行 `v0.9.14` 控制端增量提交 `c112a02`、数据库 schema v43，待分配企业专属节点和平台登录页视觉修复已部署。按用户明确指令，生产业务数据此前已重置；当前只读复核为 1 个节点、0 条规则、0 个订阅和 0 条账本，仍保留既有企业账号、成员、会话、0 余额钱包壳、平台维护审计和必要的支付重放保护。Lightsail 连接器、receive-only TRON 扫描器和 Stripe Live webhook 配置仍启用，但没有本次登录页部署产生的业务资源或余额事实。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量、端口范围数据面或离机恢复验收完成。
 
+## 2026-11-17 v0.9.14 validation-only Agent 心跳拒绝（生产诊断，本地 v0.9.15 修复待发布）
+
+新装节点 `hk-01` 的注册、证书、mTLS、配置领取/校验、只读预检和 systemd 常驻均正常；控制端持续收到配置与预检联系，但 `agent_heartbeat_at` 为空，页面因此保持“待 Agent 连接”。生产 Agent 日志持续显示 `heartbeat rejected`。使用同一身份手工发送协议合法心跳返回 200，排除了证书、网络、控制端路由和数据库写入故障；不替换已安装 Agent 的临时 Linux amd64 诊断构建复现 HTTP 400，并捕获实际资源字段为 `mode=validation`、`resources.dataplaneState=drifted`。控制端按协议只允许 validation 模式使用 `not-applicable`（`unknown` 也可独立接受），因此拒绝整条心跳。
+
+根因是 v0.9.14 Agent 中的 Go typed-nil interface：validation 模式下 `PrepareApply` 返回 nil applier，类型断言得到 `(*NodeEngine)(nil)`；把该指针传给 `DataplaneInspector` 接口后接口值非 nil，资源采集器调用 nil receiver 的 `Stable()`，得到 `composed adapter required` 并错误映射为 `drifted`。这不是节点安装、PKI、令牌或 systemd 自启动失败，也不能通过重装 v0.9.14 恢复。诊断过程中没有替换生产 Agent、没有修改 PKI/WAL/journal、没有启用 apply 或修改 nftables/tc；临时节点诊断文件已删除，已安装 Agent SHA256 仍为公开 v0.9.14 的 `3c84d107acdbe91fc9c69b230b9ef8eef2eb98f4eb1fa880b1df8e7f862943d0`，服务保持 active。
+
+本地 v0.9.15 修复在资源采集边界把 typed-nil `*NodeEngine` 与 nil inspector 一致处理为 `not-applicable`，不放宽控制端校验，也不改变非 nil apply engine 的 `in-sync`/`drifted`/`unknown` 判定。TDD 回归先在 v0.9.14 代码上稳定得到 `drifted want not-applicable`，最小修复后聚焦用例和 `go test -race ./internal/agent -count=1` 通过；`GOFLAGS=-timeout=20m npm test` 退出 0，Node 160 项中 159 通过、1 项按默认 Linux 安装环境跳过、0 失败，`npm run vet` 与 `git diff --check` 通过。默认 10 分钟的首次基线全量运行在 `internal/platform` 最后一个 PBKDF 测试进行时触发全局超时，没有功能断言失败；最终验证使用项目既有记录的 20 分钟上限。Linux amd64/arm64 构建通过：归档 SHA256 分别为 `51fb8b1c51a8ab82d60dd6ef616f81d6b1a01764e5786c29f91d299569e89894`、`4f468b4af0a7f2a021686ec097cc3ea0975f1628802dadb8a2ae385f058c4e88`，Agent SHA256 分别为 `8c94931153e8c398622c7de535c1583b033d7eb2caabe2ad1fa68158380eb2cd`、`45ba8f81c3135a9fc3fc607b789934b4331684108c4ee3550faadbc55a9ed2d9`。上述产物尚未创建 GitHub Release、更新生产控制端固定摘要或升级节点，生产页面状态不会自行持久恢复。
+
 ## 2026-11-17 平台管理员登录页视觉一致性（生产控制端已部署）
 
 生产问题已定位为两个入口使用不同静态结构：企业 `/` 继续由 Nginx 精确覆盖保留既有左右分栏登录视觉，schema v43 控制端部署并未覆盖它；平台 `/admin` 则一直使用源码中的旧单卡片登录页。当前增量只把 `/admin` 的未登录状态改为同一蓝白分栏语言：左侧为 RelaDock 平台资源视觉，右侧保留平台管理员邮箱/密码表单、错误消息、返回企业控制台入口，以及默认关闭的 Google 登录容器。`admin-login-form`、邮箱/密码字段、消息和授权入口 ID 均未改变，登录权限、会话 API、平台后台登录后页面和企业登录页均未修改。

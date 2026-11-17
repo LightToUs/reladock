@@ -84,6 +84,7 @@ func TestResourceCollectorClassifiesReadOnlyDataplaneVerification(t *testing.T) 
 		want      string
 	}{
 		{"validation mode", nil, "not-applicable"},
+		{"validation mode typed nil engine", (*NodeEngine)(nil), "not-applicable"},
 		{"verified", resourceInspector(func(context.Context) error { return nil }), "in-sync"},
 		{"mismatch", resourceInspector(func(context.Context) error { return errors.New("readback mismatch") }), "drifted"},
 		{"timeout", resourceInspector(func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }), "unknown"},

@@ -147,6 +147,9 @@ func (c *ResourceCollector) dataplaneState(ctx context.Context, inspector Datapl
 	if inspector == nil {
 		return "not-applicable"
 	}
+	if engine, ok := inspector.(*NodeEngine); ok && engine == nil {
+		return "not-applicable"
+	}
 	timeout := c.inspectTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Second
