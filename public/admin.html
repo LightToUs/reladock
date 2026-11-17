@@ -1,7 +1,22 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#081a33"><title>RelaDock · 平台管理</title><link rel="icon" href="/reladock-mark.svg" type="image/svg+xml"><link rel="stylesheet" href="/admin.css"><script src="/admin.js" type="module"></script></head>
 <body class="admin-console">
-<section id="admin-login" class="auth" hidden><div class="tag">RelaDock · 平台管理</div><h1>平台管理员登录</h1><p class="muted">仅限已由本机运维明确授权的平台管理员。</p><form id="admin-login-form"><label>邮箱<input name="email" type="email" autocomplete="username" maxlength="254" required></label><label>密码<input name="password" type="password" autocomplete="current-password" maxlength="128" required></label><button>登录平台后台</button></form><div id="admin-google-login-entry" class="google-login-entry" hidden><p class="auth-alternative">其他登录方式</p><button id="admin-google-login" class="google-login-button" type="button" hidden>使用 Google 登录</button><p id="admin-google-login-message" class="error google-login-message" role="status" aria-live="polite"></p></div><p id="login-message" class="error" role="status"></p><a href="/">返回企业控制台</a></section>
+<section id="admin-login" class="auth admin-auth-layout" hidden>
+  <div class="admin-auth-visual" aria-label="RelaDock 平台管理">
+    <div class="admin-auth-brand admin-auth-rise admin-auth-order-0"><img src="/reladock-mark.svg" alt=""><strong>RelaDock</strong></div>
+    <p class="admin-auth-promise admin-auth-rise admin-auth-order-1">全局资源，<br>统一掌控。</p>
+    <p class="admin-auth-copy admin-auth-rise admin-auth-order-2">集中查看入口节点、企业资源、配置交付与运营状态。</p>
+    <div class="admin-auth-network admin-auth-rise admin-auth-order-3" aria-hidden="true"><span class="network-node node-a"></span><span class="network-node node-b"></span><span class="network-node node-c"></span><span class="network-node node-d"></span><span class="network-core"><img src="/reladock-mark.svg" alt=""></span></div>
+  </div>
+  <div class="admin-auth-panel">
+    <div class="admin-auth-heading admin-auth-rise admin-auth-order-1"><h1>平台管理员登录</h1><p>使用已获平台权限的账号进入全局管理后台。</p></div>
+    <form id="admin-login-form" class="admin-auth-rise admin-auth-order-2"><label>邮箱<input name="email" type="email" autocomplete="username" maxlength="254" required></label><label>密码<input name="password" type="password" autocomplete="current-password" maxlength="128" required></label><button>登录平台后台</button></form>
+    <div id="admin-google-login-entry" class="google-login-entry" hidden><p class="auth-alternative">其他登录方式</p><button id="admin-google-login" class="google-login-button" type="button" hidden>使用 Google 登录</button><p id="admin-google-login-message" class="error google-login-message" role="status" aria-live="polite"></p></div>
+    <p id="login-message" class="error" role="status"></p>
+    <p class="admin-auth-boundary">仅限已由本机运维明确授权的平台管理员。</p>
+    <a class="admin-auth-back" href="/">返回企业控制台</a>
+  </div>
+</section>
 <section id="admin-denied" class="auth" hidden><div class="tag">RelaDock</div><h1>当前账号没有平台权限</h1><p class="muted">企业所有者只管理自己的企业。平台权限需要本机运维显式授予，公开注册不会获得平台权限。</p><a href="/">进入企业工作台</a><button id="denied-logout" class="secondary">退出当前账号</button></section>
 <div id="admin-shell" hidden>
 <aside class="admin-nav"><div class="admin-brand"><img class="admin-brand-mark" src="/reladock-mark.svg" alt=""><div class="admin-brand-copy"><h2>RelaDock</h2><p>全平台管理</p></div><div class="admin-nav-controls"><button id="admin-sidebar-collapse" class="admin-sidebar-collapse" type="button" aria-controls="admin-navigation" aria-expanded="true">‹</button><button id="admin-nav-toggle" class="admin-nav-toggle" type="button" aria-controls="admin-navigation" aria-expanded="false">菜单</button></div></div><nav id="admin-navigation" aria-label="平台功能"><a href="#/overview" data-view="overview" data-short="总" class="selected"><span>平台总览</span></a><a href="#/nodes" data-view="nodes" data-short="节"><span>入口节点</span></a><a href="#/lightsail" data-view="lightsail" data-short="云"><span>Lightsail 云主机</span></a><a href="#/tenants" data-view="tenants" data-short="企"><span>企业客户</span></a><a href="#/rules" data-view="rules" data-short="转"><span>全局规则</span></a><a href="#/source-flows" data-view="source-flows" data-short="源"><span>来源连接</span></a><a href="#/deliveries" data-view="deliveries" data-short="交"><span>配置交付</span></a><a href="#/plans" data-view="plans" data-short="套"><span>规则套餐</span></a><a href="#/operations" data-view="operations" data-short="警"><span>告警工单</span></a><a href="#/audit" data-view="audit" data-short="审"><span>操作审计</span></a></nav><a class="workspace-link" href="/">企业工作台 <span aria-hidden="true">↗</span></a></aside>

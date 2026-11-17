@@ -229,6 +229,41 @@ func TestGoogleLoginStaticPresentationPreservesPasswordFlows(t *testing.T) {
 	}
 }
 
+func TestAdminLoginUsesSplitPresentationWithoutChangingAuthenticationContract(t *testing.T) {
+	page, err := fs.ReadFile(assets.Files, "admin.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	css, err := fs.ReadFile(assets.Files, "admin.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	markup := string(page)
+	styles := string(css)
+	for _, required := range []string{
+		`id="admin-login" class="auth admin-auth-layout"`,
+		`class="admin-auth-visual"`,
+		`class="admin-auth-panel"`,
+		`id="admin-login-form"`,
+		`name="email" type="email"`,
+		`name="password" type="password"`,
+		`id="login-message"`,
+	} {
+		if !strings.Contains(markup, required) {
+			t.Errorf("platform login split presentation missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		".admin-auth-layout", ".admin-auth-visual", ".admin-auth-panel",
+		"@media (max-width: 860px)", "@media (max-width: 620px)",
+	} {
+		if !strings.Contains(styles, required) {
+			t.Errorf("platform login responsive styling missing %q", required)
+		}
+	}
+}
+
 func TestEnterpriseOverviewOwnsFinanceAndAccountOffersPasswordChange(t *testing.T) {
 	page, err := fs.ReadFile(assets.Files, "index.html")
 	if err != nil {
