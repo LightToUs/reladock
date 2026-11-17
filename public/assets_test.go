@@ -6,7 +6,7 @@ import (
 )
 
 func TestEmbeddedAdminModulesAreAvailable(t *testing.T) {
-	for _, name := range []string{"admin.js", "console-navigation.js", "lightsail-admin.js", "node-action-dialog.js", "node-bootstrap.js", "node-contact-status.js", "node-content-dialog.js", "node-editor.js", "node-visibility.js", "operations-tools.js", "plan-catalog.js", "resource-mode.js", "source-flow-logging.js"} {
+	for _, name := range []string{"admin.js", "console-navigation.js", "lightsail-admin.js", "node-action-dialog.js", "node-bootstrap.js", "node-contact-status.js", "node-content-dialog.js", "node-editor.js", "node-visibility.js", "operations-tools.js", "plan-catalog.js", "resource-mode.js", "source-flow-logging.js", "source-ip-blocks.js"} {
 		if _, err := Files.ReadFile(name); err != nil {
 			t.Fatalf("embedded admin module %q is unavailable: %v", name, err)
 		}

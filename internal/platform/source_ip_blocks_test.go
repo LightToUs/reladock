@@ -58,7 +58,7 @@ func TestAdminSourceIPBlocksAreVersionedAuditedAndIdempotent(t *testing.T) {
 	}
 
 	items, err := s.AdminSourceIPBlocks(ctx, admin, customer.TenantID, ruleID)
-	if err != nil || len(items) != 1 || items[0].ID != block.ID {
+	if err != nil || len(items.Items) != 1 || items.Items[0].ID != block.ID || items.DesiredVersion != 2 {
 		t.Fatalf("list: %+v err=%v", items, err)
 	}
 	removed, err := s.AdminRemoveSourceIPBlock(ctx, admin, customer.TenantID, ruleID, block.ID, 2)
@@ -66,7 +66,7 @@ func TestAdminSourceIPBlocksAreVersionedAuditedAndIdempotent(t *testing.T) {
 		t.Fatalf("removed: %+v err=%v", removed, err)
 	}
 	items, err = s.AdminSourceIPBlocks(ctx, admin, customer.TenantID, ruleID)
-	if err != nil || len(items) != 0 {
+	if err != nil || len(items.Items) != 0 || items.DesiredVersion != 3 {
 		t.Fatalf("active list after remove: %+v err=%v", items, err)
 	}
 }

@@ -222,7 +222,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin.js" || r.URL.Path == "/auth-session.js" || r.URL.Path == "/google-login.js" || r.URL.Path == "/account-menu.js" || r.URL.Path == "/console-navigation.js" || r.URL.Path == "/admin.css" || r.URL.Path == "/app.js" || r.URL.Path == "/app.css" || r.URL.Path == "/workspace-summary.js" || r.URL.Path == "/telemetry.js" || r.URL.Path == "/node-monitoring.js" || r.URL.Path == "/rule-submission.js" || r.URL.Path == "/rule-editor.js" || r.URL.Path == "/account-tools.js" || r.URL.Path == "/business-tools.js" || r.URL.Path == "/operations-tools.js" || r.URL.Path == "/resource-mode.js" || r.URL.Path == "/plan-catalog.js" || r.URL.Path == "/source-flow-logging.js" || r.URL.Path == "/lightsail-admin.js" || r.URL.Path == "/node-action-dialog.js" || r.URL.Path == "/node-contact-status.js" || r.URL.Path == "/node-content-dialog.js" || r.URL.Path == "/node-editor.js" || r.URL.Path == "/node-visibility.js" || r.URL.Path == "/node-withdrawal.js" || r.URL.Path == "/reladock-mark.svg" {
+	if r.URL.Path == "/" || r.URL.Path == "/admin" || r.URL.Path == "/admin.js" || r.URL.Path == "/auth-session.js" || r.URL.Path == "/google-login.js" || r.URL.Path == "/account-menu.js" || r.URL.Path == "/console-navigation.js" || r.URL.Path == "/admin.css" || r.URL.Path == "/app.js" || r.URL.Path == "/app.css" || r.URL.Path == "/workspace-summary.js" || r.URL.Path == "/telemetry.js" || r.URL.Path == "/node-monitoring.js" || r.URL.Path == "/rule-submission.js" || r.URL.Path == "/rule-editor.js" || r.URL.Path == "/account-tools.js" || r.URL.Path == "/business-tools.js" || r.URL.Path == "/operations-tools.js" || r.URL.Path == "/resource-mode.js" || r.URL.Path == "/plan-catalog.js" || r.URL.Path == "/source-flow-logging.js" || r.URL.Path == "/source-ip-blocks.js" || r.URL.Path == "/lightsail-admin.js" || r.URL.Path == "/node-action-dialog.js" || r.URL.Path == "/node-contact-status.js" || r.URL.Path == "/node-content-dialog.js" || r.URL.Path == "/node-editor.js" || r.URL.Path == "/node-visibility.js" || r.URL.Path == "/node-withdrawal.js" || r.URL.Path == "/reladock-mark.svg" {
 		if r.Method != "GET" && r.Method != "HEAD" {
 			respond(w, 405, map[string]string{"error": "方法不支持"})
 			return
@@ -249,6 +249,7 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 		contentType["resource-mode.js"] = "text/javascript; charset=utf-8"
 		contentType["plan-catalog.js"] = "text/javascript; charset=utf-8"
 		contentType["source-flow-logging.js"] = "text/javascript; charset=utf-8"
+		contentType["source-ip-blocks.js"] = "text/javascript; charset=utf-8"
 		contentType["rule-editor.js"] = "text/javascript; charset=utf-8"
 		contentType["workspace-summary.js"] = "text/javascript; charset=utf-8"
 		contentType["telemetry.js"] = "text/javascript; charset=utf-8"

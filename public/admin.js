@@ -11,6 +11,7 @@ import { bindNodeVisibilityToggle, nodesForAdminList } from './node-visibility.j
 import { resourceModeLabel } from './resource-mode.js';
 import { adminPlanOfferingLabel, createOfferingMutationRunner, offeringActionDescriptor, offeringRouteLabel, offeringStateLabel, planInputFromFields, priceableOfferings } from './plan-catalog.js';
 import { sourceLoggingConfirmation, sourceLoggingPresentation } from './source-flow-logging.js';
+import { sourceBlockPresentation, sourceBlockRequestForFlow, runCommittedSourceBlockMutation } from './source-ip-blocks.js';
 import { createGoogleLoginController } from './google-login.js';
 const $ = selector => document.querySelector(selector);
 const state = { view: 'overview', nodes: [], monitoring: new Map(), certificateNode: null, tenantPage: 1, rulePage: 1, tenantFilter: '', tenantName: '', nodeFilter: '', showHiddenNodes: false };
@@ -30,6 +31,8 @@ actions['node.certificate-renew-activated'] = '新证书已激活';
 actions['rule.source-logging.enable'] = '启用来源连接记录';
 actions['rule.source-logging.disable'] = '关闭来源连接记录';
 actions['source-flow.query'] = '查询来源连接记录';
+actions['rule.source-ip-block.add'] = '添加来源 IP 拉黑';
+actions['rule.source-ip-block.remove'] = '移除来源 IP 拉黑';
 appendNavigationItem('costs', '成本与经营差额', '成');
 appendNavigationItem('notifications', '通知交付', '通'); titles.notifications = '通知交付';
 function access(mode) { if(mode!=='admin'){bootstrapUI.clear();adminNodeMonitoringPoller?.stop();adminNodeMonitoringPoller=undefined;lightsailAdmin?.stop();} $('#admin-login').hidden = mode !== 'login'; $('#admin-denied').hidden = mode !== 'denied'; $('#admin-shell').hidden = mode !== 'admin'; }
@@ -209,6 +212,79 @@ async function setRuleSourceLogging(rule, enabled) {
   message(enabled ? '启用请求已入队，等待 Agent 应用确认。' : '关闭请求已入队，等待 Agent 应用确认；历史记录仍按保留期清理。');
   await reload();
 }
+const sourceBlockDialog = $('#source-block-dialog');
+const sourceBlockForm = $('#source-block-form');
+let sourceBlockContext;
+let sourceBlockPage;
+async function sourceBlockAPI(path, method = 'GET', body) {
+  const options = { method, credentials: 'same-origin', headers: {} };
+  if (body !== undefined) { options.headers = { 'Content-Type': 'application/json', 'X-Requested-With': 'RelaDock' }; options.body = JSON.stringify(body); }
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) { const error = new Error(data.error || '来源 IP 拉黑操作失败'); error.status = response.status; throw error; }
+  return data;
+}
+function sourceBlockPath(context = sourceBlockContext) { return `/api/admin/rules/${encodeURIComponent(context.ruleId)}/source-blocks`; }
+function renderSourceBlocks(page) {
+  sourceBlockPage = page;
+  const root = $('#source-block-rows'); root.replaceChildren();
+  for (const block of page.items) {
+    const row = root.insertRow();
+    cell(row, block.cidr, block.reason); cell(row, block.requestedVersion); const status = sourceBlockPresentation(block); cell(row, status.label, status.detail);
+    const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('移除', async () => {
+      if (!confirm(`移除 ${block.cidr}？保存后仍需等待节点应用新版本。`)) return;
+      try {
+        await runCommittedSourceBlockMutation({
+          mutate: () => sourceBlockAPI(`${sourceBlockPath()}/${encodeURIComponent(block.id)}`, 'DELETE', { tenantId: sourceBlockContext.tenantId, desiredVersion: sourceBlockPage.desiredVersion }),
+          refresh: loadSourceBlocks,
+        });
+        $('#source-block-message').textContent = '移除请求已入队，等待节点应用确认。';
+      } catch (error) {
+        $('#source-block-message').textContent = error.committed ? `移除已提交，但列表刷新失败：${error.message}` : error.status === 409 ? '规则已被其他操作更新，已刷新列表，请重新确认。' : error.message;
+        if (error.status === 409) await loadSourceBlocks().catch(() => {});
+      }
+    }, true));
+  }
+  empty(root, 4, '当前规则没有生效中的来源 CIDR 拉黑。');
+}
+async function loadSourceBlocks() {
+  const page = await sourceBlockAPI(`${sourceBlockPath()}?tenantId=${encodeURIComponent(sourceBlockContext.tenantId)}`);
+  renderSourceBlocks(page);
+  return page;
+}
+async function openSourceBlocks(rule) {
+  sourceBlockContext = { tenantId: rule.tenantId, ruleId: rule.id, label: `${rule.company || ''} / ${rule.name || rule.ruleName || rule.id}` };
+  sourceBlockPage = null;
+  $('#source-block-context').textContent = sourceBlockContext.label;
+  $('#source-block-message').textContent = '';
+  sourceBlockForm.reset(); sourceBlockDialog.showModal();
+  try { await loadSourceBlocks(); } catch (error) { $('#source-block-message').textContent = error.message; }
+}
+sourceBlockForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!sourceBlockPage) return;
+  const submit = $('#source-block-add'); submit.disabled = true;
+  const fields = Object.fromEntries(new FormData(sourceBlockForm));
+  try {
+    await runCommittedSourceBlockMutation({
+      mutate: () => sourceBlockAPI(sourceBlockPath(), 'POST', { tenantId: sourceBlockContext.tenantId, desiredVersion: sourceBlockPage.desiredVersion, cidr: fields.cidr, reason: fields.reason }),
+      refresh: loadSourceBlocks,
+    });
+    sourceBlockForm.reset(); $('#source-block-message').textContent = '添加请求已入队，等待节点应用确认。';
+  } catch (error) {
+    $('#source-block-message').textContent = error.committed ? `添加已提交，但列表刷新失败：${error.message}` : error.status === 409 ? '规则已被其他操作更新，已刷新列表，请重新编辑。' : error.message;
+    if (error.status === 409) await loadSourceBlocks().catch(() => {});
+  } finally { submit.disabled = false; }
+});
+$('#source-block-close').addEventListener('click', () => sourceBlockDialog.close());
+async function quickBlockFlow(flow) {
+  const context = { tenantId: flow.tenantId, ruleId: flow.ruleId };
+  const page = await sourceBlockAPI(`${sourceBlockPath(context)}?tenantId=${encodeURIComponent(flow.tenantId)}`);
+  const request = sourceBlockRequestForFlow(flow, page.desiredVersion);
+  if (!confirm(`在“${flow.company} / ${flow.ruleName}”入口拉黑 ${request.body.cidr}？此操作只影响该规则，并需要等待节点应用。`)) return;
+  await runCommittedSourceBlockMutation({ mutate: () => sourceBlockAPI(request.path, 'POST', request.body), refresh: () => sourceBlockAPI(`${request.path}?tenantId=${encodeURIComponent(flow.tenantId)}`) });
+  message(`已提交 ${request.body.cidr} 的规则级拉黑，等待节点应用确认。`);
+}
 function renderRules(page) {
   const root = $('#admin-rules'); root.replaceChildren(); $('#rules-tenant-label').textContent = state.tenantFilter ? `企业：${state.tenantName}` : '全部企业';
   for (const rule of page.items) {
@@ -224,6 +300,7 @@ function renderRules(page) {
     const sourceToggle = button(rule.sourceLoggingEnabled ? '关闭来源记录' : '启用来源记录', () => setRuleSourceLogging(rule, !rule.sourceLoggingEnabled));
     if (!rule.sourceLoggingEnabled && rule.sourceLoggingUnsupported) { sourceToggle.disabled = true; sourceToggle.title = '节点 Agent 不在线、不是 apply 模式或不支持来源记录'; }
     controls.append(sourceToggle);
+    controls.append(button('来源拉黑', () => openSourceBlocks(rule)));
   }
   empty(root, 8, '本页暂无匹配规则。'); pager('rules', page);
 }
@@ -240,13 +317,13 @@ async function loadSourceFlows() {
   const root = $('#source-flow-rows'); root.replaceChildren();
   for (const flow of data.items) {
     const row = root.insertRow();
-    cell(row, new Date(flow.observedAt).toLocaleString()); cell(row, `${flow.company} / ${flow.ruleName}`, `${flow.ruleId} · ${flow.nodeId}`); cell(row, flow.protocol.toUpperCase()); cell(row, `${flow.sourceIp}:${flow.sourcePort}`); cell(row, `${flow.relayIp}:${flow.relayPort}`); cell(row, `${flow.targetIp}:${flow.targetPort}`); cell(row, flow.knownGap ? '存在已知采集缺口' : '此事件已记录', flow.knownGap ? '不能据此判断时间段完整' : '无事件仍不代表完整');
+    cell(row, new Date(flow.observedAt).toLocaleString()); cell(row, `${flow.company} / ${flow.ruleName}`, `${flow.ruleId} · ${flow.nodeId}`); cell(row, flow.protocol.toUpperCase()); cell(row, `${flow.sourceIp}:${flow.sourcePort}`); cell(row, `${flow.relayIp}:${flow.relayPort}`); cell(row, `${flow.targetIp}:${flow.targetPort}`); cell(row, flow.knownGap ? '存在已知采集缺口' : '此事件已记录', flow.knownGap ? '不能据此判断时间段完整' : '无事件仍不代表完整'); const actions = row.insertCell(); actions.className = 'table-actions'; actions.append(button('拉黑此 IP', () => quickBlockFlow(flow), true));
   }
   for (const gap of data.gaps || []) {
     const row = root.insertRow();
-    cell(row, `${new Date(gap.openedAt).toLocaleString()} – ${gap.closedAt ? new Date(gap.closedAt).toLocaleString() : '仍在持续'}`); cell(row, '采集缺口', gap.nodeId); cell(row, '—'); cell(row, '—'); cell(row, '—'); cell(row, '—'); cell(row, `缺口：${gap.reason}`, `已知丢失 ${gap.droppedCount} 条；实际可能更多`);
+    cell(row, `${new Date(gap.openedAt).toLocaleString()} – ${gap.closedAt ? new Date(gap.closedAt).toLocaleString() : '仍在持续'}`); cell(row, '采集缺口', gap.nodeId); cell(row, '—'); cell(row, '—'); cell(row, '—'); cell(row, '—'); cell(row, `缺口：${gap.reason}`, `已知丢失 ${gap.droppedCount} 条；实际可能更多`); cell(row, '—');
   }
-  empty(root, 7, '此窗口没有已接收事件或已知缺口；这仍不证明该时段没有连接。');
+  empty(root, 8, '此窗口没有已接收事件或已知缺口；这仍不证明该时段没有连接。');
   $('#source-flow-page').textContent = `第 ${data.page} 页 · ${data.totalCapped ? '至少 10000' : `共 ${data.total}`} 条`; $('#source-flow-prev').disabled = data.page <= 1; $('#source-flow-next').disabled = !data.hasMore; $('#source-flow-message').textContent = data.gapsTruncated ? '重叠采集缺口超过 200 条，当前只显示前 200 条；请缩小查询时间窗。' : '';
 }
 sourceFlowForm.addEventListener('submit', event => { event.preventDefault(); sourceFlowPage = 1; loadSourceFlows().catch(error => $('#source-flow-message').textContent = error.message); });

@@ -89,7 +89,7 @@ func TestAdminNodeVisibilityHasARecoverablePresentation(t *testing.T) {
 
 func TestAdminModuleGraphIsServedOverHTTP(t *testing.T) {
 	handler := web.New(nil, assets.Files, "http://127.0.0.1:3001")
-	for _, path := range []string{"/admin.js", "/auth-session.js", "/google-login.js", "/account-menu.js", "/console-navigation.js", "/lightsail-admin.js", "/node-action-dialog.js", "/node-bootstrap.js", "/node-contact-status.js", "/node-content-dialog.js", "/node-editor.js", "/node-visibility.js", "/node-withdrawal.js", "/operations-tools.js", "/resource-mode.js", "/source-flow-logging.js"} {
+	for _, path := range []string{"/admin.js", "/auth-session.js", "/google-login.js", "/account-menu.js", "/console-navigation.js", "/lightsail-admin.js", "/node-action-dialog.js", "/node-bootstrap.js", "/node-contact-status.js", "/node-content-dialog.js", "/node-editor.js", "/node-visibility.js", "/node-withdrawal.js", "/operations-tools.js", "/resource-mode.js", "/source-flow-logging.js", "/source-ip-blocks.js"} {
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:3001"+path, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)

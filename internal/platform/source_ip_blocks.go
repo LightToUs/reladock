@@ -32,6 +32,12 @@ type SourceIPBlockInput struct {
 	DesiredVersion int64  `json:"desiredVersion"`
 }
 
+type SourceIPBlockPage struct {
+	Items          []SourceIPBlock `json:"items"`
+	DesiredVersion int64           `json:"desiredVersion"`
+	AppliedVersion int64           `json:"appliedVersion"`
+}
+
 func canonicalSourceCIDR(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -68,8 +74,8 @@ func scanSourceIPBlock(row pgx.Row) (SourceIPBlock, error) {
 const sourceIPBlockColumns = `b.id,b.tenant_id,b.rule_id,b.cidr::text,b.reason,b.state,b.requested_version,b.removed_version,b.created_at,b.removed_at,
  CASE WHEN b.state='active' THEN r.applied_version>=b.requested_version ELSE r.applied_version>=b.removed_version END`
 
-func (s *Store) AdminSourceIPBlocks(ctx context.Context, who Identity, tenantID, ruleID string) ([]SourceIPBlock, error) {
-	result := []SourceIPBlock{}
+func (s *Store) AdminSourceIPBlocks(ctx context.Context, who Identity, tenantID, ruleID string) (SourceIPBlockPage, error) {
+	result := SourceIPBlockPage{Items: []SourceIPBlock{}}
 	if !billingUUID.MatchString(tenantID) || !billingUUID.MatchString(ruleID) {
 		return result, ErrInvalid
 	}
@@ -78,12 +84,10 @@ func (s *Store) AdminSourceIPBlocks(ctx context.Context, who Identity, tenantID,
 		return result, err
 	}
 	defer tx.Rollback(ctx)
-	var exists bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM relay_rules WHERE id=$1 AND tenant_id=$2 AND status<>'deleted')`, ruleID, tenantID).Scan(&exists); err != nil {
-		return result, err
-	}
-	if !exists {
+	if err = tx.QueryRow(ctx, `SELECT desired_version,applied_version FROM relay_rules WHERE id=$1 AND tenant_id=$2 AND status<>'deleted'`, ruleID, tenantID).Scan(&result.DesiredVersion, &result.AppliedVersion); errors.Is(err, pgx.ErrNoRows) {
 		return result, ErrNotFound
+	} else if err != nil {
+		return result, err
 	}
 	rows, err := tx.Query(ctx, `SELECT `+sourceIPBlockColumns+` FROM rule_source_ip_blocks b JOIN relay_rules r ON r.id=b.rule_id AND r.tenant_id=b.tenant_id WHERE b.rule_id=$1 AND b.tenant_id=$2 AND b.state='active' ORDER BY b.created_at,b.id`, ruleID, tenantID)
 	if err != nil {
@@ -95,7 +99,7 @@ func (s *Store) AdminSourceIPBlocks(ctx context.Context, who Identity, tenantID,
 		if scanErr != nil {
 			return result, scanErr
 		}
-		result = append(result, block)
+		result.Items = append(result.Items, block)
 	}
 	return result, rows.Err()
 }

@@ -306,6 +306,68 @@ func (s *server) serveAdmin(w http.ResponseWriter, r *http.Request, who platform
 			return
 		}
 		respond(w, 200, value)
+	case strings.HasPrefix(path, "rules/") && strings.Contains(path, "/source-blocks"):
+		parts := strings.Split(strings.TrimPrefix(path, "rules/"), "/")
+		if (len(parts) != 2 && len(parts) != 3) || !uuid.MatchString(parts[0]) || parts[1] != "source-blocks" || len(parts) == 3 && !uuid.MatchString(parts[2]) {
+			failure(w, platform.ErrNotFound)
+			return
+		}
+		ruleID := parts[0]
+		if r.Method == http.MethodGet && len(parts) == 2 {
+			tenantID := r.URL.Query().Get("tenantId")
+			if !uuid.MatchString(tenantID) {
+				failure(w, platform.ErrInvalid)
+				return
+			}
+			value, err := s.store.AdminSourceIPBlocks(ctx, who, tenantID, ruleID)
+			if err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusOK, value)
+			return
+		}
+		if r.Method == http.MethodPost && len(parts) == 2 {
+			var input struct {
+				TenantID string `json:"tenantId"`
+				platform.SourceIPBlockInput
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			if !uuid.MatchString(input.TenantID) {
+				failure(w, platform.ErrInvalid)
+				return
+			}
+			value, err := s.store.AdminAddSourceIPBlock(ctx, who, input.TenantID, ruleID, input.SourceIPBlockInput)
+			if err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusCreated, value)
+			return
+		}
+		if r.Method == http.MethodDelete && len(parts) == 3 {
+			var input struct {
+				TenantID       string `json:"tenantId"`
+				DesiredVersion int64  `json:"desiredVersion"`
+			}
+			if !decode(w, r, &input) {
+				return
+			}
+			if !uuid.MatchString(input.TenantID) {
+				failure(w, platform.ErrInvalid)
+				return
+			}
+			value, err := s.store.AdminRemoveSourceIPBlock(ctx, who, input.TenantID, ruleID, parts[2], input.DesiredVersion)
+			if err != nil {
+				failure(w, err)
+				return
+			}
+			respond(w, http.StatusOK, value)
+			return
+		}
+		respond(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	case r.Method == http.MethodPatch && strings.HasPrefix(path, "rules/"):
 		parts := strings.Split(strings.TrimPrefix(path, "rules/"), "/")
 		if len(parts) != 2 || !uuid.MatchString(parts[0]) || parts[1] != "source-logging" {
