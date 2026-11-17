@@ -56,10 +56,11 @@ type SourceFlowPage struct {
 	HasMore       bool              `json:"hasMore"`
 	TotalCapped   bool              `json:"totalCapped"`
 	GapsTruncated bool              `json:"gapsTruncated"`
+	RetentionDays int               `json:"retentionDays"`
 }
 
 func (s *Store) AdminSourceFlows(ctx context.Context, who Identity, query SourceFlowQuery) (SourceFlowPage, error) {
-	result := SourceFlowPage{Items: []SourceFlowEvent{}, Gaps: []SourceFlowGap{}, Page: query.Page, PageSize: 50}
+	result := SourceFlowPage{Items: []SourceFlowEvent{}, Gaps: []SourceFlowGap{}, Page: query.Page, PageSize: 50, RetentionDays: s.sourceFlowRetentionDays}
 	query.From = query.From.UTC()
 	query.To = query.To.UTC()
 	if query.Page < 1 || query.Page > 200 || query.From.IsZero() || !query.To.After(query.From) || query.To.Sub(query.From) > 24*time.Hour || query.To.After(time.Now().UTC().Add(5*time.Minute)) || query.Protocol != "" && query.Protocol != "tcp" && query.Protocol != "udp" || query.RuleID != "" && !billingUUID.MatchString(query.RuleID) || query.NodeID != "" && !nodeIDPattern.MatchString(query.NodeID) {

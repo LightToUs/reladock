@@ -28,6 +28,14 @@ Linux apply Agent 只订阅 IPv4 conntrack `NEW`，以 Agent 接受 netlink 消�
 
 保留期由 `SOURCE_FLOW_RETENTION_DAYS` 显式配置，事件和已关闭 gap 按控制端 `received_at` 分批清理，开放 gap 保留到最终关闭；applied manifest 从后续完整配置 ACK 标记的 `superseded_at` 起计保留期，当前 generation 不清理。管理员查询要求不超过 24 小时的时间窗并写隐私审计，同时单独返回与窗口重叠的 gap，并显式返回事件总数封顶和 gap 截断状态；连续退化两分钟打开 `source-flow-collector-degraded`，连续正常两分钟解除。WAL 使用率达到 80% 必须连续 90 秒才进入退化，低于阈值会重置计时。转发对该可选日志 fail-open，计量安全策略不变。
 
+## 规则级来源 IPv4 CIDR 拉黑（schema v43/v44 / 配置 schema 5）
+
+`rule_source_ip_blocks` 保存规则/租户、PostgreSQL `cidr`、原因、创建/移除操作者、请求版本和历史状态；活动行用部分唯一索引防止同规则精确重复。平台管理员写操作先取得平台锁、节点锁和规则行锁，核对租户与期望版本后，原子更新规则版本、完整配置 Outbox 和平台审计。列表根据规则 `applied_version` 区分请求与已应用；应用确认仍不表示端到端健康。
+
+schema 5 在每条规则内携带确定排序的活动 IPv4 CIDR。`agent_source_ip_block_supported` 与证书身份绑定，换证触发器清零；租约同时要求 schema 4 端口范围能力和 schema 5 来源拉黑能力，防止旧 Agent 忽略字段。编译器为 pending 规则在 RelaDock 自有 `table ip reladock` 内生成 raw prerouting 优先级 `-290` 的 `source_block` 链，位置在 quarantine `-300` 之后、DNAT `-100` 之前；每条规则按入口地址、TCP/UDP、端口或端口段和来源 CIDR 匹配后 drop。严格 JSON 回读核对完整表达式与确定注释，不修改其他 nftables 表。当前 IPv4-only 数据面不宣称 IPv6 支持。
+
+来源元数据保留 worker 与拉黑规则生命周期分离：控制端在启用保留期时启动即执行一次，之后每 30 秒以 25 秒超时调用 `PruneSourceFlows(ctx, 1000)`；失败记录 `source-flow-retention` worker 指标并在下一周期重试。清理只覆盖过期事件、已关闭 gap 和满足安全条件的旧 manifest，不删除开放 gap、当前 manifest、计费、钱包、账本或审计。
+
 2026-11-07 套餐共享额度与自动续费增量：v31 将 subscription_usage 主键改为套餐/规则组合，计量仍按规则/epoch/sequence 去重，套餐使用量汇总关联规则。v32 添加默认关闭的 auto_renew、失败原因以及同租户唯一 renewed_from 后继引用。耗尽续费在节点锁内与计量、整数钱包扣款、不可变账本、周期切换、配置 Outbox 和审计同事务提交；不把旧周期用量重标到新周期，不自动恢复人工暂停，不代表 Agent 已应用或网络无缝。详情及验证边界见 IMPLEMENTATION_STATUS.md。
 
 ## 节点安装接入（v18）

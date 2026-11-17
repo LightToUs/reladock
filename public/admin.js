@@ -324,7 +324,7 @@ async function loadSourceFlows() {
     cell(row, `${new Date(gap.openedAt).toLocaleString()} – ${gap.closedAt ? new Date(gap.closedAt).toLocaleString() : '仍在持续'}`); cell(row, '采集缺口', gap.nodeId); cell(row, '—'); cell(row, '—'); cell(row, '—'); cell(row, '—'); cell(row, `缺口：${gap.reason}`, `已知丢失 ${gap.droppedCount} 条；实际可能更多`); cell(row, '—');
   }
   empty(root, 8, '此窗口没有已接收事件或已知缺口；这仍不证明该时段没有连接。');
-  $('#source-flow-page').textContent = `第 ${data.page} 页 · ${data.totalCapped ? '至少 10000' : `共 ${data.total}`} 条`; $('#source-flow-prev').disabled = data.page <= 1; $('#source-flow-next').disabled = !data.hasMore; $('#source-flow-message').textContent = data.gapsTruncated ? '重叠采集缺口超过 200 条，当前只显示前 200 条；请缩小查询时间窗。' : '';
+  $('#source-flow-page').textContent = `第 ${data.page} 页 · ${data.totalCapped ? '至少 10000' : `共 ${data.total}`} 条`; $('#source-flow-prev').disabled = data.page <= 1; $('#source-flow-next').disabled = !data.hasMore; $('#source-flow-message').textContent = `${data.retentionDays ? `来源记录保留 ${data.retentionDays} 天。` : ''}${data.gapsTruncated ? '重叠采集缺口超过 200 条，当前只显示前 200 条；请缩小查询时间窗。' : ''}`;
 }
 sourceFlowForm.addEventListener('submit', event => { event.preventDefault(); sourceFlowPage = 1; loadSourceFlows().catch(error => $('#source-flow-message').textContent = error.message); });
 for (const direction of ['prev', 'next']) $(`#source-flow-${direction}`).addEventListener('click', () => { sourceFlowPage += direction === 'next' ? 1 : -1; loadSourceFlows().catch(error => $('#source-flow-message').textContent = error.message); });

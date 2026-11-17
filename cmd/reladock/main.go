@@ -159,6 +159,10 @@ func main() {
 	if notificationSender.Enabled() {
 		go runNotifications(signals, store, notificationSender, metrics)
 	}
+	if cfg.SourceFlowRetentionDays != 0 {
+		go runSourceFlowRetention(signals, 30*time.Second, 25*time.Second, store.PruneSourceFlows,
+			func(runErr error) { _ = metrics.ObserveWorker(observability.WorkerSourceFlowRetention, runErr) }, func(message string) { log.Print(message) })
+	}
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -174,11 +178,6 @@ func main() {
 				log.Print("incident reconciliation failed")
 			}
 			_ = metrics.ObserveWorker(observability.WorkerIncidentReconcile, incidentErr)
-			if cfg.SourceFlowRetentionDays != 0 {
-				if _, retentionErr := store.PruneSourceFlows(maintenance, 1000); retentionErr != nil && maintenance.Err() == nil {
-					log.Print("source-flow retention cleanup failed")
-				}
-			}
 			done()
 			select {
 			case <-signals.Done():

@@ -167,7 +167,7 @@ func TestSourceFlowQueryIsAdminAuditedBoundedAndRetentionUsesReceivedTime(t *tes
 		t.Fatal(err)
 	}
 	page, err := s.AdminSourceFlows(ctx, admin, SourceFlowQuery{From: to.Add(-time.Hour), To: to, RuleID: event.RuleID, SourceIP: event.SourceIP, Page: 1})
-	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].SourcePort != event.SourcePort || page.PageSize != 50 || len(page.Gaps) != 1 || page.Gaps[0].ClosedAt != nil {
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].SourcePort != event.SourcePort || page.PageSize != 50 || page.RetentionDays != 180 || len(page.Gaps) != 1 || page.Gaps[0].ClosedAt != nil {
 		t.Fatalf("page=%+v err=%v", page, err)
 	}
 	if _, err = s.AdminSourceFlows(ctx, admin, SourceFlowQuery{From: to.Add(-25 * time.Hour), To: to, Page: 1}); !errors.Is(err, ErrInvalid) {
@@ -217,6 +217,56 @@ func TestSourceFlowManifestPruningWaitsForSupersessionRetention(t *testing.T) {
 	}
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM applied_source_flow_rules WHERE node_id='hk-01' AND config_generation=7`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("superseded manifest retained count=%d err=%v", count, err)
+	}
+}
+
+func TestSourceFlowPruningIsBoundedAndPreservesNonSourceFacts(t *testing.T) {
+	s, event := sourceIngestFixture(t)
+	ctx := context.Background()
+	if _, err := s.AdjustWalletFromCLI(ctx, WalletAdjustment{TenantID: event.TenantID, Key: "source-retention-credit", AmountCents: 100, Reason: "retention isolation fixture", Operator: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPlatformAdmin(ctx, "source-flow@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	events := []sourceflow.Event{event}
+	for _, id := range []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2"} {
+		copy := event
+		copy.EventID = id
+		copy.ConntrackID++
+		events = append(events, copy)
+	}
+	if _, err := s.IngestSourceFlows(ctx, "hk-01", sourceflow.Batch{NodeID: "hk-01", Events: events}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE source_flow_events SET received_at=clock_timestamp()-interval '181 days'`); err != nil {
+		t.Fatal(err)
+	}
+	var rulesBefore, auditsBefore, platformAuditsBefore, walletsBefore, ledgerBefore int
+	if err := s.pool.QueryRow(ctx, `SELECT
+ (SELECT count(*) FROM relay_rules),
+ (SELECT count(*) FROM audit_logs),
+ (SELECT count(*) FROM platform_audit_logs),
+ (SELECT count(*) FROM billing_wallets),
+ (SELECT count(*) FROM billing_ledger)`).Scan(&rulesBefore, &auditsBefore, &platformAuditsBefore, &walletsBefore, &ledgerBefore); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := s.PruneSourceFlows(ctx, 2)
+	if err != nil || deleted != 2 {
+		t.Fatalf("bounded prune deleted=%d err=%v", deleted, err)
+	}
+	var eventsAfter, rulesAfter, auditsAfter, platformAuditsAfter, walletsAfter, ledgerAfter int
+	if err = s.pool.QueryRow(ctx, `SELECT
+ (SELECT count(*) FROM source_flow_events),
+ (SELECT count(*) FROM relay_rules),
+ (SELECT count(*) FROM audit_logs),
+ (SELECT count(*) FROM platform_audit_logs),
+ (SELECT count(*) FROM billing_wallets),
+ (SELECT count(*) FROM billing_ledger)`).Scan(&eventsAfter, &rulesAfter, &auditsAfter, &platformAuditsAfter, &walletsAfter, &ledgerAfter); err != nil {
+		t.Fatal(err)
+	}
+	if eventsAfter != 1 || rulesAfter != rulesBefore || auditsAfter != auditsBefore || platformAuditsAfter != platformAuditsBefore || walletsAfter != walletsBefore || ledgerAfter != ledgerBefore {
+		t.Fatalf("events=%d rules=%d/%d audits=%d/%d platformAudits=%d/%d wallets=%d/%d ledger=%d/%d", eventsAfter, rulesAfter, rulesBefore, auditsAfter, auditsBefore, platformAuditsAfter, platformAuditsBefore, walletsAfter, walletsBefore, ledgerAfter, ledgerBefore)
 	}
 }
 

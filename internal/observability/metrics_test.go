@@ -22,6 +22,9 @@ func TestMetricsHandlerEmitsDeterministicLowCardinalityFacts(t *testing.T) {
 	if err := r.ObserveWorker(WorkerIncidentReconcile, nil); err != nil {
 		t.Fatal(err)
 	}
+	if err := r.ObserveWorker(WorkerSourceFlowRetention, nil); err != nil {
+		t.Fatal(err)
+	}
 	req := httptest.NewRequest(http.MethodGet, "http://metrics.local/metrics", nil)
 	rec := httptest.NewRecorder()
 	r.Handler().ServeHTTP(rec, req)
@@ -29,7 +32,7 @@ func TestMetricsHandlerEmitsDeterministicLowCardinalityFacts(t *testing.T) {
 		t.Fatalf("status/header: %d %s", rec.Code, rec.Header().Get("Content-Type"))
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`reladock_database_up 1`, `reladock_nodes{status="ready"} 2`, `reladock_agent_contacts{state="stale"} 1`, `reladock_node_resources{state="drifted"} 1`, `reladock_worker_runs_total{worker="incident-reconcile",result="success"} 1`} {
+	for _, want := range []string{`reladock_database_up 1`, `reladock_nodes{status="ready"} 2`, `reladock_agent_contacts{state="stale"} 1`, `reladock_node_resources{state="drifted"} 1`, `reladock_worker_runs_total{worker="incident-reconcile",result="success"} 1`, `reladock_worker_runs_total{worker="source-flow-retention",result="success"} 1`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in %s", want, body)
 		}

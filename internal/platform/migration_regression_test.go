@@ -349,7 +349,7 @@ func TestMigration29ToCurrentPreservesBillingUsageAndIdentity(t *testing.T) {
 		result := map[string]string{}
 		for _, table := range []string{"billing_wallets", "billing_ledger", "plan_price_versions", "line_offerings", "relay_rules", "rule_subscriptions", "subscription_usage", "nodes", "endpoint_allocations"} {
 			var rows string
-			query := `SELECT COALESCE(jsonb_agg(row ORDER BY row::text),'[]'::jsonb)::text FROM (SELECT to_jsonb(t)-ARRAY['auto_renew','auto_renew_error','renewed_from','certificate_renewal_fingerprint','agent_certificate_rotation_supported','agent_source_flow_supported','agent_port_range_supported','source_logging_enabled','source_logging_applied_enabled','source_logging_applied_version','source_logging_applied_generation','listen_port_end'] AS row FROM ` + table + ` t) history`
+			query := `SELECT COALESCE(jsonb_agg(row ORDER BY row::text),'[]'::jsonb)::text FROM (SELECT to_jsonb(t)-ARRAY['auto_renew','auto_renew_error','renewed_from','certificate_renewal_fingerprint','agent_certificate_rotation_supported','agent_source_flow_supported','agent_port_range_supported','agent_source_ip_block_supported','source_logging_enabled','source_logging_applied_enabled','source_logging_applied_version','source_logging_applied_generation','listen_port_end'] AS row FROM ` + table + ` t) history`
 			if err := s.pool.QueryRow(ctx, query).Scan(&rows); err != nil {
 				t.Fatal(err)
 			}
@@ -378,9 +378,9 @@ func TestMigration29ToCurrentPreservesBillingUsageAndIdentity(t *testing.T) {
 	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM rule_subscriptions WHERE id=$1 AND NOT auto_renew AND auto_renew_error='' AND renewed_from IS NULL`, period.ID).Scan(&defaults); err != nil || defaults != 1 {
 		t.Fatalf("renewal defaults=%d err=%v", defaults, err)
 	}
-	var rotationSupported, sourceFlowSupported, portRangeSupported bool
+	var rotationSupported, sourceFlowSupported, portRangeSupported, sourceIPBlockSupported bool
 	var renewalFingerprint *string
-	if err = s.pool.QueryRow(ctx, `SELECT agent_certificate_rotation_supported,agent_source_flow_supported,agent_port_range_supported,certificate_renewal_fingerprint FROM nodes WHERE id=$1`, rule.NodeID).Scan(&rotationSupported, &sourceFlowSupported, &portRangeSupported, &renewalFingerprint); err != nil || rotationSupported || sourceFlowSupported || portRangeSupported || renewalFingerprint != nil {
-		t.Fatalf("certificate defaults rotation=%v sourceFlow=%v portRange=%v fingerprint=%v err=%v", rotationSupported, sourceFlowSupported, portRangeSupported, renewalFingerprint, err)
+	if err = s.pool.QueryRow(ctx, `SELECT agent_certificate_rotation_supported,agent_source_flow_supported,agent_port_range_supported,agent_source_ip_block_supported,certificate_renewal_fingerprint FROM nodes WHERE id=$1`, rule.NodeID).Scan(&rotationSupported, &sourceFlowSupported, &portRangeSupported, &sourceIPBlockSupported, &renewalFingerprint); err != nil || rotationSupported || sourceFlowSupported || portRangeSupported || sourceIPBlockSupported || renewalFingerprint != nil {
+		t.Fatalf("certificate defaults rotation=%v sourceFlow=%v portRange=%v sourceIPBlock=%v fingerprint=%v err=%v", rotationSupported, sourceFlowSupported, portRangeSupported, sourceIPBlockSupported, renewalFingerprint, err)
 	}
 }
