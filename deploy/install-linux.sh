@@ -33,6 +33,7 @@ test -f "$release/$service.service"
 test -f "$release/$configuration.env.example"
 if [ "$component" = agent ]; then
   test -f "$release/reladock-agent-apply.service"
+  test -f "$release/reladock-agent-network.service"
   test -f "$release/reladock-updater.service"
   test -f "$release/reladock-updater.timer"
 fi
@@ -57,6 +58,7 @@ done
 install -o root -g root -m 0644 "$release/$service.service" "/etc/systemd/system/$service.service"
 if [ "$component" = agent ]; then
   install -o root -g root -m 0644 "$release/reladock-agent-apply.service" /etc/systemd/system/reladock-agent-apply.service
+  install -o root -g root -m 0644 "$release/reladock-agent-network.service" /etc/systemd/system/reladock-agent-network.service
   install -o root -g root -m 0644 "$release/reladock-updater.service" /etc/systemd/system/reladock-updater.service
   install -o root -g root -m 0644 "$release/reladock-updater.timer" /etc/systemd/system/reladock-updater.timer
 fi

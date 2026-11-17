@@ -29,6 +29,23 @@ TDD 已完成 schema v42→v43、节点输入/编辑保护、目录隔离、钱�
 生产迁移先用 custom-format 备份 `/var/backups/reladock/20261116T164306Z-unassigned-dedicated-rehearsal-v4/before.dump` 恢复到显式临时数据库；候选迁移到 schema v43 后，账号/成员/会话 `1/1/1`、钱包 `1:0:0`、TRON tombstone/receipt/cursor `1/1/1`、节点/规则/交付/线路/价格/订阅/用量/账本/普通支付均保持原值，约束只允许 `dedicated-tenant` 为空，临时库和临时 dump 已清理。切换停服后即时 v42 回滚备份位于 `/var/backups/reladock/20261116T165042Z-unassigned-dedicated-cutover`，含旧控制端/管理 CLI/恢复工具、环境、systemd、custom-format 数据库、目录清单和 SHA256；旧控制端摘要为 `b8be3d93b0969d5cb54d523082efb0fe334028c3a7e6431bced45069ee9d29bc`，回滚必须同时恢复旧二进制与该 v42 dump。
 
 独立上线复核确认服务 active/enabled、schema v43、三个安装二进制摘要与本地候选一致，迁移前后业务事实 diff 为空。公网 `/`、`/admin`、`/admin.js`、`/node-editor.js`、`/node-action-dialog.js` 和 Google 状态均为 200，未登录 `/api/admin/nodes` 为 401；四个管理资源 SHA256 与源码一致。启动日志只有部署前已存在且本次未擅自改变的 `RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES=true` 明示警告，没有新增 error/fatal/panic。切换脚本所有服务、schema、计数和摘要断言完成后，仅因 `journalctl` 不接受 `+00:00` 时间格式在导出日志步骤退出 1；随后独立日志核验已完成。生产没有创建节点、套餐、支付或流量进行测试，也没有修改 Agent、PKI、WAL、nftables/tc 或网络规则；已登录后台的新增/认领/解绑交互仍待真实业务使用时验收。
+## 2026-11-17 全新 Agent 显式 apply 引导（本地，未发布）
+
+全新 HTTPS bootstrap 仍先完成注册并启动 validation。仅在真实终端中显示“启用转发 / 保持仅验证”，默认与非交互路径均保持 validation；启用路径自动发现单一 IPv4 默认出口和唯一实际本机地址，拒绝公网 NAT 映射、第三方 alias、tc class/filter、非空且不可交接 qdisc、flowtable/offload 及 fwmark 冲突，展示 node、接口、SNAT/listen 地址、ifindex、namespace、qdisc、mark namespace 82 和整形预算后，要求字面输入 `ENABLE`。普通非 RelaDock nftables 规则可共存。
+
+确认后安装器才补全私有 `agent.env`、生成仅服务账号可读且绑定接口身份的 `shaping.json` 和授权 marker；新增发行文件 `reladock-agent-network.service`，以 root oneshot 调用 `reladock-agent prepare-network`。该子命令在每次特权修改前重新核对节点、接口、ifindex、namespace、alias、qdisc、地址、nft 与策略路由，再持久启用 IPv4 forwarding、关闭 GRO/GSO/TSO/LRO 并设置 RelaDock alias；apply 单元要求它并在其后启动。新增 `reladock-agent preflight-apply` 使用与正式 apply 相同的 lease、tc/nft/offload 检查，但不打开 journal/WAL、不领取配置、不修改网络。apply 启动请求前的失败恢复原环境和主机前置值并保持 validation；自动回滚不完整则返回失败并保留备份与临时现场。请求启动后不再自动反向清理，保留全部 PKI、journal、数据面、shaping 与 WAL 证据并进入恢复流程。
+
+控制端心跳事务现在记录切换前模式；只有认证 Agent 首次从非 apply 切至 apply，且当前 desired generation 精确为 validated、applied 落后、当前 outbox 状态仍为 `validated` 时，才调用既有完整快照生成器递增一次 desired generation。重复 apply 心跳、validation、failed 或已 applied 状态均不重发。这替代了本页 hk-01 手工切换记录中需要管理员 retry 的步骤，但 applied ACK 仍不代表客户协议端到端健康。
+
+TDD 先观察到模式切换未递增 generation 和安装器缺少菜单/systemd wiring；实施后 PostgreSQL 聚焦测试覆盖一次重发、心跳/validation 竞态及负例，Agent/shaping/CLI Go 包通过，Node 发行/安装静态测试 3/3 通过，隔离 Docker 的 bootstrap 回归 1/1 通过并实际覆盖 validation 默认、既有升级/回滚、服务账号 0600 租约及确认后的 apply 文件/服务切换。最终 `GOFLAGS=-timeout=20m npm test` 退出 0：Go 全包 `-race` 通过（`internal/platform` 626.999s、`internal/web` 118.408s），Node 157 项中 156 通过、1 项默认跳过的 Linux 安装器测试、0 失败；该安装器测试随后以 `RELADOCK_INSTALLER_DOCKER_TESTS=1` 独立执行并 1/1 通过。`npm run vet`、shell 语法和 `git diff --check` 均退出 0。尚未构建或发布 Release，未在真实 VPS 验证 systemd 条件、网卡 offload 固定特性、断电/重启恢复、失败注入和真实转发，因此不能标记生产完成。
+
+## 2026-11-17 hk-01 显式 apply 与端口段生产有限验收
+
+用户明确同意继续处理后，在入口 `103.30.78.63` 将 `hk-01` 从安装器默认的 validation-only 切换为显式 apply。切换前确认该机只有 `eth0` 单一默认出口、地址和 SNAT 均为 `103.30.78.63`、ifindex 2、netns `net:[4026531840]`，没有既有 nftables 表、策略路由、tc class/filter 或 flowtable；根 qdisc 为无 class/filter 的内核 `fq/0:`。虚拟网卡无法报告物理速率，租约按产品既定最高上限填写 `LinkMbps=1000`，这只是调度预算而非带宽保证。
+
+节点安装 `conntrack`，持久启用 IPv4 forwarding，关闭 `eth0` 的 GRO/GSO/TSO（LRO 已固定关闭），设置接口 alias `reladock-shaping-v1:hk-01`，并创建绑定当前接口、namespace、ifindex、空默认 qdisc 指纹及 mark namespace 82 的私有 shaping 租约。独立 `reladock-network-prerequisites.service` 在开机时恢复这些前置条件，apply 单元通过 drop-in 要求该服务成功；`reladock-agent-apply.service` 和 updater timer 均 enabled，validation 单元 disabled。服务账号继续使用私有 dataplane/shaping、计量 WAL 和来源元数据 WAL；未清理 PKI、journal 或任何持久状态。切换前备份位于 `/var/backups/reladock/20261117-0745-hk01-preapply`，含 Agent 环境、PKI、systemd 单元、原状态目录和摘要清单。
+
+第 3 代此前已被 validation Agent 标记为 validated，因此使用受审计的本机 `reladock-admin retry --id hk-01` 生成第 4 代完整快照，没有直接改数据库状态。Agent 于 07:47:30 UTC 回报并取得 applied ACK；控制库读回 `agent_mode=apply`、Agent `v0.9.15`、期望/验证/应用代次 `4/4/4`，第 4 代 `applied`，规则期望/应用版本 `1/1`。内核读回 TCP/UDP `103.30.78.63:40000-40100 -> 86.53.207.112:40055` 的 DNAT/SNAT、逐包 mark 和 1 Gbit/s HTB class；观察时 UDP 原始/回复计数已分别为 26 包/14405 字节和 22 包/16365 字节，证明已有 UDP 报文经过入口与回复路径。目标机只监听 UDP 40055、没有 TCP 40055，因此 TCP 分支仍不会形成客户协议连接。尚未执行生产重启，也未使用客户 Hysteria2 凭据完成协议级握手；开机恢复由 enabled 单元和持久前置服务配置确认，真实重启恢复、长期计量精度和客户协议端到端健康仍待单独验收。
 
 ## 2026-11-16 生产业务数据重置
 
@@ -90,7 +107,7 @@ v40 代码提交 `31b2f52` 已推送到 `origin/feat/console-page-navigation`。
 
 一条命令安装器现在先区分全新主机、完整既有安装和残缺/冲突现场。全新主机继续原注册流程；完整既有安装从 `/dev/tty` 显示“升级 / 不操作”，因此不会误读标准输入中的短期凭证。回车、其他输入、无终端或选择不操作均保持现场，且不依赖发布元数据。残缺 PKI、缺少二进制/单元、符号链接或 `agent.env` 与本地 node/control/PKI 不一致时失败关闭，不提供覆盖式升级。
 
-选择升级后才读取控制台固定 Release，继续验证外层 SHA256、普通平面文件白名单和包内摘要。升级只替换 Agent、dataplane、updater、recovery 及四个 systemd 单元，不运行注册、不安装 conntrack 等系统包，也不改网络前置条件；PKI、环境、配置 journal、计量/来源 WAL、updater 状态和内核数据面保持。脚本记录原 validation/apply 与 updater timer 活动状态，候选启动失败时恢复旧二进制、旧单元和原服务模式；自动回滚不完整则明确要求保留现场人工检查。
+选择升级后才读取控制台固定 Release，继续验证外层 SHA256、普通平面文件白名单和包内摘要。升级只替换 Agent、dataplane、updater、recovery 及发行包内 systemd 单元（现包含受 marker 门禁的 network prerequisites unit），不运行注册、不安装 conntrack 等系统包；没有 `/etc/reladock/network-managed` 的既有节点不会由新 unit 接管网络。PKI、环境、配置 journal、计量/来源 WAL、updater 状态和内核数据面保持。脚本记录原 validation/apply 与 updater timer 活动状态，候选启动失败时恢复旧二进制、旧单元和原服务模式；自动回滚不完整则明确要求保留现场人工检查。
 
 隔离 Linux 容器测试覆盖全新注册、真实伪终端菜单、不操作不取发布元数据、validation/apply 模式保持、无 conntrack 的 validation 升级、身份配置冲突拒绝、残缺现场拒绝、候选启动失败回滚、归档符号链接/嵌套路径拒绝及 PKI/环境不变。该路径尚未构建公开 Release、部署生产 VPS 或验证真实 systemd 日志、Agent 心跳及同 generation 配置健康；不能把进程恢复写成控制链路或端到端转发健康。
 

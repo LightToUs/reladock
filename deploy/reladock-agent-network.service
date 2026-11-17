@@ -1,0 +1,26 @@
+[Unit]
+Description=RelaDock explicitly authorized network prerequisites
+After=network-online.target
+Before=reladock-agent-apply.service
+Wants=network-online.target
+ConditionPathExists=/etc/reladock/network-managed
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/reladock/agent.env
+ExecStart=/opt/reladock/reladock-agent prepare-network --node ${RELADOCK_NODE} --state-dir ${RELADOCK_STATE_DIR} --snat ${RELADOCK_SNAT} --shaping-interface ${RELADOCK_SHAPING_INTERFACE} --metering-wal-dir ${RELADOCK_WAL_DIR} --source-flow-wal-dir ${RELADOCK_SOURCE_FLOW_WAL_DIR} --nft-binary ${RELADOCK_NFT_BINARY} --tc-binary ${RELADOCK_TC_BINARY} --ip-binary ${RELADOCK_IP_BINARY} --ethtool-binary ${RELADOCK_ETHTOOL_BINARY} --shaping-lease ${RELADOCK_SHAPING_LEASE}
+RemainAfterExit=yes
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -349,3 +349,137 @@ func TestPortRangeCapabilityUsesLatestAuthenticatedHeartbeat(t *testing.T) {
 		t.Fatalf("latest heartbeat did not clear range capability=%v err=%v", supported, err)
 	}
 }
+
+func TestApplyModeTransitionRedeliversCurrentValidatedGenerationOnce(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	fingerprint := strings.Repeat("f", 64)
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$1,agent_mode='validation',validated_generation=desired_generation,applied_generation=0 WHERE id='hk-01'`, fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE config_outbox SET state='validated' WHERE node_id='hk-01' AND generation=(SELECT desired_generation FROM nodes WHERE id='hk-01')`); err != nil {
+		t.Fatal(err)
+	}
+	var beforeGeneration int64
+	var beforeJobs int
+	if err := s.pool.QueryRow(ctx, `SELECT desired_generation FROM nodes WHERE id='hk-01'`).Scan(&beforeGeneration); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM config_outbox WHERE node_id='hk-01'`).Scan(&beforeJobs); err != nil {
+		t.Fatal(err)
+	}
+	h := validAgentHeartbeat(time.Now().UTC())
+	h.Mode = "apply"
+	h.Resources.DataplaneState = "in-sync"
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, h); err != nil {
+		t.Fatal(err)
+	}
+	var generation int64
+	var state string
+	if err := s.pool.QueryRow(ctx, `SELECT n.desired_generation,o.state FROM nodes n JOIN config_outbox o ON o.node_id=n.id AND o.generation=n.desired_generation WHERE n.id='hk-01'`).Scan(&generation, &state); err != nil {
+		t.Fatal(err)
+	}
+	if generation != beforeGeneration+1 || state != "queued" {
+		t.Fatalf("apply transition generation/state = %d/%q, want %d/queued", generation, state, beforeGeneration+1)
+	}
+	if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, h); err != nil {
+		t.Fatal(err)
+	}
+	var afterJobs int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM config_outbox WHERE node_id='hk-01'`).Scan(&afterJobs); err != nil {
+		t.Fatal(err)
+	}
+	if afterJobs != beforeJobs+1 {
+		t.Fatalf("repeated apply heartbeat created %d jobs, want %d", afterJobs, beforeJobs+1)
+	}
+}
+
+func TestApplyModeTransitionDoesNotRedeliverNonCurrentValidatedWork(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        string
+		outboxState string
+	}{
+		{name: "validation heartbeat", mode: "validation", outboxState: "validated"},
+		{name: "failed current generation", mode: "apply", outboxState: "failed"},
+		{name: "already applied", mode: "apply", outboxState: "applied"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testStore(t)
+			ctx := context.Background()
+			fingerprint := strings.Repeat("e", 64)
+			var desired int64
+			if err := s.pool.QueryRow(ctx, `SELECT desired_generation FROM nodes WHERE id='hk-01'`).Scan(&desired); err != nil {
+				t.Fatal(err)
+			}
+			applied := int64(0)
+			if tc.outboxState == "applied" {
+				applied = desired
+			}
+			if _, err := s.pool.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$1,agent_mode='validation',validated_generation=$2,applied_generation=$3 WHERE id='hk-01'`, fingerprint, desired, applied); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.pool.Exec(ctx, `UPDATE config_outbox SET state=$2 WHERE node_id='hk-01' AND generation=$1`, desired, tc.outboxState); err != nil {
+				t.Fatal(err)
+			}
+			var jobsBefore int
+			if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM config_outbox WHERE node_id='hk-01'`).Scan(&jobsBefore); err != nil {
+				t.Fatal(err)
+			}
+			h := validAgentHeartbeat(time.Now().UTC())
+			h.Mode = tc.mode
+			if tc.mode == "apply" {
+				h.Resources.DataplaneState = "in-sync"
+			}
+			if err := s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, h); err != nil {
+				t.Fatal(err)
+			}
+			var jobsAfter int
+			var generationAfter int64
+			if err := s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM config_outbox WHERE node_id='hk-01'),desired_generation FROM nodes WHERE id='hk-01'`).Scan(&jobsAfter, &generationAfter); err != nil {
+				t.Fatal(err)
+			}
+			if jobsAfter != jobsBefore || generationAfter != desired {
+				t.Fatalf("unexpected redelivery jobs/generation=%d/%d want %d/%d", jobsAfter, generationAfter, jobsBefore, desired)
+			}
+		})
+	}
+}
+
+func TestLateValidationAfterApplyHeartbeatRedeliversExactlyOnce(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	fingerprint := strings.Repeat("7", 64)
+	if _, err := s.pool.Exec(ctx, `UPDATE nodes SET certificate_fingerprint=$1,agent_mode='validation' WHERE id='hk-01'`, fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.ClaimConfig(ctx, "hk-01", "transition-race", fingerprint)
+	if err != nil || job == nil {
+		t.Fatalf("claim: job=%+v err=%v", job, err)
+	}
+	h := validAgentHeartbeat(time.Now().UTC())
+	h.Mode = "apply"
+	h.Resources.DataplaneState = "in-sync"
+	if err = s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, h); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ReportConfig(ctx, "hk-01", job.ID, ConfigReport{LeaseToken: job.LeaseToken, Checksum: job.Checksum, Outcome: "validated"}, fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	var desired, validated int64
+	var jobs int
+	if err = s.pool.QueryRow(ctx, `SELECT desired_generation,validated_generation,(SELECT count(*) FROM config_outbox WHERE node_id='hk-01') FROM nodes WHERE id='hk-01'`).Scan(&desired, &validated, &jobs); err != nil {
+		t.Fatal(err)
+	}
+	if desired != job.Generation+1 || validated != job.Generation {
+		t.Fatalf("late validation generations desired/validated=%d/%d want %d/%d", desired, validated, job.Generation+1, job.Generation)
+	}
+	if err = s.ReportAgentHeartbeat(ctx, "hk-01", fingerprint, h); err != nil {
+		t.Fatal(err)
+	}
+	var after int
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM config_outbox WHERE node_id='hk-01'`).Scan(&after); err != nil || after != jobs {
+		t.Fatalf("repeated heartbeat redelivered late validation: before=%d after=%d err=%v", jobs, after, err)
+	}
+}

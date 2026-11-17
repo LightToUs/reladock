@@ -20,8 +20,9 @@ type BootstrapGrant struct {
 	Revision  int64     `json:"revision"`
 }
 type BootstrapCertificate struct {
-	NodeID      string `json:"nodeId"`
-	Certificate []byte `json:"-"`
+	NodeID        string `json:"nodeId"`
+	ListenAddress string `json:"listenAddress"`
+	Certificate   []byte `json:"-"`
 }
 type BootstrapSigner func(string, []byte) ([]byte, error)
 
@@ -124,6 +125,10 @@ func (s *Store) RedeemNodeBootstrap(ctx context.Context, token string, csr []byt
 	if err = lockNode(ctx, tx, id); err != nil {
 		return out, err
 	}
+	var listenAddress string
+	if err = tx.QueryRow(ctx, "SELECT host(listen_address) FROM nodes WHERE id=$1", id).Scan(&listenAddress); err != nil {
+		return out, err
+	}
 	var expires time.Time
 	var revoked bool
 	var csrHash, fp *string
@@ -146,7 +151,7 @@ func (s *Store) RedeemNodeBootstrap(ctx context.Context, token string, csr []byt
 		if fp == nil || current != *fp {
 			return out, ErrUnauthorized
 		}
-		return BootstrapCertificate{NodeID: id, Certificate: cert}, nil
+		return BootstrapCertificate{NodeID: id, ListenAddress: listenAddress, Certificate: cert}, nil
 	}
 	cert, err = sign(id, csr)
 	if err != nil {
@@ -191,5 +196,5 @@ func (s *Store) RedeemNodeBootstrap(ctx context.Context, token string, csr []byt
 	if err = tx.Commit(ctx); err != nil {
 		return out, err
 	}
-	return BootstrapCertificate{NodeID: id, Certificate: cert}, nil
+	return BootstrapCertificate{NodeID: id, ListenAddress: listenAddress, Certificate: cert}, nil
 }

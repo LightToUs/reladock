@@ -76,7 +76,7 @@ func (s *server) serveBootstrap(w http.ResponseWriter, r *http.Request) bool {
 		}
 		block, _ := pem.Decode(cert.Certificate)
 		leaf, _ := x509.ParseCertificate(block.Bytes)
-		respond(w, 200, map[string]any{"nodeId": cert.NodeID, "certificate": string(cert.Certificate), "ca": string(s.bootstrap.Signer.Chain), "control": c.AgentOrigin, "expiresAt": leaf.NotAfter})
+		respond(w, 200, map[string]any{"nodeId": cert.NodeID, "listenAddress": cert.ListenAddress, "certificate": string(cert.Certificate), "ca": string(s.bootstrap.Signer.Chain), "control": c.AgentOrigin, "expiresAt": leaf.NotAfter})
 		return true
 	}
 	failure(w, platform.ErrNotFound)

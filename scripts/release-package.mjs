@@ -5,7 +5,7 @@ import {join,dirname} from 'node:path';
 
 export const releaseFiles = [
  'reladock','reladock-admin','reladock-agent','reladock-dataplane','reladock-updater','reladock-recovery',
- 'reladock.service','reladock-agent.service','reladock-agent-apply.service',
+ 'reladock.service','reladock-agent.service','reladock-agent-apply.service','reladock-agent-network.service',
  'reladock-updater.service','reladock-updater.timer',
  'control.env.example','agent.env.example','install-linux.sh','bootstrap-agent.sh',
  'DEPLOYMENT.md','LINK-AND-CAPACITY.md','OFFSITE-RECOVERY.md','SAFE-RETIREMENT.md','RELEASE.json','SHA256SUMS',

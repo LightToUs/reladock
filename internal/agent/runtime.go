@@ -72,6 +72,33 @@ func privatePath(s string) bool {
 	return filepath.IsAbs(s) && filepath.Clean(s) == s && s != string(filepath.Separator)
 }
 
+// CheckApplyReadiness verifies a reviewed apply lease and host prerequisites
+// without opening journals, claiming control-plane work or changing the host.
+func CheckApplyReadiness(ctx context.Context, o RuntimeOptions, nodeID string) error {
+	if err := ValidateRuntimeOptions(o); err != nil {
+		return err
+	}
+	lease, err := readShapingLease(o.ShapingLeaseFile)
+	if err != nil {
+		return err
+	}
+	if lease.Device != o.ShapingInterface || lease.OwnerID != nodeID {
+		return errors.New("shaping lease identity/device mismatch")
+	}
+	backend, err := shaping.NewLinuxBackend(o.TCBinary, o.IPBinary)
+	if err != nil {
+		return err
+	}
+	if err = shaping.CheckBaseline(ctx, shaping.Options{NodeID: nodeID, Lease: lease, UploadEgress: lease.Device, DownloadEgress: lease.Device}, backend); err != nil {
+		return err
+	}
+	runner, err := dataplane.NewExecRunner(o.NFTBinary)
+	if err != nil {
+		return err
+	}
+	return checkApplyEnvironment(ctx, o, runner)
+}
+
 type VerifiedAdapter interface {
 	ApplyVerified(context.Context, platform.NodeConfig) (dataplane.Plan, error)
 }

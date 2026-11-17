@@ -86,7 +86,7 @@ Google 授权登录为可选连接器。`GOOGLE_OIDC_CLIENT_ID` 与 `GOOGLE_OIDC
 
 来源连接采集还要求 Agent 增加一个与 `--metering-wal-dir` 不同的私有绝对路径 `--source-flow-wal-dir`，并具备 conntrack netlink 所需 `CAP_NET_ADMIN`。未配置该目录时 apply 转发照常工作，但 Agent 不声明来源记录能力，平台不能启用规则。该 WAL 只保存连接元数据和缺口，不得与计费 WAL 共用、删除或手工清空来处理积压。
 
-先核对实际 IPv4 ingress 与 SNAT；控制平台的 `listenAddress` 必须为本节点实际地址，不可保留 `0.0.0.0`。客户目标须是可路由的非回环 IPv4；DNS 在受控应用时解析并固定，不承诺即时切换。平台不自动配置网卡、路由、ip_forward、卸载功能或云安全组。
+先核对实际 IPv4 ingress 与 SNAT；控制平台的 `listenAddress` 必须为本节点实际地址，不可保留 `0.0.0.0`。客户目标须是可路由的非回环 IPv4；DNS 在受控应用时解析并固定，不承诺即时切换。平台控制服务不自动配置网卡、路由、ip_forward、卸载功能或云安全组。全新 HTTPS bootstrap 另有下述窄范围、终端二次确认的 apply 引导；不满足其全部条件时仍保持 validation-only，并要求人工核对。
 
 节点须有 nft、iproute2（tc/ip）、ethtool 与 conntrack-tools。安全端口退役只执行固定 `/usr/sbin/conntrack`；apply systemd 单元在启动前运行版本检查，validation 单元没有 CAP_NET_ADMIN，也不会领取清理任务。运维先明确启用 IPv4 forwarding；完成专用接口与 mark namespace 授权，关闭 GRO/GSO/TSO/LRO，并确保无 flowtable/offload 绕过。运行时只检查这些条件，拒绝不匹配，不自动更改系统前置设置。严禁与另一 NET_ADMIN 程序共同管理该接口/namespace；软件归属标记不是对恶意特权进程的隔离。
 
@@ -100,7 +100,13 @@ Google 授权登录为可选连接器。`GOOGLE_OIDC_CLIENT_ID` 与 `GOOGLE_OIDC
 
 `ReplaceDefaultQdisc` 默认 false。只有运维已确认专用物理接口的根队列是内核默认、handle 为 `0:`、kind 为 `fq`，且 class/filter 均为空时才可设 true；同时必须填写 `DefaultQdiscFingerprint`。在节点上直接执行 `tc -j qdisc show dev eth0 | sha256sum`，将 64 位小写摘要原样写入租约，不要经过格式化工具。Agent 对同一命令的原始输出重新计算摘要。该授权只允许 Agent 在持久化应用意图后将这一空默认队列替换成固定的 RelaDock HTB；摘要变化、其他 root、非零 handle、已有 class/filter 或接口身份变化均失败关闭。它不会删除 root，也不授权覆盖第三方 tc 配置。
 
-填写 `agent.env` 的实际 SNAT、接口、租约、二进制绝对路径和私有状态目录。默认单位永远只校验；应用选择独立的 `reladock-agent-apply.service`，由非 root 账号以最小 CAP_NET_ADMIN 运行，两单位互斥。安装器只复制模板，不启动它，不修改网卡。选择启动应用单位就是实际网络修改，必须在获授权的目标节点进行；本地 macOS 不支持 apply。
+填写 `agent.env` 的实际 SNAT、接口、租约、二进制绝对路径和私有状态目录。默认单位永远只校验；应用选择独立的 `reladock-agent-apply.service`，由非 root 账号以最小 CAP_NET_ADMIN 运行，两单位互斥。`install-linux.sh` 仍只复制模板，不启动应用或修改网卡。选择启动应用单位就是实际网络修改，必须在获授权的目标节点进行；本地 macOS 不支持 apply。
+
+全新 HTTPS bootstrap 注册成功并启动 validation 后，如存在真实 `/dev/tty`，显示“启用转发 / 保持仅验证”菜单。启用路径只支持：单一 IPv4 默认出口、该接口唯一的本机全局 IPv4、无第三方 alias、无 tc class/filter、空 `noqueue` 或可按原始 JSON 摘要交接的内核 `fq/0:` 根队列、无 flowtable/offload 或 fwmark 冲突，并且固定绝对路径的 nft/ip/tc/ethtool/conntrack/sysctl 均存在。普通非 RelaDock nftables 防火墙规则可共存；公网 NAT 映射地址未实际配置在接口上的主机不会被自动接管。整形预算默认 1000 Mbps，可在 1–100000 内明确填写，它不是保证带宽。
+
+安装器展示 node、接口、SNAT/listen 地址、ifindex、network namespace、qdisc 交接、mark namespace 82 和整形预算，只有输入字面值 `ENABLE` 才写入私有 `agent.env`、服务账号独占的 `shaping.json` 与 `/etc/reladock/network-managed`。随后启用 root oneshot `reladock-agent-network.service`；该单元调用 Agent 的 `prepare-network`，在每次特权修改前重新核对节点、接口、ifindex、namespace、alias、qdisc、地址、nft 与策略路由，再持久设置 IPv4 forwarding、关闭 GRO/GSO/TSO/LRO 并设置接口 alias。apply 单元要求该服务并在其后启动，因此重启会先恢复并复核前置条件。Agent 的 `preflight-apply` 再做一次只读核对；两个子命令都不领取或应用控制配置。
+
+在请求启动 apply 主进程前，准备或 preflight 失败会恢复原 `agent.env`、ip_forward、offload 和 alias，删除本次租约/marker，并保持 validation。调用 apply 启动后视为不可自动回滚边界，因为进程可能立即领取并修改配置；此后的启动失败保留 PKI、journal、dataplane/shaping 状态和两类 WAL，validation 保持关闭，按恢复流程处理。控制端只在已认证心跳首次从非 apply 变为 apply，且当前 generation 精确为 `validated`、尚未 `applied` 时生成一个新完整快照；期望代次随即递增，后续心跳不会重复生成。
 
 主 Agent 每周期保存真实 counter 并通过 mTLS 补传。WAL 满、磁盘不确定或 rollback 未完成时冻结平台业务或保留 applying 屏障；排障后由运维生成新快照，不能删 WAL/state 或直接清数据库状态。重启保留 `.control` journal 与 dataplane/shaping/WAL（实际控制子目录名 `control`）；恢复使用原 job/token，证书更换后仍须保留原状态。状态丢失的自动重建尚未实现，必须人工对账。35s 保守到期余量可能提前停止临近到期规则，不适用于秒级套餐。
 
@@ -142,7 +148,7 @@ Google 授权登录为可选连接器。`GOOGLE_OIDC_CLIENT_ID` 与 `GOOGLE_OIDC
 完整三机拓扑、VPN 客户端、逐规则带宽/流量、故障恢复与证据要求见 [真实链路和容量验收](acceptance/LINK_AND_CAPACITY.md)。
 ## 一条命令安装入口 Agent（v0.9.0）
 
-管理后台的“安装 Agent”面板可生成短期节点专属命令。登记成功后留在节点列表，点击“安装 Agent”才打开面板。执行地点是对应的专用 Linux VPS，不是 Mac。本流程只安装并启动 **validation-only** 服务，后台显示联系和环境上报，不代表实际业务转发正常。
+管理后台的“安装 Agent”面板可生成短期节点专属命令。登记成功后留在节点列表，点击“安装 Agent”才打开面板。执行地点是对应的专用 Linux VPS，不是 Mac。全新安装先注册并启动 **validation-only** 服务；有真实终端时随后显示“启用转发 / 保持仅验证”菜单。只有主机检查全部通过并输入 `ENABLE` 才切换 apply，无终端或任一步不确定都保持 validation-only。后台显示联系、环境上报或服务 active 均不代表实际业务转发正常。
 
 ### 托管证书模式（新控制端）
 

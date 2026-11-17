@@ -124,6 +124,13 @@ func (s *Store) ReportAgentHeartbeat(ctx context.Context, nodeID, fingerprint st
 	if err = checkNodeCredential(ctx, tx, nodeID, []string{fingerprint}); err != nil {
 		return err
 	}
+	var previousMode, currentDeliveryState string
+	var desiredGeneration, validatedGeneration, appliedGeneration int64
+	if err = tx.QueryRow(ctx, `SELECT agent_mode,desired_generation,validated_generation,applied_generation,
+COALESCE((SELECT state FROM config_outbox WHERE node_id=nodes.id AND generation=nodes.desired_generation),'')
+FROM nodes WHERE id=$1`, nodeID).Scan(&previousMode, &desiredGeneration, &validatedGeneration, &appliedGeneration, &currentDeliveryState); err != nil {
+		return err
+	}
 	result, err := tx.Exec(ctx, `UPDATE nodes SET
 last_seen_at=now(),agent_heartbeat_at=now(),agent_version=$2,agent_mode=$3,agent_started_at=$4,agent_certificate_not_after=$5,
 agent_rotation_error_since=CASE WHEN $6='error' AND (agent_rotation_state<>'error' OR agent_rotation_error_code<>$7 OR agent_rotation_error_since IS NULL) THEN now() WHEN $6='error' THEN agent_rotation_error_since ELSE NULL END,
@@ -178,6 +185,11 @@ ON CONFLICT(node_id) DO UPDATE SET
  degraded_since=CASE WHEN (CASE WHEN EXCLUDED.dropped_total>node_source_flow_latest.dropped_total THEN 'degraded' ELSE EXCLUDED.collector_status END) IN ('degraded','unavailable') THEN COALESCE(node_source_flow_latest.degraded_since,EXCLUDED.received_at) END,
  normal_since=CASE WHEN (CASE WHEN EXCLUDED.dropped_total>node_source_flow_latest.dropped_total THEN 'degraded' ELSE EXCLUDED.collector_status END)='normal' THEN COALESCE(node_source_flow_latest.normal_since,EXCLUDED.received_at) END`, nodeID, observation.CollectorStatus, observation.SubscriptionAlive, observation.BacklogCount, observation.OldestBacklogAt, observation.WALBytesUsed, observation.WALBytesLimit, observation.DroppedTotal, observation.OpenGap, observation.CollectorEpoch, observation.CollectorSequence, observation.ObservedAt)
 		if err != nil {
+			return err
+		}
+	}
+	if previousMode != "apply" && heartbeat.Mode == "apply" && desiredGeneration == validatedGeneration && appliedGeneration < validatedGeneration && currentDeliveryState == "validated" {
+		if err = s.enqueueConfig(ctx, tx, nodeID); err != nil {
 			return err
 		}
 	}

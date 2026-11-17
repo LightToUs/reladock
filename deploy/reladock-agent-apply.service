@@ -1,7 +1,8 @@
 [Unit]
 Description=RelaDock explicitly authorized forwarding Agent
-After=network-online.target
+After=network-online.target reladock-agent-network.service
 Wants=network-online.target
+Requires=reladock-agent-network.service
 Conflicts=reladock-agent.service
 ConditionPathExists=/etc/reladock/shaping.json
 

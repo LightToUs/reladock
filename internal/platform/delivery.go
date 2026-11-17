@@ -402,6 +402,16 @@ func (s *Store) ReportConfig(ctx context.Context, nodeID, jobID string, report C
 		if _, err = tx.Exec(ctx, "UPDATE nodes SET validated_generation=$2,last_seen_at=now() WHERE id=$1", nodeID, generation); err != nil {
 			return err
 		}
+		var mode string
+		var applied int64
+		if err = tx.QueryRow(ctx, "SELECT agent_mode,applied_generation FROM nodes WHERE id=$1", nodeID).Scan(&mode, &applied); err != nil {
+			return err
+		}
+		if generation == current && mode == "apply" && applied < generation {
+			if err = s.enqueueConfig(ctx, tx, nodeID); err != nil {
+				return err
+			}
+		}
 	}
 	if outcome == "applied" {
 		// A later full-snapshot ACK is the authoritative supersession point,

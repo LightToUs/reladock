@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -135,11 +136,12 @@ func Bootstrap(ctx context.Context, o BootstrapOptions) error {
 		return errors.New("bootstrap rejected; check token expiry/revocation and retry with retained enrollment")
 	}
 	var out struct {
-		NodeID      string    `json:"nodeId"`
-		Certificate string    `json:"certificate"`
-		CA          string    `json:"ca"`
-		Control     string    `json:"control"`
-		ExpiresAt   time.Time `json:"expiresAt"`
+		NodeID        string    `json:"nodeId"`
+		ListenAddress string    `json:"listenAddress"`
+		Certificate   string    `json:"certificate"`
+		CA            string    `json:"ca"`
+		Control       string    `json:"control"`
+		ExpiresAt     time.Time `json:"expiresAt"`
 	}
 	d := json.NewDecoder(io.LimitReader(response.Body, 65537))
 	d.DisallowUnknownFields()
@@ -148,6 +150,10 @@ func Bootstrap(ctx context.Context, o BootstrapOptions) error {
 	}
 	if e = ValidateEndpoint(out.Control, out.NodeID); e != nil {
 		return e
+	}
+	listenAddress := net.ParseIP(out.ListenAddress)
+	if listenAddress == nil {
+		return errors.New("invalid bootstrap listen address")
 	}
 	keyPEM, e := os.ReadFile(keyPath)
 	if e != nil {
@@ -197,6 +203,9 @@ func Bootstrap(ctx context.Context, o BootstrapOptions) error {
 		return e
 	}
 	if e = save("node-id", out.NodeID); e != nil {
+		return e
+	}
+	if e = save("listen-address", listenAddress.String()); e != nil {
 		return e
 	}
 	if o.EnvFile != "" {

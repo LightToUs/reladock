@@ -12,6 +12,7 @@ test('Linux installer verifies archive, enrolls, enables only validation, and pr
  await mkdir(join(dir,'tools'));await mkdir(join(dir,'release'));
  const fakeAgent=[
   '#!/bin/sh',
+  '[ "$1" != preflight-apply ] || exit 0',
   '[ "$1" = enroll ] || exit 8',
   'printf "enroll\\n" >> /tmp/enrollments',
   'mkdir /etc/reladock/node-pki',
@@ -22,9 +23,10 @@ test('Linux installer verifies archive, enrolls, enables only validation, and pr
   'printf "fixture-certificatefixture-private" > /etc/reladock/node-pki/identity.pem',
   'printf "https://agent.example.com:9443" > /etc/reladock/node-pki/control',
   'printf "hk-01" > /etc/reladock/node-pki/node-id',
+  'printf "192.0.2.10" > /etc/reladock/node-pki/listen-address',
   'printf "RELADOCK_NODE=hk-01\\nRELADOCK_CONTROL=https://agent.example.com:9443\\nRELADOCK_PKI=/etc/reladock/node-pki\\n" > /etc/reladock/agent.env',
  ].join('\n')+'\n';
- const files={'reladock':'fixture control','reladock-admin':'fixture admin','reladock-recovery':'fixture recovery','reladock-agent':fakeAgent,'reladock-dataplane':'#!/bin/sh\nexit 0\n','reladock-updater':'#!/bin/sh\nexit 0\n','reladock.service':'fixture control service','reladock-agent.service':'fixture validation','reladock-agent-apply.service':'fixture opt-in','reladock-updater.service':'fixture updater','reladock-updater.timer':'fixture timer','control.env.example':'fixture control env','agent.env.example':'fixture agent env','install-linux.sh':await readFile(join(process.cwd(),'deploy/install-linux.sh')),'bootstrap-agent.sh':'fixture bootstrap','RELEASE.json':'{}\n','DEPLOYMENT.md':'fixture deployment','LINK-AND-CAPACITY.md':'fixture capacity','OFFSITE-RECOVERY.md':'fixture recovery docs','SAFE-RETIREMENT.md':'fixture retirement'};
+ const files={'reladock':'fixture control','reladock-admin':'fixture admin','reladock-recovery':'fixture recovery','reladock-agent':fakeAgent,'reladock-dataplane':'#!/bin/sh\nexit 0\n','reladock-updater':'#!/bin/sh\nexit 0\n','reladock.service':'fixture control service','reladock-agent.service':'fixture validation','reladock-agent-apply.service':'fixture opt-in','reladock-agent-network.service':'fixture network prerequisites','reladock-updater.service':'fixture updater','reladock-updater.timer':'fixture timer','control.env.example':'fixture control env','agent.env.example':'fixture agent env','install-linux.sh':await readFile(join(process.cwd(),'deploy/install-linux.sh')),'bootstrap-agent.sh':'fixture bootstrap','RELEASE.json':'{}\n','DEPLOYMENT.md':'fixture deployment','LINK-AND-CAPACITY.md':'fixture capacity','OFFSITE-RECOVERY.md':'fixture recovery docs','SAFE-RETIREMENT.md':'fixture retirement'};
  const sums=[];for(const [n,b]of Object.entries(files)){await writeFile(join(dir,'release',n),b);sums.push(`${createHash('sha256').update(b).digest('hex')}  ${n}`)}
  await writeFile(join(dir,'release','SHA256SUMS'),sums.join('\n')+'\n');
  const asset=await packRelease(join(dir,'release'),'0.7.0','amd64',[...Object.keys(files),'SHA256SUMS']);await writeFile(join(dir,'release.tar.gz'),await readFile(asset.path));
@@ -33,10 +35,11 @@ test('Linux installer verifies archive, enrolls, enables only validation, and pr
  const systemctl=[
   '#!/bin/sh',
   'printf "%s\\n" "$*" >> /tmp/services',
-  'case "$1" in enable) unit=$3;; is-active|is-enabled) unit=$3;; *) unit=$2;; esac',
+  'case "$1" in enable|disable) unit=$3;; is-active|is-enabled) unit=$3;; *) unit=$2;; esac',
   '[ "$unit" != reladock-agent ] || unit=reladock-agent.service',
   'case "$1" in',
   '  enable) [ "$2" = --now ] || exit 0; touch "/tmp/enabled.$unit" "/tmp/active.$unit";;',
+  '  disable) [ "$2" = --now ] || exit 0; rm -f "/tmp/enabled.$unit" "/tmp/active.$unit";;',
   '  start|restart) if [ -f "/tmp/fail-once.$unit" ]; then rm -f "/tmp/fail-once.$unit"; exit 1; fi; touch "/tmp/active.$unit";;',
   '  stop) rm -f "/tmp/active.$unit";;',
   '  is-active) [ "$2" = --quiet ] && test -f "/tmp/active.$unit";;',
@@ -62,6 +65,17 @@ set timeout 20
 spawn docker start -a -i ${interactiveName}
 expect {
  -exact {Select [1/2]: } {}
+ eof {exit 81}
+ timeout {exit 82}
+}
+send "2\\r"
+expect {
+ -exact {Agent started in validation-only mode. Check contact and configuration results in the console. Forwarding is NOT enabled.} {}
+ eof {exit 83}
+ timeout {exit 84}
+}
+expect {
+ -exact {Select [1/2]: } {}
  eof {exit 91}
  timeout {exit 92}
 }
@@ -77,6 +91,47 @@ exit [lindex $result 3]
 `;
  const interactive=spawnSync('/usr/bin/expect',['-c',interactiveScript],{encoding:'utf8',timeout:30000});
  assert.equal(interactive.status,0,interactive.stdout+interactive.stderr);
+ const applyName=`reladock-bootstrap-apply-${process.pid}-${Date.now()}`;
+ t.after(()=>spawnSync('docker',['rm','-f',applyName]));
+ const applyCommand=[
+  'mkdir -p /run/systemd/system /etc/systemd/system /usr/sbin',
+  `printf '%s\\n' '#!/bin/sh' 'if [ "$*" = "-4 -o route show default" ]; then echo "default via 192.0.2.1 dev eth0"; exit 0; fi' 'if [ "$*" = "-4 -o address show dev eth0 scope global" ]; then echo "2: eth0 inet 192.0.2.10/24 scope global eth0"; exit 0; fi' 'if [ "$*" = "-4 rule show" ]; then echo "0: from all lookup local"; exit 0; fi' '[ "$1" = link ] && exit 0' 'exit 8' > /usr/sbin/ip`,
+  `printf '%s\\n' '#!/bin/sh' 'if [ "$*" = "-j qdisc show dev eth0" ]; then echo "[{\\"kind\\":\\"noqueue\\",\\"handle\\":\\"0:\\",\\"root\\":true}]"; exit 0; fi' 'if [ "$*" = "-j class show dev eth0" ] || [ "$*" = "-j filter show dev eth0" ]; then echo "[]"; exit 0; fi' 'exit 8' > /usr/sbin/tc`,
+  `printf '%s\\n' '#!/bin/sh' '[ "$*" = "list ruleset" ] && exit 0' 'exit 8' > /usr/sbin/nft`,
+  `printf '%s\\n' '#!/bin/sh' 'if [ "$1" = -k ]; then printf "generic-receive-offload: on\\ngeneric-segmentation-offload: on\\ntcp-segmentation-offload: on\\nlarge-receive-offload: off\\n"; exit 0; fi' '[ "$1" = -K ] && exit 0' 'exit 8' > /usr/sbin/ethtool`,
+  `printf '%s\\n' '#!/bin/sh' 'exit 0' > /usr/sbin/sysctl`,
+  `printf '%s\\n' '#!/bin/sh' 'echo conntrack v1.4.7' > /usr/sbin/conntrack`,
+  'chmod 0755 /usr/sbin/ip /usr/sbin/tc /usr/sbin/nft /usr/sbin/ethtool /usr/sbin/sysctl /usr/sbin/conntrack',
+  'export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin',
+  'printf "%064d\\n" 6 | sh /fixture/installer https://console.example.com',
+  'test -f /etc/reladock/network-managed',
+  `grep -q '"Device":"eth0"' /etc/reladock/shaping.json`,
+  `test "$(stat -c '%U:%G:%a' /etc/reladock/shaping.json)" = 'reladock:reladock:600'`,
+  `grep -q '^RELADOCK_SNAT=192.0.2.10$' /etc/reladock/agent.env`,
+  'systemctl is-active --quiet reladock-agent-network.service',
+  'systemctl is-active --quiet reladock-agent-apply.service',
+  '! systemctl is-active --quiet reladock-agent.service',
+ ].join('\n');
+ const applyCreate=spawnSync('docker',['create','-i','-t','--name',applyName,'--security-opt','no-new-privileges','--entrypoint','sh','reladock-dataplane-test:local','-ec',applyCommand],{encoding:'utf8'});
+ assert.equal(applyCreate.status,0,applyCreate.stdout+applyCreate.stderr);
+ const applyCopy=spawnSync('docker',['cp',`${dir}/.`,`${applyName}:/fixture`],{encoding:'utf8'});
+ assert.equal(applyCopy.status,0,applyCopy.stdout+applyCopy.stderr);
+ const applyScript=`
+set timeout 20
+spawn docker start -a -i ${applyName}
+expect {-exact {Select [1/2]: } {} eof {exit 71} timeout {exit 72}}
+send "1\\r"
+expect {-exact {Link shaping ceiling in Mbps [1000]: } {} eof {exit 73} timeout {exit 74}}
+send "\\r"
+expect {-exact {Type ENABLE to confirm: } {} eof {exit 75} timeout {exit 76}}
+send "ENABLE\\r"
+expect {-exact {Agent started in explicit apply mode. Wait for an applied ACK; service activity is not end-to-end forwarding health.} {} eof {exit 77} timeout {exit 78}}
+expect eof
+set result [wait]
+exit [lindex $result 3]
+`;
+ const applyRun=spawnSync('/usr/bin/expect',['-c',applyScript],{encoding:'utf8',timeout:30000});
+ assert.equal(applyRun.status,0,applyRun.stdout+applyRun.stderr);
  const partial=runContainer('export PATH=/fixture/tools:/usr/sbin:/usr/bin:/sbin:/bin; mkdir -p /etc/reladock; printf "RELADOCK_NODE=partial\\n" > /etc/reladock/agent.env; chmod 0600 /etc/reladock/agent.env; if sh /installer https://console.example.com --existing-action upgrade; then exit 9; fi; test ! -e /opt/reladock/reladock-agent');
  assert.equal(partial.status,0,partial.stdout+partial.stderr);
  assert.match(partial.stderr,/Existing Agent state is incomplete or conflicting/);

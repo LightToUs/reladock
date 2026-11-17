@@ -41,6 +41,22 @@ func newBackend() *fakeBackend {
 	l := options().Lease
 	return &fakeBackend{snap: Snapshot{NamespaceID: l.NamespaceID, Device: l.Device, IfIndex: l.IfIndex, Alias: l.Alias(), RootKind: "noqueue", RootHandle: "0:"}}
 }
+
+func TestPreparationBaselineAcceptsOnlyEmptyOrOwnedAlias(t *testing.T) {
+	b := newBackend()
+	b.snap.Alias = ""
+	if err := CheckPreparationBaseline(context.Background(), options(), b); err != nil {
+		t.Fatalf("empty alias baseline rejected: %v", err)
+	}
+	b.snap.Alias = "foreign-owner"
+	if err := CheckPreparationBaseline(context.Background(), options(), b); err == nil {
+		t.Fatal("foreign alias accepted before privileged preparation")
+	}
+	b.snap.Alias = options().Lease.Alias()
+	if err := CheckPreparationBaseline(context.Background(), options(), b); err != nil {
+		t.Fatalf("owned alias baseline rejected: %v", err)
+	}
+}
 func (b *fakeBackend) Inspect(context.Context, Lease) (Snapshot, error) { return b.snap, nil }
 func value(args []string, key string) string {
 	for i := 0; i+1 < len(args); i++ {

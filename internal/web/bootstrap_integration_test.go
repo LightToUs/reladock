@@ -10,11 +10,45 @@ import (
 	"path/filepath"
 	"reladock/internal/agent"
 	"reladock/internal/nodeauth"
+	"reladock/internal/platform"
 	"reladock/internal/runtimeconfig"
 	"strings"
 	"testing"
 	"testing/fstest"
 )
+
+func configureBootstrapNode(t *testing.T, store *platform.Store, ctx context.Context, email, password string) (platform.Identity, int64) {
+	t.Helper()
+	admin, _, err := store.Login(ctx, email, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := store.AdminNodes(ctx, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range nodes {
+		if node.ID != "hk-01" {
+			continue
+		}
+		input := platform.NodeInput{
+			ID:                node.ID,
+			Name:              node.Name,
+			Region:            node.Region,
+			ListenAddress:     "203.0.113.10",
+			PublicAddress:     node.PublicAddress,
+			CapacityMbps:      node.CapacityMbps,
+			ResourceMode:      node.ResourceMode,
+			DedicatedTenantID: node.DedicatedTenantID,
+		}
+		if err = store.AdminUpdateNode(ctx, admin, input, node.Revision); err != nil {
+			t.Fatal(err)
+		}
+		return admin, node.Revision + 1
+	}
+	t.Fatal("hk-01 bootstrap node not found")
+	return platform.Identity{}, 0
+}
 
 func TestBootstrapHTTPSRegistrationAndMTLSValidation(t *testing.T) {
 	store := testWebStore(t)
@@ -26,6 +60,7 @@ func TestBootstrapHTTPSRegistrationAndMTLSValidation(t *testing.T) {
 	if err = store.SetPlatformAdmin(ctx, who.Email, true); err != nil {
 		t.Fatal(err)
 	}
+	admin, revision := configureBootstrapNode(t, store, ctx, who.Email, "long-bootstrap-test-password")
 	dir := filepath.Join(t.TempDir(), "ca")
 	if err = nodeauth.CreateLocalBundle(dir, "hk-01"); err != nil {
 		t.Fatal(err)
@@ -50,7 +85,7 @@ func TestBootstrapHTTPSRegistrationAndMTLSValidation(t *testing.T) {
 	control.TLS = &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{pair}}
 	control.StartTLS()
 	defer control.Close()
-	g, err := store.CreateNodeBootstrap(ctx, who, "hk-01", 1)
+	g, err := store.CreateNodeBootstrap(ctx, admin, "hk-01", revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,6 +96,9 @@ func TestBootstrapHTTPSRegistrationAndMTLSValidation(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(env); !strings.Contains(string(b), nodeServer.URL) {
 		t.Fatal("wrong control endpoint saved")
+	}
+	if b, _ := os.ReadFile(filepath.Join(nodeDir, "listen-address")); string(b) != "203.0.113.10" {
+		t.Fatalf("wrong authoritative listen address saved: %q", b)
 	}
 	if info, statErr := os.Lstat(filepath.Join(nodeDir, "identity.pem")); statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
 		t.Fatalf("bootstrap canonical identity file: mode=%v err=%v", info, statErr)
@@ -101,6 +139,7 @@ func TestBootstrapResponseLossAndPartialWriteRecovery(t *testing.T) {
 	if err = store.SetPlatformAdmin(ctx, who.Email, true); err != nil {
 		t.Fatal(err)
 	}
+	admin, revision := configureBootstrapNode(t, store, ctx, who.Email, "long-recovery-test-password")
 	caDir := filepath.Join(t.TempDir(), "ca")
 	if err = nodeauth.CreateLocalBundle(caDir, "hk-01"); err != nil {
 		t.Fatal(err)
@@ -114,7 +153,7 @@ func TestBootstrapResponseLossAndPartialWriteRecovery(t *testing.T) {
 	srv.Config.Handler = NewWithOptions(store, fstest.MapFS{}, origin, Options{Bootstrap: &BootstrapOptions{Signer: signer, Config: runtimeconfig.BootstrapConfig{CACert: "test", AgentOrigin: "https://agent.example.com:9443"}}})
 	srv.StartTLS()
 	defer srv.Close()
-	grant, err := store.CreateNodeBootstrap(ctx, who, "hk-01", 1)
+	grant, err := store.CreateNodeBootstrap(ctx, admin, "hk-01", revision)
 	if err != nil {
 		t.Fatal(err)
 	}

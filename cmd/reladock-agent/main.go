@@ -33,6 +33,58 @@ func main() {
 		log.Print("Node enrollment saved; forwarding remains disabled")
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "prepare-network" {
+		flags := flag.NewFlagSet("prepare-network", flag.ExitOnError)
+		nodeID := flags.String("node", "", "enrolled node ID")
+		stateDir := flags.String("state-dir", "", "private absolute persistent Agent state directory")
+		snat := flags.String("snat", "", "explicit IPv4 SNAT address")
+		shapingInterface := flags.String("shaping-interface", "", "explicit dedicated shaping interface")
+		walDir := flags.String("metering-wal-dir", "", "explicit absolute collector WAL directory")
+		sourceFlowWALDir := flags.String("source-flow-wal-dir", "", "optional distinct private source-flow metadata WAL directory")
+		nftBinary := flags.String("nft-binary", "/usr/sbin/nft", "trusted absolute nft binary path")
+		tcBinary := flags.String("tc-binary", "/usr/sbin/tc", "trusted absolute tc binary path")
+		ipBinary := flags.String("ip-binary", "/usr/sbin/ip", "trusted absolute ip binary path")
+		shapingLease := flags.String("shaping-lease", "", "private explicit shaping interface lease JSON")
+		ethtoolBinary := flags.String("ethtool-binary", "/usr/sbin/ethtool", "trusted absolute ethtool binary")
+		flags.Parse(os.Args[2:])
+		if flags.NArg() != 0 {
+			log.Fatal("unexpected arguments")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := agent.PrepareNetwork(ctx, agent.RuntimeOptions{Apply: true, StateDir: *stateDir, SNATAddress: *snat, ShapingInterface: *shapingInterface, WALDir: *walDir, SourceFlowWALDir: *sourceFlowWALDir, NFTBinary: *nftBinary, TCBinary: *tcBinary, IPBinary: *ipBinary, ShapingLeaseFile: *shapingLease, EthtoolBinary: *ethtoolBinary, ControlLockPath: "/var/lib/reladock-locks/control.lock"}, *nodeID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Print("Reviewed network prerequisites prepared and reverified")
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "preflight-apply" {
+		flags := flag.NewFlagSet("preflight-apply", flag.ExitOnError)
+		nodeID := flags.String("node", "", "enrolled node ID")
+		stateDir := flags.String("state-dir", "", "private absolute persistent Agent state directory")
+		snat := flags.String("snat", "", "explicit IPv4 SNAT address")
+		shapingInterface := flags.String("shaping-interface", "", "explicit dedicated shaping interface")
+		walDir := flags.String("metering-wal-dir", "", "explicit absolute collector WAL directory")
+		sourceFlowWALDir := flags.String("source-flow-wal-dir", "", "optional distinct private source-flow metadata WAL directory")
+		nftBinary := flags.String("nft-binary", "/usr/sbin/nft", "trusted absolute nft binary path")
+		tcBinary := flags.String("tc-binary", "/usr/sbin/tc", "trusted absolute tc binary path")
+		ipBinary := flags.String("ip-binary", "/usr/sbin/ip", "trusted absolute ip binary path")
+		shapingLease := flags.String("shaping-lease", "", "private explicit shaping interface lease JSON")
+		ethtoolBinary := flags.String("ethtool-binary", "/usr/sbin/ethtool", "trusted absolute ethtool binary")
+		flags.Parse(os.Args[2:])
+		if flags.NArg() != 0 {
+			log.Fatal("unexpected arguments")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		err := agent.CheckApplyReadiness(ctx, agent.RuntimeOptions{Apply: true, StateDir: *stateDir, SNATAddress: *snat, ShapingInterface: *shapingInterface, WALDir: *walDir, SourceFlowWALDir: *sourceFlowWALDir, NFTBinary: *nftBinary, TCBinary: *tcBinary, IPBinary: *ipBinary, ShapingLeaseFile: *shapingLease, EthtoolBinary: *ethtoolBinary, ControlLockPath: "/var/lib/reladock-locks/control.lock"}, *nodeID)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Print("Apply preflight passed; no configuration was claimed or applied")
+		return
+	}
 	endpoint := flag.String("control", "https://127.0.0.1:3002", "control HTTPS origin")
 	nodeID := flag.String("node", "hk-01", "enrolled node ID")
 	dir := flag.String("pki", ".local/pki", "CA and node certificate directory")

@@ -21,7 +21,7 @@ for (const program of programs) {
   if (result.status !== 0) process.exit(result.status || 1);
   hashes.push(`${createHash('sha256').update(await readFile(path)).digest('hex')}  ${program}`);
 }
-for (const name of ['reladock.service', 'reladock-agent.service','reladock-agent-apply.service','reladock-updater.service','reladock-updater.timer', 'control.env.example', 'agent.env.example','install-linux.sh','bootstrap-agent.sh']) {
+for (const name of ['reladock.service', 'reladock-agent.service','reladock-agent-apply.service','reladock-agent-network.service','reladock-updater.service','reladock-updater.timer', 'control.env.example', 'agent.env.example','install-linux.sh','bootstrap-agent.sh']) {
   await copyFile(new URL(`../deploy/${name}`, import.meta.url), new URL(name, output));
   hashes.push(`${createHash('sha256').update(await readFile(new URL(name,output))).digest('hex')}  ${name}`);
 }

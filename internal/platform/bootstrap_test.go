@@ -38,8 +38,12 @@ func TestBootstrapGrantLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var listenAddress string
+	if err = s.pool.QueryRow(ctx, `SELECT host(listen_address) FROM nodes WHERE id='hk-01'`).Scan(&listenAddress); err != nil || cert.ListenAddress != listenAddress {
+		t.Fatalf("bootstrap listen address=%q want=%q err=%v", cert.ListenAddress, listenAddress, err)
+	}
 	again, err := s.RedeemNodeBootstrap(ctx, grant.Token, []byte("csr-a"), sign)
-	if err != nil || string(cert.Certificate) != string(again.Certificate) {
+	if err != nil || string(cert.Certificate) != string(again.Certificate) || again.ListenAddress != listenAddress {
 		t.Fatalf("recovery: %v", err)
 	}
 	if _, err = s.RedeemNodeBootstrap(ctx, grant.Token, []byte("csr-b"), sign); !errors.Is(err, ErrUnauthorized) {

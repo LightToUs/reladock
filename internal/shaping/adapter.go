@@ -85,6 +85,58 @@ func NewAdapter(o Options, b Backend, s Store, l Locker) (*Adapter, error) {
 	return &Adapter{o, b, s, l}, nil
 }
 
+// CheckBaseline performs the same lease and interface ownership inspection as
+// first application, without creating durable state or changing tc objects.
+func CheckBaseline(ctx context.Context, o Options, b Backend) error {
+	if e := validateOptions(o); e != nil {
+		return e
+	}
+	if b == nil {
+		return errors.New("backend is required")
+	}
+	a := &Adapter{opts: o, backend: b}
+	_, e := a.inspect(ctx, State{})
+	return e
+}
+
+// CheckPreparationBaseline authorizes only the same empty first-application
+// baseline as CheckBaseline, while permitting an unclaimed (empty) alias. It
+// rejects a foreign alias before a privileged preparer can overwrite it.
+func CheckPreparationBaseline(ctx context.Context, o Options, b Backend) error {
+	if e := validateOptions(o); e != nil {
+		return e
+	}
+	if b == nil {
+		return errors.New("backend is required")
+	}
+	snap, e := b.Inspect(ctx, o.Lease)
+	if e != nil {
+		return e
+	}
+	l := o.Lease
+	if snap.Foreign || snap.NamespaceID != l.NamespaceID || snap.Device != l.Device || snap.IfIndex != l.IfIndex || snap.Alias != "" && snap.Alias != l.Alias() {
+		return fmt.Errorf("interface preparation lease mismatch: namespace=%s device=%s ifindex=%d alias=%s foreign=%t", snap.NamespaceID, snap.Device, snap.IfIndex, snap.Alias, snap.Foreign)
+	}
+	idle := snap.RootKind == "" || snap.RootKind == "noqueue" && snap.RootHandle == "0:"
+	if idle {
+		if len(snap.Classes) != 0 || len(snap.Filters) != 0 {
+			return errors.New("orphan/foreign tc objects")
+		}
+		return nil
+	}
+	ownedAlias := snap.Alias == l.Alias()
+	if snap.Alias == "" {
+		snap.Alias = l.Alias()
+	}
+	if replaceableDefault(snap, l) {
+		return nil
+	}
+	if ownedAlias && snap.RootKind == "htb" && snap.RootHandle == RootHandle {
+		return errors.New("existing RelaDock shaping state requires runtime recovery, not network preparation")
+	}
+	return errors.New("refusing to prepare an external root qdisc")
+}
+
 func (a *Adapter) load(ctx context.Context) (State, error) {
 	s, e := a.store.Load(ctx)
 	if e != nil {
