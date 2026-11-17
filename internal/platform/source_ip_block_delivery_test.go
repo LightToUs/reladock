@@ -11,6 +11,14 @@ import (
 func TestSourceIPBlockConfigUsesSchemaFiveAndWaitsForCapability(t *testing.T) {
 	s, admin, customer, ruleID := sourceIPBlockFixture(t)
 	ctx := context.Background()
+	// A low port independently requires schema 4. Adding a source block must
+	// retain the higher cumulative schema 5 after allocations are serialized.
+	if _, err := s.pool.Exec(ctx, `UPDATE relay_rules SET listen_port=443,listen_port_end=443 WHERE id=$1`, ruleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE endpoint_allocations SET listen_port=443 WHERE rule_id=$1`, ruleID); err != nil {
+		t.Fatal(err)
+	}
 	first, err := s.AdminAddSourceIPBlock(ctx, admin, customer.TenantID, ruleID, SourceIPBlockInput{CIDR: "203.0.113.9", Reason: "abuse", DesiredVersion: 1})
 	if err != nil {
 		t.Fatal(err)

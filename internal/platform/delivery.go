@@ -210,7 +210,7 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 				return err
 			}
 			cfg.Allocations = append(cfg.Allocations, allocation)
-			if allocation.Port < 20000 || allocation.Port > 60000 {
+			if cfg.SchemaVersion < 4 && (allocation.Port < 20000 || allocation.Port > 60000) {
 				cfg.SchemaVersion = 4
 			}
 		}
@@ -230,7 +230,7 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 				return err
 			}
 			cfg.Retirements = append(cfg.Retirements, retirement)
-			if retirement.Port < 20000 || retirement.Port > 60000 {
+			if cfg.SchemaVersion < 4 && (retirement.Port < 20000 || retirement.Port > 60000) {
 				cfg.SchemaVersion = 4
 			}
 		}

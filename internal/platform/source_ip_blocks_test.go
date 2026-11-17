@@ -66,8 +66,15 @@ func TestAdminSourceIPBlocksAreVersionedAuditedAndIdempotent(t *testing.T) {
 		t.Fatalf("removed: %+v err=%v", removed, err)
 	}
 	items, err = s.AdminSourceIPBlocks(ctx, admin, customer.TenantID, ruleID)
-	if err != nil || len(items.Items) != 0 || items.DesiredVersion != 3 {
-		t.Fatalf("active list after remove: %+v err=%v", items, err)
+	if err != nil || len(items.Items) != 1 || items.Items[0].State != "removed" || items.Items[0].Applied || items.DesiredVersion != 3 {
+		t.Fatalf("pending removal list: %+v err=%v", items, err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE relay_rules SET applied_version=3 WHERE id=$1`, ruleID); err != nil {
+		t.Fatal(err)
+	}
+	items, err = s.AdminSourceIPBlocks(ctx, admin, customer.TenantID, ruleID)
+	if err != nil || len(items.Items) != 0 || items.AppliedVersion != 3 {
+		t.Fatalf("applied removal list: %+v err=%v", items, err)
 	}
 }
 

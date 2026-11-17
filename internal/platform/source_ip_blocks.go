@@ -89,7 +89,7 @@ func (s *Store) AdminSourceIPBlocks(ctx context.Context, who Identity, tenantID,
 	} else if err != nil {
 		return result, err
 	}
-	rows, err := tx.Query(ctx, `SELECT `+sourceIPBlockColumns+` FROM rule_source_ip_blocks b JOIN relay_rules r ON r.id=b.rule_id AND r.tenant_id=b.tenant_id WHERE b.rule_id=$1 AND b.tenant_id=$2 AND b.state='active' ORDER BY b.created_at,b.id`, ruleID, tenantID)
+	rows, err := tx.Query(ctx, `SELECT `+sourceIPBlockColumns+` FROM rule_source_ip_blocks b JOIN relay_rules r ON r.id=b.rule_id AND r.tenant_id=b.tenant_id WHERE b.rule_id=$1 AND b.tenant_id=$2 AND (b.state='active' OR (b.state='removed' AND r.applied_version<b.removed_version)) ORDER BY b.created_at,b.id`, ruleID, tenantID)
 	if err != nil {
 		return result, err
 	}

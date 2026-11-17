@@ -231,7 +231,8 @@ function renderSourceBlocks(page) {
   for (const block of page.items) {
     const row = root.insertRow();
     cell(row, block.cidr, block.reason); cell(row, block.requestedVersion); const status = sourceBlockPresentation(block); cell(row, status.label, status.detail);
-    const controls = row.insertCell(); controls.className = 'table-actions'; controls.append(button('移除', async () => {
+    const controls = row.insertCell(); controls.className = 'table-actions';
+    if (block.state === 'active') controls.append(button('移除', async () => {
       if (!confirm(`移除 ${block.cidr}？保存后仍需等待节点应用新版本。`)) return;
       try {
         await runCommittedSourceBlockMutation({
@@ -244,8 +245,9 @@ function renderSourceBlocks(page) {
         if (error.status === 409) await loadSourceBlocks().catch(() => {});
       }
     }, true));
+    else controls.textContent = '等待节点应用移除';
   }
-  empty(root, 4, '当前规则没有生效中的来源 CIDR 拉黑。');
+  empty(root, 4, '当前规则没有活动或等待节点移除的来源 CIDR 拉黑。');
 }
 async function loadSourceBlocks() {
   const page = await sourceBlockAPI(`${sourceBlockPath()}?tenantId=${encodeURIComponent(sourceBlockContext.tenantId)}`);
@@ -282,8 +284,13 @@ async function quickBlockFlow(flow) {
   const page = await sourceBlockAPI(`${sourceBlockPath(context)}?tenantId=${encodeURIComponent(flow.tenantId)}`);
   const request = sourceBlockRequestForFlow(flow, page.desiredVersion);
   if (!confirm(`在“${flow.company} / ${flow.ruleName}”入口拉黑 ${request.body.cidr}？此操作只影响该规则，并需要等待节点应用。`)) return;
-  await runCommittedSourceBlockMutation({ mutate: () => sourceBlockAPI(request.path, 'POST', request.body), refresh: () => sourceBlockAPI(`${request.path}?tenantId=${encodeURIComponent(flow.tenantId)}`) });
-  message(`已提交 ${request.body.cidr} 的规则级拉黑，等待节点应用确认。`);
+  try {
+    await runCommittedSourceBlockMutation({ mutate: () => sourceBlockAPI(request.path, 'POST', request.body), refresh: () => sourceBlockAPI(`${request.path}?tenantId=${encodeURIComponent(flow.tenantId)}`) });
+    message(`已提交 ${request.body.cidr} 的规则级拉黑，等待节点应用确认。`);
+  } catch (error) {
+    if (!error.committed) throw error;
+    message(`拉黑已提交，但状态刷新失败：${error.message}`);
+  }
 }
 function renderRules(page) {
   const root = $('#admin-rules'); root.replaceChildren(); $('#rules-tenant-label').textContent = state.tenantFilter ? `企业：${state.tenantName}` : '全部企业';

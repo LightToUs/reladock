@@ -71,6 +71,10 @@ func TestSourceIPBlocksHTTPIsAdminOnlyStrictAndVersioned(t *testing.T) {
 	if removed.Code != http.StatusOK || json.Unmarshal(removed.Body.Bytes(), &block) != nil || block.State != "removed" || block.RemovedVersion != 3 {
 		t.Fatalf("remove: %d %s", removed.Code, removed.Body.String())
 	}
+	pendingRemoval := request(handler, http.MethodGet, path+"?tenantId="+who.TenantID, "", adminCookie)
+	if pendingRemoval.Code != http.StatusOK || json.Unmarshal(pendingRemoval.Body.Bytes(), &blocks) != nil || len(blocks.Items) != 1 || blocks.Items[0].State != "removed" || blocks.Items[0].Applied {
+		t.Fatalf("pending removal list: %d %s", pendingRemoval.Code, pendingRemoval.Body.String())
+	}
 }
 
 func newHTTPUUID() string { return "99999999-9999-4999-8999-999999999999" }
