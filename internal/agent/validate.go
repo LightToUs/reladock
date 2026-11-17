@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
 
@@ -31,16 +32,17 @@ func ValidateConfig(nodeID string, job platform.ConfigJob) error {
 		return invalid
 	}
 	listen := net.ParseIP(cfg.ListenAddress)
-	if (cfg.SchemaVersion != 1 && cfg.SchemaVersion != 2 && cfg.SchemaVersion != 3 && cfg.SchemaVersion != 4) || cfg.NodeID != nodeID || cfg.Generation != job.Generation || cfg.Generation < 1 || listen == nil {
+	if cfg.SchemaVersion < 1 || cfg.SchemaVersion > 5 || cfg.NodeID != nodeID || cfg.Generation != job.Generation || cfg.Generation < 1 || listen == nil {
 		return invalid
 	}
 	ids := map[string]bool{}
 	ports := map[string]map[int]bool{"tcp": {}, "udp": {}}
 	loggingRules := 0
+	blockedCIDRs := 0
 	for _, r := range cfg.Rules {
 		end := r.ListenPort
 		portsValid := r.ListenPort >= 20000 && r.ListenPort <= 60000 && r.ListenPortEnd == 0
-		if cfg.SchemaVersion == 4 {
+		if cfg.SchemaVersion >= 4 {
 			end = r.ListenPortEnd
 			portsValid = r.ListenPort >= 1 && end >= r.ListenPort && end <= 65535 && end-r.ListenPort+1 <= 4096
 		}
@@ -50,9 +52,21 @@ func ValidateConfig(nodeID string, job platform.ConfigJob) error {
 		ids[r.ID] = true
 		if r.SourceLoggingEnabled {
 			loggingRules++
-			if (cfg.SchemaVersion != 3 && cfg.SchemaVersion != 4) || r.Status != "pending-agent" {
+			if cfg.SchemaVersion < 3 || r.Status != "pending-agent" {
 				return invalid
 			}
+		}
+		if len(r.BlockedSourceCIDRs) > 256 || len(r.BlockedSourceCIDRs) > 0 && cfg.SchemaVersion != 5 {
+			return invalid
+		}
+		previous := ""
+		for _, raw := range r.BlockedSourceCIDRs {
+			prefix, parseErr := netip.ParsePrefix(raw)
+			if parseErr != nil || !prefix.Addr().Is4() || prefix.Bits() == 0 || prefix != prefix.Masked() || prefix.String() != raw || prefix.Addr().IsUnspecified() || prefix.Addr().IsLoopback() || prefix.Addr().IsMulticast() || previous != "" && raw <= previous {
+				return invalid
+			}
+			previous = raw
+			blockedCIDRs++
 		}
 		protocols := []string{r.Protocol}
 		if r.Protocol == "both" {
@@ -73,6 +87,9 @@ func ValidateConfig(nodeID string, job platform.ConfigJob) error {
 	if cfg.SchemaVersion == 3 && loggingRules == 0 {
 		return invalid
 	}
+	if cfg.SchemaVersion == 5 && blockedCIDRs == 0 {
+		return invalid
+	}
 	if cfg.SchemaVersion == 1 {
 		if len(cfg.Allocations) != 0 || len(cfg.Retirements) != 0 {
 			return invalid
@@ -82,7 +99,7 @@ func ValidateConfig(nodeID string, job platform.ConfigJob) error {
 	expected := map[string]string{}
 	for _, r := range cfg.Rules {
 		end := r.ListenPort
-		if cfg.SchemaVersion == 4 {
+		if cfg.SchemaVersion >= 4 {
 			end = r.ListenPortEnd
 		}
 		protocols := []string{r.Protocol}
@@ -101,7 +118,7 @@ func ValidateConfig(nodeID string, job platform.ConfigJob) error {
 	for _, allocation := range cfg.Allocations {
 		key := allocation.Protocol + ":" + strconv.Itoa(allocation.Port)
 		portValid := allocation.Port >= 20000 && allocation.Port <= 60000
-		if cfg.SchemaVersion == 4 {
+		if cfg.SchemaVersion >= 4 {
 			portValid = allocation.Port >= 1 && allocation.Port <= 65535
 		}
 		if !allocationUUID.MatchString(allocation.ID) || allocationIDs[allocation.ID] || !configIdentifier.MatchString(allocation.RuleID) || allocation.Address != cfg.ListenAddress || (allocation.Protocol != "tcp" && allocation.Protocol != "udp") || !portValid || allocationTuples[key] || expected[key] != allocation.RuleID || allocation.PredecessorRetirementID != "" && (!allocationUUID.MatchString(allocation.PredecessorRetirementID) || predecessorIDs[allocation.PredecessorRetirementID]) {
@@ -122,7 +139,7 @@ func ValidateConfig(nodeID string, job platform.ConfigJob) error {
 	for _, retirement := range cfg.Retirements {
 		key := retirement.Protocol + ":" + strconv.Itoa(retirement.Port)
 		portValid := retirement.Port >= 20000 && retirement.Port <= 60000
-		if cfg.SchemaVersion == 4 {
+		if cfg.SchemaVersion >= 4 {
 			portValid = retirement.Port >= 1 && retirement.Port <= 65535
 		}
 		if !allocationUUID.MatchString(retirement.ID) || retirementIDs[retirement.ID] || !allocationUUID.MatchString(retirement.AllocationID) || allocationIDs[retirement.AllocationID] || !configIdentifier.MatchString(retirement.RuleID) || retirement.Address != cfg.ListenAddress || (retirement.Protocol != "tcp" && retirement.Protocol != "udp") || !portValid || allocationTuples[key] || retirementTuples[key] || retirement.QuarantineGeneration < 1 || retirement.QuarantineGeneration > cfg.Generation || !states[retirement.State] {

@@ -150,11 +150,12 @@ func TestCapabilityHeaderKeepsHeartbeatCompatibleWithStrictLegacyController(t *t
 	}
 	for _, supported := range []bool{true, false} {
 		t.Run(fmt.Sprint(supported), func(t *testing.T) {
-			var receivedRotationHeader, receivedSourceFlowHeader, receivedPortRangeHeader string
+			var receivedRotationHeader, receivedSourceFlowHeader, receivedPortRangeHeader, receivedSourceIPBlockHeader string
 			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				receivedRotationHeader = r.Header.Get("X-RelaDock-Certificate-Rotation")
 				receivedSourceFlowHeader = r.Header.Get("X-RelaDock-Source-Flow")
 				receivedPortRangeHeader = r.Header.Get("X-RelaDock-Port-Range")
+				receivedSourceIPBlockHeader = r.Header.Get("X-RelaDock-Source-IP-Block")
 				decoder := json.NewDecoder(r.Body)
 				decoder.DisallowUnknownFields()
 				var legacy legacyHeartbeat
@@ -166,15 +167,15 @@ func TestCapabilityHeaderKeepsHeartbeatCompatibleWithStrictLegacyController(t *t
 			}))
 			defer srv.Close()
 			c := Client{HTTP: srv.Client(), BaseURL: srv.URL, NodeID: "hk-01"}
-			if err := c.ReportHeartbeat(context.Background(), platform.AgentHeartbeat{CertificateRotationSupported: supported, SourceFlowSupported: supported, PortRangeSupported: supported}); err != nil {
+			if err := c.ReportHeartbeat(context.Background(), platform.AgentHeartbeat{CertificateRotationSupported: supported, SourceFlowSupported: supported, PortRangeSupported: supported, SourceIPBlockSupported: supported}); err != nil {
 				t.Fatalf("legacy controller: %v", err)
 			}
 			want := ""
 			if supported {
 				want = "1"
 			}
-			if receivedRotationHeader != want || receivedSourceFlowHeader != want || receivedPortRangeHeader != want {
-				t.Fatalf("capability headers rotation=%q sourceFlow=%q portRange=%q want=%q", receivedRotationHeader, receivedSourceFlowHeader, receivedPortRangeHeader, want)
+			if receivedRotationHeader != want || receivedSourceFlowHeader != want || receivedPortRangeHeader != want || receivedSourceIPBlockHeader != want {
+				t.Fatalf("capability headers rotation=%q sourceFlow=%q portRange=%q sourceIPBlock=%q want=%q", receivedRotationHeader, receivedSourceFlowHeader, receivedPortRangeHeader, receivedSourceIPBlockHeader, want)
 			}
 		})
 	}

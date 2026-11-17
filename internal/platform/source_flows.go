@@ -350,7 +350,7 @@ func validateSourceFlowApplication(cfg NodeConfig, manifest *sourceflow.Manifest
 		}
 		return nil, nil
 	}
-	if cfg.SchemaVersion != 3 && cfg.SchemaVersion != 4 {
+	if cfg.SchemaVersion < 3 || cfg.SchemaVersion > 5 {
 		return nil, ErrInvalid
 	}
 	if manifest == nil || sourceflow.ValidateManifest(*manifest, digest) != nil || manifest.NodeID != cfg.NodeID || manifest.Generation != cfg.Generation {

@@ -183,7 +183,7 @@ func main() {
 				return statusErr
 			}
 		}
-		if err := runner.ReportRuntimeHeartbeat(activityCtx, platform.AgentHeartbeat{CertificateRotationSupported: true, SourceFlowSupported: engine != nil && engine.SourceFlowAvailable(), PortRangeSupported: true, Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError, KernelBootID: kernelBootID, JournalSequence: journalSequence, SourceFlows: sourceFlows}, resourceCollector, engine); err != nil {
+		if err := runner.ReportRuntimeHeartbeat(activityCtx, platform.AgentHeartbeat{CertificateRotationSupported: true, SourceFlowSupported: engine != nil && engine.SourceFlowAvailable(), PortRangeSupported: true, SourceIPBlockSupported: true, Version: buildinfo.Current(), Mode: mode, StartedAt: startedAt, CertificateNotAfter: current.NotAfter, RotationState: rotationState, RotationErrorCode: rotationError, KernelBootID: kernelBootID, JournalSequence: journalSequence, SourceFlows: sourceFlows}, resourceCollector, engine); err != nil {
 			return err
 		}
 		return upgradeHealth.HeartbeatSucceeded()

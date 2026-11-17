@@ -98,6 +98,7 @@ func NewAgent(store *platform.Store, signer platform.BootstrapSigner) http.Handl
 			heartbeat.CertificateRotationSupported = r.Header.Get("X-RelaDock-Certificate-Rotation") == "1"
 			heartbeat.SourceFlowSupported = r.Header.Get("X-RelaDock-Source-Flow") == "1"
 			heartbeat.PortRangeSupported = r.Header.Get("X-RelaDock-Port-Range") == "1"
+			heartbeat.SourceIPBlockSupported = r.Header.Get("X-RelaDock-Source-IP-Block") == "1"
 			// Certificate expiry is observed from the verified TLS peer rather than
 			// accepted as an Agent claim.
 			if !heartbeat.CertificateNotAfter.Equal(cert.NotAfter) {

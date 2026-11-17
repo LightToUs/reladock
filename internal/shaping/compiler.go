@@ -105,7 +105,7 @@ func compile(cfg platform.NodeConfig, o Options, history []Class) (Plan, error) 
 		return Plan{}, errors.New("invalid shaping configuration or historical classifier collision")
 	}
 	addr, e := netip.ParseAddr(cfg.ListenAddress)
-	if e != nil || !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsLoopback() || cfg.SchemaVersion < 1 || cfg.SchemaVersion > 4 || cfg.Generation < 1 || cfg.NodeID != o.NodeID || len(cfg.Rules) > 65533 {
+	if e != nil || !addr.Is4() || !addr.IsGlobalUnicast() || addr.IsLoopback() || cfg.SchemaVersion < 1 || cfg.SchemaVersion > 5 || cfg.Generation < 1 || cfg.NodeID != o.NodeID || len(cfg.Rules) > 65533 {
 		return bad()
 	}
 	cfg.Rules = append([]platform.ConfigRule(nil), cfg.Rules...)
@@ -134,7 +134,7 @@ func compile(cfg platform.NodeConfig, o Options, history []Class) (Plan, error) 
 	for _, r := range cfg.Rules {
 		end := r.ListenPort
 		portsValid := r.ListenPort >= 20000 && r.ListenPort <= 60000 && r.ListenPortEnd == 0
-		if cfg.SchemaVersion == 4 {
+		if cfg.SchemaVersion >= 4 {
 			end = r.ListenPortEnd
 			portsValid = r.ListenPort >= 1 && end >= r.ListenPort && end <= 65535 && end-r.ListenPort+1 <= 4096
 		}

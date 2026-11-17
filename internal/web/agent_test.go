@@ -71,12 +71,18 @@ func TestMTLSAgentEnrollmentValidationAndRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.CreateRule(ctx, who, "agent-test-rule", platform.RuleInput{Name: "Relay", Protocol: "udp", TargetHost: "192.0.2.10", TargetPort: 443, BandwidthMbps: 1000})
+	rule, err := store.CreateRule(ctx, who, "agent-test-rule", platform.RuleInput{Name: "Relay", Protocol: "udp", TargetHost: "192.0.2.10", TargetPort: 443, BandwidthMbps: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err = store.SetPlatformAdmin(ctx, who.Email, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AdminAddSourceIPBlock(ctx, who, who.TenantID, rule.ID, platform.SourceIPBlockInput{CIDR: "198.51.100.10", Reason: "web capability test", DesiredVersion: rule.DesiredVersion}); err != nil {
+		t.Fatal(err)
+	}
 	runner := agent.Client{HTTP: client, BaseURL: srv.URL, NodeID: "hk-01"}
-	heartbeat := platform.AgentHeartbeat{PortRangeSupported: true, Version: "validation-only/0.8.0", Mode: "validation", StartedAt: time.Now().Add(-time.Minute), CertificateNotAfter: cert.NotAfter, RotationState: "idle"}
+	heartbeat := platform.AgentHeartbeat{PortRangeSupported: true, SourceIPBlockSupported: true, Version: "validation-only/0.8.0", Mode: "validation", StartedAt: time.Now().Add(-time.Minute), CertificateNotAfter: cert.NotAfter, RotationState: "idle"}
 	if err = runner.ReportHeartbeat(ctx, heartbeat); err != nil {
 		t.Fatalf("agent heartbeat: %v", err)
 	}

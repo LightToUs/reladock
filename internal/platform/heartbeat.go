@@ -15,6 +15,7 @@ type AgentHeartbeat struct {
 	CertificateRotationSupported bool                `json:"-"`
 	SourceFlowSupported          bool                `json:"-"`
 	PortRangeSupported           bool                `json:"-"`
+	SourceIPBlockSupported       bool                `json:"-"`
 	Version                      string              `json:"version"`
 	Mode                         string              `json:"mode"`
 	StartedAt                    time.Time           `json:"startedAt"`
@@ -132,7 +133,8 @@ agent_rotation_state=$6,agent_rotation_error_code=$7
 		,agent_certificate_rotation_supported=$10
 		,agent_source_flow_supported=$11
 		,agent_port_range_supported=$12
-WHERE id=$1 AND agent_journal_sequence<=$9`, nodeID, heartbeat.Version, heartbeat.Mode, heartbeat.StartedAt, heartbeat.CertificateNotAfter, heartbeat.RotationState, heartbeat.RotationErrorCode, heartbeat.KernelBootID, heartbeat.JournalSequence, heartbeat.CertificateRotationSupported, heartbeat.SourceFlowSupported, heartbeat.PortRangeSupported)
+		,agent_source_ip_block_supported=$13
+WHERE id=$1 AND agent_journal_sequence<=$9`, nodeID, heartbeat.Version, heartbeat.Mode, heartbeat.StartedAt, heartbeat.CertificateNotAfter, heartbeat.RotationState, heartbeat.RotationErrorCode, heartbeat.KernelBootID, heartbeat.JournalSequence, heartbeat.CertificateRotationSupported, heartbeat.SourceFlowSupported, heartbeat.PortRangeSupported, heartbeat.SourceIPBlockSupported)
 	if err != nil {
 		return err
 	}

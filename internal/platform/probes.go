@@ -116,7 +116,7 @@ func (s *Store) ReportProbe(ctx context.Context, nodeID string, result probe.Res
 		return ErrConflict
 	}
 	var cfg NodeConfig
-	if json.Unmarshal(payload, &cfg) != nil || cfg.NodeID != nodeID || cfg.Generation != result.Generation || cfg.SchemaVersion < 1 || cfg.SchemaVersion > 4 {
+	if json.Unmarshal(payload, &cfg) != nil || cfg.NodeID != nodeID || cfg.Generation != result.Generation || cfg.SchemaVersion < 1 || cfg.SchemaVersion > 5 {
 		return ErrConflict
 	}
 	matches := 0
@@ -126,7 +126,7 @@ func (s *Store) ReportProbe(ctx context.Context, nodeID string, result probe.Res
 		}
 		matches++
 		configEnd := r.ListenPort
-		if cfg.SchemaVersion == 4 {
+		if cfg.SchemaVersion >= 4 {
 			configEnd = r.ListenPortEnd
 		}
 		if r.TenantID != tenantID || r.RuleInput != rule.RuleInput || r.Version != rule.DesiredVersion || r.ListenPort != rule.ListenPort || configEnd != rule.ListenPortEnd || r.Status != "pending-agent" {

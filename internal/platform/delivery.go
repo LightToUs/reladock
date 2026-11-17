@@ -35,6 +35,7 @@ type ConfigRule struct {
 	UsageDownloadBytes   int64      `json:"usageDownloadBytes,omitempty"`
 	DevelopmentBypass    bool       `json:"developmentBypass,omitempty"`
 	SourceLoggingEnabled bool       `json:"sourceLoggingEnabled,omitempty"`
+	BlockedSourceCIDRs   []string   `json:"blockedSourceCidrs,omitempty"`
 }
 type ConfigAllocation struct {
 	ID                      string `json:"id"`
@@ -164,6 +165,36 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 	if err != nil {
 		return err
 	}
+	var sourceIPBlockSchema bool
+	if err = tx.QueryRow(ctx, "SELECT to_regclass('rule_source_ip_blocks') IS NOT NULL").Scan(&sourceIPBlockSchema); err != nil {
+		return err
+	}
+	if sourceIPBlockSchema {
+		byRule := make(map[string]*ConfigRule, len(cfg.Rules))
+		for i := range cfg.Rules {
+			byRule[cfg.Rules[i].ID] = &cfg.Rules[i]
+		}
+		blockRows, queryErr := tx.Query(ctx, `SELECT rule_id::text,cidr::text FROM rule_source_ip_blocks WHERE state='active' AND rule_id IN (SELECT id FROM relay_rules WHERE node_id=$1 AND status<>'deleted') ORDER BY rule_id,cidr::text`, nodeID)
+		if queryErr != nil {
+			return queryErr
+		}
+		for blockRows.Next() {
+			var ruleID, cidr string
+			if err = blockRows.Scan(&ruleID, &cidr); err != nil {
+				blockRows.Close()
+				return err
+			}
+			if rule := byRule[ruleID]; rule != nil {
+				rule.BlockedSourceCIDRs = append(rule.BlockedSourceCIDRs, cidr)
+				cfg.SchemaVersion = 5
+			}
+		}
+		err = blockRows.Err()
+		blockRows.Close()
+		if err != nil {
+			return err
+		}
+	}
 	if retirementSchema {
 		if _, err = tx.Exec(ctx, "UPDATE endpoint_retirements SET quarantine_generation=$2 WHERE node_id=$1 AND state='waiting-removal'", nodeID, cfg.Generation); err != nil {
 			return err
@@ -209,7 +240,7 @@ func (s *Store) enqueueConfig(ctx context.Context, tx pgx.Tx, nodeID string) err
 			return err
 		}
 	}
-	if cfg.SchemaVersion != 4 {
+	if cfg.SchemaVersion < 4 {
 		for i := range cfg.Rules {
 			cfg.Rules[i].ListenPortEnd = 0
 		}
@@ -286,9 +317,18 @@ func (s *Store) ClaimConfig(ctx context.Context, nodeID, agentVersion string, cr
 	if err = json.Unmarshal(job.Payload, &desired); err != nil {
 		return nil, err
 	}
-	if desired.SchemaVersion == 4 {
+	if desired.SchemaVersion >= 4 {
 		var supported bool
 		if err = tx.QueryRow(ctx, "SELECT agent_port_range_supported FROM nodes WHERE id=$1", nodeID).Scan(&supported); err != nil {
+			return nil, err
+		}
+		if !supported {
+			return nil, tx.Commit(ctx)
+		}
+	}
+	if desired.SchemaVersion == 5 {
+		var supported bool
+		if err = tx.QueryRow(ctx, "SELECT agent_source_ip_block_supported FROM nodes WHERE id=$1", nodeID).Scan(&supported); err != nil {
 			return nil, err
 		}
 		if !supported {
@@ -363,7 +403,7 @@ func (s *Store) ReportConfig(ctx context.Context, nodeID, jobID string, report C
 			return err
 		}
 		if state == "applied" && errorCode == report.ErrorCode {
-			if cfg.SchemaVersion == 3 || cfg.SchemaVersion == 4 {
+			if cfg.SchemaVersion == 3 || cfg.SchemaVersion == 4 || cfg.SchemaVersion == 5 {
 				var total, matching int
 				if err = tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE manifest_digest=$3) FROM applied_source_flow_rules WHERE node_id=$1 AND config_generation=$2`, nodeID, generation, report.SourceFlowManifestDigest).Scan(&total, &matching); err != nil {
 					return err

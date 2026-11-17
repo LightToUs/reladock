@@ -5,8 +5,29 @@ import (
 	"testing"
 )
 
+func revertSchemaTo43(t *testing.T, s *Store) {
+	t.Helper()
+	if _, err := s.pool.Exec(context.Background(), `
+ALTER TABLE nodes DROP COLUMN agent_source_ip_block_supported;
+CREATE OR REPLACE FUNCTION clear_node_certificate_renewal() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.certificate_fingerprint IS DISTINCT FROM OLD.certificate_fingerprint THEN
+  NEW.certificate_renewal_fingerprint := NULL;
+  NEW.agent_certificate_rotation_supported := false;
+  NEW.agent_source_flow_supported := false;
+  NEW.agent_port_range_supported := false;
+ END IF;
+ RETURN NEW;
+END;
+$$;
+DELETE FROM schema_migrations WHERE version=44;`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func revertSchemaTo42(t *testing.T, s *Store) {
 	t.Helper()
+	revertSchemaTo43(t, s)
 	if _, err := s.pool.Exec(context.Background(), `
 DROP TABLE rule_source_ip_blocks;
 DELETE FROM schema_migrations WHERE version=43;`); err != nil {
