@@ -1,6 +1,6 @@
 # 当前实现状态与 AI 交接
 
-> 最后代码及生产控制端核验：2026-11-17。生产控制端运行 `v0.9.14` 控制端增量提交 `c112a02`、数据库 schema v43，待分配企业专属节点和平台登录页视觉修复已部署。按用户明确指令，生产业务数据此前已重置；当前只读复核为 1 个节点、0 条规则、0 个订阅和 0 条账本，仍保留既有企业账号、成员、会话、0 余额钱包壳、平台维护审计和必要的支付重放保护。Lightsail 连接器、receive-only TRON 扫描器和 Stripe Live webhook 配置仍启用，但没有本次登录页部署产生的业务资源或余额事实。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量、端口范围数据面或离机恢复验收完成。
+> 最后代码核验：2026-11-18；最后生产控制端核验：2026-11-17。生产控制端运行 `v0.9.14` 控制端增量提交 `c112a02`、数据库 schema v43，待分配企业专属节点和平台登录页视觉修复已部署。按用户明确指令，生产业务数据此前已重置；当前只读复核为 1 个节点、2 条规则、1 个订阅和 2 条账本，仍保留既有企业账号、成员、会话、钱包、平台维护审计和必要的支付重放保护。Lightsail 连接器、receive-only TRON 扫描器和 Stripe Live webhook 配置仍启用。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量、端口范围数据面或离机恢复验收完成。
 
 ## 2026-11-17 v0.9.14 validation-only Agent 心跳拒绝（生产诊断，本地 v0.9.15 修复待发布）
 
@@ -29,7 +29,7 @@ TDD 已完成 schema v42→v43、节点输入/编辑保护、目录隔离、钱�
 生产迁移先用 custom-format 备份 `/var/backups/reladock/20261116T164306Z-unassigned-dedicated-rehearsal-v4/before.dump` 恢复到显式临时数据库；候选迁移到 schema v43 后，账号/成员/会话 `1/1/1`、钱包 `1:0:0`、TRON tombstone/receipt/cursor `1/1/1`、节点/规则/交付/线路/价格/订阅/用量/账本/普通支付均保持原值，约束只允许 `dedicated-tenant` 为空，临时库和临时 dump 已清理。切换停服后即时 v42 回滚备份位于 `/var/backups/reladock/20261116T165042Z-unassigned-dedicated-cutover`，含旧控制端/管理 CLI/恢复工具、环境、systemd、custom-format 数据库、目录清单和 SHA256；旧控制端摘要为 `b8be3d93b0969d5cb54d523082efb0fe334028c3a7e6431bced45069ee9d29bc`，回滚必须同时恢复旧二进制与该 v42 dump。
 
 独立上线复核确认服务 active/enabled、schema v43、三个安装二进制摘要与本地候选一致，迁移前后业务事实 diff 为空。公网 `/`、`/admin`、`/admin.js`、`/node-editor.js`、`/node-action-dialog.js` 和 Google 状态均为 200，未登录 `/api/admin/nodes` 为 401；四个管理资源 SHA256 与源码一致。启动日志只有部署前已存在且本次未擅自改变的 `RELADOCK_DEVELOPMENT_ALLOW_UNENTITLED_RULES=true` 明示警告，没有新增 error/fatal/panic。切换脚本所有服务、schema、计数和摘要断言完成后，仅因 `journalctl` 不接受 `+00:00` 时间格式在导出日志步骤退出 1；随后独立日志核验已完成。生产没有创建节点、套餐、支付或流量进行测试，也没有修改 Agent、PKI、WAL、nftables/tc 或网络规则；已登录后台的新增/认领/解绑交互仍待真实业务使用时验收。
-## 2026-11-17 全新 Agent 显式 apply 引导（本地，未发布）
+## 2026-11-18 v0.9.16 全新 Agent 显式 apply 引导（发布候选，尚未部署）
 
 全新 HTTPS bootstrap 仍先完成注册并启动 validation。仅在真实终端中显示“启用转发 / 保持仅验证”，默认与非交互路径均保持 validation；启用路径自动发现单一 IPv4 默认出口和唯一实际本机地址，拒绝公网 NAT 映射、第三方 alias、tc class/filter、非空且不可交接 qdisc、flowtable/offload 及 fwmark 冲突，展示 node、接口、SNAT/listen 地址、ifindex、namespace、qdisc、mark namespace 82 和整形预算后，要求字面输入 `ENABLE`。普通非 RelaDock nftables 规则可共存。
 
@@ -37,7 +37,9 @@ TDD 已完成 schema v42→v43、节点输入/编辑保护、目录隔离、钱�
 
 控制端心跳事务现在记录切换前模式；只有认证 Agent 首次从非 apply 切至 apply，且当前 desired generation 精确为 validated、applied 落后、当前 outbox 状态仍为 `validated` 时，才调用既有完整快照生成器递增一次 desired generation。重复 apply 心跳、validation、failed 或已 applied 状态均不重发。这替代了本页 hk-01 手工切换记录中需要管理员 retry 的步骤，但 applied ACK 仍不代表客户协议端到端健康。
 
-TDD 先观察到模式切换未递增 generation 和安装器缺少菜单/systemd wiring；实施后 PostgreSQL 聚焦测试覆盖一次重发、心跳/validation 竞态及负例，Agent/shaping/CLI Go 包通过，Node 发行/安装静态测试 3/3 通过，隔离 Docker 的 bootstrap 回归 1/1 通过并实际覆盖 validation 默认、既有升级/回滚、服务账号 0600 租约及确认后的 apply 文件/服务切换。最终 `GOFLAGS=-timeout=20m npm test` 退出 0：Go 全包 `-race` 通过（`internal/platform` 626.999s、`internal/web` 118.408s），Node 157 项中 156 通过、1 项默认跳过的 Linux 安装器测试、0 失败；该安装器测试随后以 `RELADOCK_INSTALLER_DOCKER_TESTS=1` 独立执行并 1/1 通过。`npm run vet`、shell 语法和 `git diff --check` 均退出 0。尚未构建或发布 Release，未在真实 VPS 验证 systemd 条件、网卡 offload 固定特性、断电/重启恢复、失败注入和真实转发，因此不能标记生产完成。
+TDD 先观察到模式切换未递增 generation 和安装器缺少菜单/systemd wiring；实施后 PostgreSQL 聚焦测试覆盖一次重发、心跳/validation 竞态及负例，Agent/shaping/CLI Go 包通过，Node 发行/安装静态测试 3/3 通过，隔离 Docker 的 bootstrap 回归 1/1 通过并实际覆盖 validation 默认、既有升级/回滚、服务账号 0600 租约及确认后的 apply 文件/服务切换。基于公开 `v0.9.15` 的干净发布分支最终执行 `GOFLAGS=-timeout=20m npm test` 退出 0：Go 全包 `-race` 通过，Node 160 项中 159 通过、1 项默认跳过的 Linux 安装器测试、0 失败；该安装器测试随后以 `RELADOCK_INSTALLER_DOCKER_TESTS=1` 独立执行并 1/1 通过。首次全量运行只有既有跨 schema 共用 advisory lock 的运营测试在包并发下单次跳过锁而失败；精确 race 用例连续 20 次通过，第二次干净全量运行全部通过，没有为此放宽生产锁或测试断言。`npm run vet`、shell 语法和 `git diff --check` 均退出 0。
+
+Linux amd64/arm64 `v0.9.16` 发布候选均已构建；归档各含 22 个平铺文件，解包后 `SHA256SUMS` 全部通过，`RELEASE.json` 保持 `productionReady=false`。发布脚本会把 Git 提交标识编入二进制，最终归档与控制端/Agent 摘要必须在标签提交固定后重新构建，并在 GitHub Release 与生产验收记录中回填。尚未创建 GitHub Release、更新生产固定摘要或部署控制端；也未在全新真实 VPS 验证 systemd 条件、网卡 offload 固定特性、断电/重启恢复、失败注入和真实转发，因此不能标记生产完成。
 
 ## 2026-11-17 hk-01 显式 apply 与端口段生产有限验收
 
