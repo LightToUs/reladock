@@ -5,8 +5,18 @@ import (
 	"testing"
 )
 
+func revertSchemaTo42(t *testing.T, s *Store) {
+	t.Helper()
+	if _, err := s.pool.Exec(context.Background(), `
+DROP TABLE rule_source_ip_blocks;
+DELETE FROM schema_migrations WHERE version=43;`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func revertSchemaTo41(t *testing.T, s *Store) {
 	t.Helper()
+	revertSchemaTo42(t, s)
 	if _, err := s.pool.Exec(context.Background(), `
 DROP TRIGGER seed_node_customer_port_pools ON nodes;
 DROP FUNCTION seed_node_customer_port_pools();
@@ -124,8 +134,32 @@ CREATE TABLE node_customer_port_pools (
 		(SELECT listen_port_end FROM relay_rules WHERE id=$1)`, rule.ID).Scan(&version, &pools, &triggers, &portEnd); err != nil {
 		t.Fatal(err)
 	}
-	if version != 42 || pools != 2 || triggers != 2 || portEnd != rule.ListenPort+2 {
+	if version != SchemaVersion || pools != 2 || triggers != 2 || portEnd != rule.ListenPort+2 {
 		t.Fatalf("reconciled version=%d pools=%d triggers=%d portEnd=%d", version, pools, triggers, portEnd)
+	}
+}
+
+func TestMigration43From42PreservesRulesAndIsIdempotent(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	who, _ := register(t, s, "migration43-preserve@example.com")
+	rule, err := s.CreateRule(ctx, who, "migration43-preserve", ruleInput("tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revertSchemaTo42(t, s)
+	for pass := 0; pass < 2; pass++ {
+		if err = s.Migrate(ctx); err != nil {
+			t.Fatalf("migration pass %d: %v", pass+1, err)
+		}
+	}
+	var version int
+	var rules int
+	if err = s.pool.QueryRow(ctx, `SELECT (SELECT max(version) FROM schema_migrations),(SELECT count(*) FROM relay_rules WHERE id=$1)`, rule.ID).Scan(&version, &rules); err != nil {
+		t.Fatal(err)
+	}
+	if version != SchemaVersion || rules != 1 {
+		t.Fatalf("version=%d rules=%d", version, rules)
 	}
 }
 
