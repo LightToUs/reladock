@@ -59,6 +59,75 @@ func fixtureV4() platform.NodeConfig {
 	return c
 }
 
+func fixtureV5() platform.NodeConfig {
+	c := fixtureV4()
+	c.SchemaVersion = 5
+	c.Rules[0].Protocol = "both"
+	c.Rules[0].BlockedSourceCIDRs = []string{"198.51.100.0/24", "203.0.113.9/32"}
+	c.Allocations = append(c.Allocations,
+		platform.ConfigAllocation{ID: "44444444-4444-4444-8444-444444444444", RuleID: c.Rules[0].ID, Protocol: "udp", Address: c.ListenAddress, Port: 40000},
+		platform.ConfigAllocation{ID: "55555555-5555-4555-8555-555555555555", RuleID: c.Rules[0].ID, Protocol: "udp", Address: c.ListenAddress, Port: 40001},
+		platform.ConfigAllocation{ID: "66666666-6666-4666-8666-666666666666", RuleID: c.Rules[0].ID, Protocol: "udp", Address: c.ListenAddress, Port: 40002},
+	)
+	return c
+}
+
+func TestCompileV5DropsBlockedSourcesBeforeDNAT(t *testing.T) {
+	p, err := Compile(context.Background(), fixtureV5(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"chain source_block",
+		"type filter hook prerouting priority -290; policy accept",
+		"ip daddr 192.0.2.1 meta l4proto tcp ip saddr 198.51.100.0/24 tcp dport 40000-40002 drop comment \"reladock-source-block-",
+		"ip daddr 192.0.2.1 meta l4proto udp ip saddr 203.0.113.9/32 udp dport 40000-40002 drop comment \"reladock-source-block-",
+	} {
+		if !strings.Contains(p.Script, want) {
+			t.Fatalf("missing %q in %s", want, p.Script)
+		}
+	}
+	if len(p.SourceBlocks) != 4 {
+		t.Fatalf("source blocks: %+v", p.SourceBlocks)
+	}
+	if strings.Index(p.Script, "chain source_block") > strings.Index(p.Script, "chain prerouting") {
+		t.Fatal("source block chain emitted after DNAT chain")
+	}
+
+	paused := fixtureV5()
+	paused.Rules[0].Status = "paused"
+	pausedPlan, err := Compile(context.Background(), paused, options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pausedPlan.SourceBlocks) != 0 || strings.Contains(pausedPlan.Script, "reladock-source-block-") {
+		t.Fatalf("paused rule emitted source blocks: %+v", pausedPlan.SourceBlocks)
+	}
+}
+
+func TestCompileV5RejectsMalformedOrDuplicateBlockedSources(t *testing.T) {
+	for name, cidrs := range map[string][]string{
+		"missing":        nil,
+		"ipv6":           {"2001:db8::/32"},
+		"broad":          {"0.0.0.0/0"},
+		"noncanonical":   {"198.51.100.1/24"},
+		"duplicate":      {"198.51.100.0/24", "198.51.100.0/24"},
+		"unsorted":       {"203.0.113.0/24", "198.51.100.0/24"},
+		"legacy leakage": {"198.51.100.0/24"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := fixtureV5()
+			cfg.Rules[0].BlockedSourceCIDRs = cidrs
+			if name == "legacy leakage" {
+				cfg.SchemaVersion = 4
+			}
+			if _, err := Compile(context.Background(), cfg, options()); err == nil {
+				t.Fatalf("accepted CIDRs %#v", cidrs)
+			}
+		})
+	}
+}
+
 func TestCompileV4UsesInclusiveRangeWithOneRuleIdentity(t *testing.T) {
 	p, err := Compile(context.Background(), fixtureV4(), options())
 	if err != nil {

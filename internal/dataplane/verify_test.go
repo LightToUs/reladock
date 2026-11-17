@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
@@ -31,17 +32,42 @@ func guardExpressions(g AllocationGuard, quarantine bool) []any {
 	}
 }
 
+func sourceBlockExpressions(block SourceBlock) []any {
+	prefix, _ := netip.ParsePrefix(block.CIDR)
+	right := any(prefix.Addr().String())
+	if prefix.Bits() != 32 {
+		right = map[string]any{"prefix": map[string]any{"addr": prefix.Addr().String(), "len": prefix.Bits()}}
+	}
+	port := any(block.PortStart)
+	if block.PortEnd != block.PortStart {
+		port = map[string]any{"range": []any{block.PortStart, block.PortEnd}}
+	}
+	return []any{
+		map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": "ip", "field": "daddr"}}, "right": block.Address}},
+		map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"meta": map[string]any{"key": "l4proto"}}, "right": block.Protocol}},
+		map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": "ip", "field": "saddr"}}, "right": right}},
+		map[string]any{"match": map[string]any{"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": block.Protocol, "field": "dport"}}, "right": port}},
+		map[string]any{"drop": nil},
+	}
+}
+
 func readbackFixture(p Plan) []map[string]any {
 	items := []map[string]any{{"table": map[string]any{"family": "ip", "name": "reladock", "comment": owner}}}
 	chains := []struct {
 		name, kind, hook string
 		prio             int
 	}{{"prerouting", "nat", "prerouting", -100}, {"postrouting", "nat", "postrouting", 100}, {"forward", "filter", "forward", 0}, {"relay", "", "", 0}}
-	if p.Config.SchemaVersion == 2 {
+	if allocationSchema(p.Config.SchemaVersion) {
 		chains = append([]struct {
 			name, kind, hook string
 			prio             int
 		}{{"quarantine", "filter", "prerouting", -300}}, chains...)
+	}
+	if p.Config.SchemaVersion == 5 {
+		chains = append([]struct {
+			name, kind, hook string
+			prio             int
+		}{{"source_block", "filter", "prerouting", -290}}, chains...)
 	}
 	for _, v := range chains {
 		chain := map[string]any{"family": "ip", "table": "reladock", "name": v.name}
@@ -60,27 +86,71 @@ func readbackFixture(p Plan) []map[string]any {
 	}
 	n := len(p.Counters) / 2
 	counts := map[string]int{"prerouting": n, "postrouting": n, "forward": len(p.Allocations), "relay": 2*n + 1}
-	if p.Config.SchemaVersion == 2 {
+	if allocationSchema(p.Config.SchemaVersion) {
 		counts["forward"] = len(p.ForwardGuards)
 		counts["quarantine"] = len(p.Quarantines)
+	}
+	if p.Config.SchemaVersion == 5 {
+		counts["source_block"] = len(p.SourceBlocks)
 	}
 	for chain, count := range counts {
 		for i := 0; i < count; i++ {
 			rule := map[string]any{"family": "ip", "table": "reladock", "chain": chain}
-			if p.Config.SchemaVersion == 2 && chain == "quarantine" {
+			if allocationSchema(p.Config.SchemaVersion) && chain == "quarantine" {
 				guard := p.Quarantines[i]
 				rule["comment"] = "reladock-quarantine-" + guard.ID
 				rule["expr"] = guardExpressions(guard, true)
 			}
-			if p.Config.SchemaVersion == 2 && chain == "forward" {
+			if allocationSchema(p.Config.SchemaVersion) && chain == "forward" {
 				guard := p.ForwardGuards[i]
 				rule["comment"] = "reladock-forward-" + guard.ID
 				rule["expr"] = guardExpressions(guard, false)
+			}
+			if p.Config.SchemaVersion == 5 && chain == "source_block" {
+				block := p.SourceBlocks[i]
+				rule["comment"] = block.Comment
+				rule["expr"] = sourceBlockExpressions(block)
 			}
 			items = append(items, map[string]any{"rule": rule})
 		}
 	}
 	return items
+}
+
+func TestReadbackV5RequiresExactSourceBlockChainAndExpressions(t *testing.T) {
+	p, err := Compile(context.Background(), fixtureV5(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"valid", "wrong priority", "wrong source", "wrong port", "wrong comment", "missing block"} {
+		t.Run(mode, func(t *testing.T) {
+			items := readbackFixture(p)
+			for i := range items {
+				if chain, ok := items[i]["chain"].(map[string]any); ok && chain["name"] == "source_block" && mode == "wrong priority" {
+					chain["prio"] = -289
+				}
+				if rule, ok := items[i]["rule"].(map[string]any); ok && rule["chain"] == "source_block" {
+					switch mode {
+					case "wrong source":
+						rule["expr"].([]any)[2].(map[string]any)["match"].(map[string]any)["right"] = "198.51.100.99"
+					case "wrong port":
+						rule["expr"].([]any)[3].(map[string]any)["match"].(map[string]any)["right"] = 9
+					case "wrong comment":
+						rule["comment"] = "reladock-source-block-wrong"
+					case "missing block":
+						items = append(items[:i], items[i+1:]...)
+					}
+					break
+				}
+			}
+			b, _ := json.Marshal(map[string]any{"nftables": items})
+			r := runnerFunc(func(context.Context, []string, string) ([]byte, error) { return b, nil })
+			err := ReadbackVerifier(r)(context.Background(), p)
+			if (err == nil) != (mode == "valid") {
+				t.Fatalf("mode=%s err=%v", mode, err)
+			}
+		})
+	}
 }
 
 func TestReadbackV2RequiresRawQuarantineChainAndExactRuleCounts(t *testing.T) {

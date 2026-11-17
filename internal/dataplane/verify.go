@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"reflect"
 	"time"
 
@@ -103,6 +104,27 @@ func validGuardExpressions(expr []json.RawMessage, guard AllocationGuard, quaran
 		exactJump(expr[4])
 }
 
+func validSourceBlockExpressions(expr []json.RawMessage, block SourceBlock) bool {
+	prefix, err := netip.ParsePrefix(block.CIDR)
+	if err != nil {
+		return false
+	}
+	right := any(prefix.Addr().String())
+	if prefix.Bits() != 32 {
+		right = map[string]any{"prefix": map[string]any{"addr": prefix.Addr().String(), "len": prefix.Bits()}}
+	}
+	port := any(block.PortStart)
+	if block.PortEnd != block.PortStart {
+		port = map[string]any{"range": []any{block.PortStart, block.PortEnd}}
+	}
+	return len(expr) == 5 &&
+		exactMatch(expr[0], "==", "payload", map[string]any{"protocol": "ip", "field": "daddr"}, nil, block.Address) &&
+		exactMatch(expr[1], "==", "meta", map[string]any{"key": "l4proto"}, nil, block.Protocol) &&
+		exactMatch(expr[2], "==", "payload", map[string]any{"protocol": "ip", "field": "saddr"}, nil, right) &&
+		exactMatch(expr[3], "==", "payload", map[string]any{"protocol": block.Protocol, "field": "dport"}, nil, port) &&
+		exactVerdict(expr[4], "drop")
+}
+
 func planToken(p Plan) string {
 	if p.Config.SchemaVersion == 1 {
 		legacyConfig := struct {
@@ -169,11 +191,15 @@ func ReadbackVerifier(r Runner) Verifier {
 		rules := map[string]int{}
 		quarantineGuards := map[string]AllocationGuard{}
 		forwardGuards := map[string]AllocationGuard{}
+		sourceBlocks := map[string]SourceBlock{}
 		for _, guard := range p.Quarantines {
 			quarantineGuards["reladock-quarantine-"+guard.ID] = guard
 		}
 		for _, guard := range p.ForwardGuards {
 			forwardGuards["reladock-forward-"+guard.ID] = guard
+		}
+		for _, block := range p.SourceBlocks {
+			sourceBlocks[block.Comment] = block
 		}
 		tables := 0
 		tableComment, relayComment := "", ""
@@ -197,6 +223,10 @@ func ReadbackVerifier(r Runner) Verifier {
 					}
 				case "prerouting":
 					if c.Type != "nat" || c.Hook != "prerouting" || c.Prio != -100 || c.Policy != "accept" {
+						return bad
+					}
+				case "source_block":
+					if p.Config.SchemaVersion != 5 || c.Type != "filter" || c.Hook != "prerouting" || c.Prio != -290 || c.Policy != "accept" {
 						return bad
 					}
 				case "postrouting":
@@ -239,6 +269,13 @@ func ReadbackVerifier(r Runner) Verifier {
 					}
 					delete(expected, v.Rule.Comment)
 				}
+				if v.Rule.Chain == "source_block" {
+					block, ok := sourceBlocks[v.Rule.Comment]
+					if !ok || !validSourceBlockExpressions(v.Rule.Expr, block) {
+						return bad
+					}
+					delete(sourceBlocks, v.Rule.Comment)
+				}
 				rules[v.Rule.Chain]++
 			}
 		}
@@ -258,10 +295,16 @@ func ReadbackVerifier(r Runner) Verifier {
 		if allocationSchema(p.Config.SchemaVersion) {
 			expectedChains = 5
 		}
+		if p.Config.SchemaVersion == 5 {
+			expectedChains = 6
+		}
 		if tableComment != owner || relayComment != planToken(p) || tables != 1 || len(chains) != expectedChains || len(counters) != len(p.Counters) {
 			return bad
 		}
 		if allocationSchema(p.Config.SchemaVersion) && (len(quarantineGuards) != 0 || len(forwardGuards) != 0) {
+			return bad
+		}
+		if len(sourceBlocks) != 0 {
 			return bad
 		}
 		for _, c := range p.Counters {
@@ -274,6 +317,9 @@ func ReadbackVerifier(r Runner) Verifier {
 		if allocationSchema(p.Config.SchemaVersion) {
 			expectedRules["forward"] = len(p.ForwardGuards)
 			expectedRules["quarantine"] = len(p.Quarantines)
+		}
+		if p.Config.SchemaVersion == 5 {
+			expectedRules["source_block"] = len(p.SourceBlocks)
 		}
 		for name, count := range expectedRules {
 			if rules[name] != count {

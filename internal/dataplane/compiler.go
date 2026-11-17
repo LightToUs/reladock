@@ -69,6 +69,15 @@ type Counter struct {
 	Protocol  string
 	Direction string
 }
+type SourceBlock struct {
+	RuleID    string
+	CIDR      string
+	Protocol  string
+	Address   string
+	PortStart int
+	PortEnd   int
+	Comment   string
+}
 
 // Plan freezes DNS answers. Script is diagnostic output, never accepted as an
 // application input; Apply compiles a NodeConfig itself.
@@ -86,6 +95,7 @@ type Plan struct {
 	Allocations              []Allocation
 	Quarantines              []AllocationGuard
 	ForwardGuards            []AllocationGuard
+	SourceBlocks             []SourceBlock
 	SourceFlowManifest       *sourceflow.Manifest
 	SourceFlowManifestDigest string
 }
@@ -144,10 +154,10 @@ func protocols(p string) []string {
 	return []string{p}
 }
 
-func allocationSchema(version int) bool { return version == 2 || version == 3 || version == 4 }
+func allocationSchema(version int) bool { return version >= 2 && version <= 5 }
 
 func rulePortEnd(rule platform.ConfigRule, schemaVersion int) (int, bool) {
-	if schemaVersion == 4 {
+	if schemaVersion >= 4 {
 		end := rule.ListenPortEnd
 		return end, rule.ListenPort >= 1 && end >= rule.ListenPort && end <= 65535 && end-rule.ListenPort+1 <= 4096
 	}
@@ -186,6 +196,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 	ports := map[string]bool{}
 	ruleStatus := map[string]string{}
 	loggingRules := 0
+	blockedCIDRs := 0
 	for i := range cfg.Rules {
 		r := &cfg.Rules[i]
 		end, validPorts := rulePortEnd(*r, cfg.SchemaVersion)
@@ -196,9 +207,21 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		ruleStatus[r.ID] = r.Status
 		if r.SourceLoggingEnabled {
 			loggingRules++
-			if (cfg.SchemaVersion != 3 && cfg.SchemaVersion != 4) || r.Status != "pending-agent" {
+			if cfg.SchemaVersion < 3 || cfg.SchemaVersion > 5 || r.Status != "pending-agent" {
 				return fail("source logging schema or rule status")
 			}
+		}
+		if len(r.BlockedSourceCIDRs) > 256 || len(r.BlockedSourceCIDRs) > 0 && cfg.SchemaVersion != 5 {
+			return fail("source block schema or capacity")
+		}
+		previous := ""
+		for _, raw := range r.BlockedSourceCIDRs {
+			prefix, parseErr := netip.ParsePrefix(raw)
+			if parseErr != nil || !prefix.Addr().Is4() || prefix.Bits() == 0 || prefix != prefix.Masked() || prefix.String() != raw || prefix.Addr().IsUnspecified() || prefix.Addr().IsLoopback() || prefix.Addr().IsMulticast() || previous != "" && raw <= previous {
+				return fail("source block CIDR")
+			}
+			previous = raw
+			blockedCIDRs++
 		}
 		if r.Status != "pending-agent" && r.Status != "paused" {
 			return fail("rule status")
@@ -240,6 +263,9 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 	}
 	if cfg.SchemaVersion == 3 && loggingRules == 0 {
 		return fail("schema-v3 source logging absent")
+	}
+	if cfg.SchemaVersion == 5 && blockedCIDRs == 0 {
+		return fail("schema-v5 source blocks absent")
 	}
 	sort.Slice(cfg.Rules, func(i, j int) bool { return cfg.Rules[i].ID < cfg.Rules[j].ID })
 	var forwardGuards, quarantines []AllocationGuard
@@ -471,7 +497,7 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		}
 		return a.Port < b.Port
 	})
-	var nat, snatRules, forward, definitions, guards, quarantineRules strings.Builder
+	var nat, snatRules, forward, definitions, guards, quarantineRules, sourceBlockRules strings.Builder
 	quotaMatch := map[string]string{}
 	exhausted := map[string]bool{}
 	for _, r := range cfg.Rules {
@@ -550,6 +576,12 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 		end, _ := rulePortEnd(r, cfg.SchemaVersion)
 		portExpr := portExpression(r.ListenPort, end)
 		for _, proto := range protocols(r.Protocol) {
+			for _, cidr := range r.BlockedSourceCIDRs {
+				hash := sha256.Sum256([]byte(r.ID + "/" + proto + "/" + cidr))
+				comment := fmt.Sprintf("reladock-source-block-%x", hash[:12])
+				p.SourceBlocks = append(p.SourceBlocks, SourceBlock{RuleID: r.ID, CIDR: cidr, Protocol: proto, Address: listen.String(), PortStart: r.ListenPort, PortEnd: end, Comment: comment})
+				fmt.Fprintf(&sourceBlockRules, "  ip daddr %s meta l4proto %s ip saddr %s %s dport %s drop comment \"%s\"\n", listen, proto, cidr, proto, portExpr, comment)
+			}
 			fmt.Fprintf(&nat, "  ip daddr %s %s dport %s dnat to %s:%d\n", listen, proto, portExpr, r.TargetHost, r.TargetPort)
 			tuple := fmt.Sprintf("meta l4proto %s ct original ip daddr %s ct original proto-dst %s", proto, listen, portExpr)
 			fmt.Fprintf(&snatRules, "  ct status dnat %s ip daddr %s %s dport %d snat to %s\n", tuple, r.TargetHost, proto, r.TargetPort, snat)
@@ -572,7 +604,11 @@ func Compile(ctx context.Context, cfg platform.NodeConfig, o Options) (Plan, err
 	if allocationSchema(cfg.SchemaVersion) {
 		quarantineChain = fmt.Sprintf(" chain quarantine {\n  type filter hook prerouting priority raw; policy accept;\n%s }\n", quarantineRules.String())
 	}
-	p.Script = fmt.Sprintf("add table ip %s\ndelete table ip %s\ntable ip %s {\n comment \"%s\"\n%s%s chain prerouting {\n  type nat hook prerouting priority dstnat; policy accept;\n%s }\n chain postrouting {\n  type nat hook postrouting priority srcnat; policy accept;\n%s }\n chain forward {\n  type filter hook forward priority filter; policy accept;\n%s }\n chain relay {\n%s  drop\n }\n}\n", Table, Table, Table, owner, definitions.String(), quarantineChain, nat.String(), snatRules.String(), guards.String(), forward.String())
+	sourceBlockChain := ""
+	if cfg.SchemaVersion == 5 {
+		sourceBlockChain = fmt.Sprintf(" chain source_block {\n  type filter hook prerouting priority -290; policy accept;\n%s }\n", sourceBlockRules.String())
+	}
+	p.Script = fmt.Sprintf("add table ip %s\ndelete table ip %s\ntable ip %s {\n comment \"%s\"\n%s%s%s chain prerouting {\n  type nat hook prerouting priority dstnat; policy accept;\n%s }\n chain postrouting {\n  type nat hook postrouting priority srcnat; policy accept;\n%s }\n chain forward {\n  type filter hook forward priority filter; policy accept;\n%s }\n chain relay {\n%s  drop\n }\n}\n", Table, Table, Table, owner, definitions.String(), quarantineChain, sourceBlockChain, nat.String(), snatRules.String(), guards.String(), forward.String())
 	p.Script = strings.Replace(p.Script, "chain relay {\n", "chain relay {\n  comment \""+planToken(p)+"\"\n", 1)
 	return p, nil
 }
