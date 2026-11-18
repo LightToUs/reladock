@@ -205,6 +205,37 @@ func TestReadbackV2RequiresRawQuarantineChainAndExactRuleCounts(t *testing.T) {
 	}
 }
 
+func TestRetirementReadbackAcceptsOnlyExactMeterFreezeOverlay(t *testing.T) {
+	p, err := Compile(context.Background(), fixtureV2(), options())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"exact freeze", "wrong verdict", "wrong chain", "unrelated extra rule"} {
+		t.Run(mode, func(t *testing.T) {
+			items := readbackFixture(p)
+			rule := map[string]any{
+				"family": "ip", "table": "reladock", "chain": "relay",
+				"comment": "reladock-meter-freeze", "expr": []any{map[string]any{"drop": nil}},
+			}
+			switch mode {
+			case "wrong verdict":
+				rule["expr"] = []any{map[string]any{"accept": nil}}
+			case "wrong chain":
+				rule["chain"] = "forward"
+			case "unrelated extra rule":
+				rule["comment"] = "foreign"
+			}
+			items = append(items, map[string]any{"rule": rule})
+			raw, _ := json.Marshal(map[string]any{"nftables": items})
+			runner := runnerFunc(func(context.Context, []string, string) ([]byte, error) { return raw, nil })
+			err := readbackVerifier(runner, true)(context.Background(), p)
+			if (err == nil) != (mode == "exact freeze") {
+				t.Fatalf("%s: %v", mode, err)
+			}
+		})
+	}
+}
+
 func TestReadbackV2AcceptsNFT102NormalizedQuarantineProtocol(t *testing.T) {
 	p, err := Compile(context.Background(), fixtureV2(), options())
 	if err != nil {

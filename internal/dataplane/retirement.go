@@ -258,6 +258,21 @@ func (a *Adapter) compileRetirement(ctx context.Context, state State, guard Allo
 	return Compile(ctx, state.Good.Config, options)
 }
 
+func (a *Adapter) verifyRetirementBaseline(ctx context.Context, plan Plan) error {
+	strictErr := a.verify(ctx, plan)
+	if strictErr == nil {
+		return nil
+	}
+	frozen, err := a.relayFrozen(ctx)
+	if err != nil {
+		return errors.Join(strictErr, err)
+	}
+	if !frozen {
+		return strictErr
+	}
+	return readbackVerifier(a.runner, true)(ctx, plan)
+}
+
 // PurgeAllocation transitions exactly one retirement from two kernel guards to
 // a durable pre-conntrack quarantine. It must be called only after the platform
 // has acknowledged begin-purge; this layer never stores the lease token.
@@ -313,7 +328,7 @@ func (a *Adapter) PurgeAllocation(ctx context.Context, claim platform.Retirement
 	if err = a.store.Save(ctx, state); err != nil {
 		return PurgeOutcome{}, fmt.Errorf("persist retirement intent: %w", err)
 	}
-	if err = a.verify(ctx, *state.Good); err != nil {
+	if err = a.verifyRetirementBaseline(ctx, *state.Good); err != nil {
 		return PurgeOutcome{}, a.failed(ctx, state, retirementFailure("guard-mismatch"), false)
 	}
 	if state.Retirement.Phase == "prepared" {
@@ -324,7 +339,7 @@ func (a *Adapter) PurgeAllocation(ctx context.Context, claim platform.Retirement
 		if purgeErr != nil {
 			return PurgeOutcome{}, a.failed(ctx, state, purgeErr, false)
 		}
-		if err = a.verify(ctx, *state.Good); err != nil {
+		if err = a.verifyRetirementBaseline(ctx, *state.Good); err != nil {
 			return PurgeOutcome{}, a.failed(ctx, state, retirementFailure("guard-mismatch"), false)
 		}
 		state.Retirement.Phase = "purged"

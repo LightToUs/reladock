@@ -376,7 +376,7 @@ func (e Executor) Purge(ctx context.Context, input Allocation) (PurgeResult, err
 			// filtered query. Accept that representation only when its exact,
 			// authoritative summary independently says that zero entries were
 			// shown; an absent, malformed, or non-zero summary remains fatal.
-			if version != "conntrack v1.4.6 (conntrack-tools)" || !validateExactShown(queryOutput.Stderr, version, 0) {
+			if !validateExactShown(queryOutput.Stderr, version, 0) {
 				return PurgeResult{}, fail("output-invalid")
 			}
 		} else {

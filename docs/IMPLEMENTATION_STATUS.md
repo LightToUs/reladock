@@ -1,6 +1,20 @@
 # 当前实现状态与 AI 交接
 
-> 最后代码核验：2026-11-18；最后生产控制端核验仍为 2026-11-16。生产控制端仍运行 `v0.9.14`、数据库 schema v42；本地来源 IP 拉黑增量为 schema v44 / 配置 schema 5，尚未发布或部署。Google 登录代码已随版本部署但连接器仍为 `enabled:false`，自定义端口段控制面已发布。按用户明确指令，生产业务数据已重置，目前无节点、规则、交付、线路套餐、订阅、用量、账本、普通支付订单、告警工单或审计记录；保留 1 个企业账号、1 个成员、当前登录会话、0 余额钱包壳和必要的支付重放保护。Lightsail 连接器、receive-only TRON 扫描器和 Stripe Live webhook 配置仍启用，但没有业务资源或余额事实。Live 配置不等于真实银行卡扣款、签名回调入账、退款/争议、合规、生产容量、端口范围/来源拉黑数据面或离机恢复验收完成。
+> 最后代码核验：2026-11-18；最后生产节点核验：2026-11-17。生产控制端仍运行 `v0.9.14`、数据库 schema v42；入口节点 `hk-01` 的 apply Agent 以 `v0.9.15` 热修复构建运行，generation 5/5，原规则 202 个 TCP/UDP 精确端点已安全回收，控制库 allocation 为 0，并保留 202 个可复用前置 quarantine。本地来源 IP 拉黑增量为 schema v44 / 配置 schema 5，尚未发布或部署。Google 登录仍为 `enabled:false`；Lightsail、receive-only TRON 扫描器和 Stripe Live webhook 的既有生产验收边界不变。端口释放、Agent applied、节点在线或 UDP 配置均不等于 HY2/客户协议端到端健康；Live 配置也不等于真实支付、合规、生产容量、来源拉黑数据面或离机恢复验收完成。公开官网已于 2026-11-18 切换为仓库新版静态站点，控制端与数据面未随本次前端部署变化。
+
+## 2026-11-18 公开官网切换为仓库新版前端（生产已部署）
+
+在用户明确授权下，`reladock.com` 已从 2026-11-01 恢复的旧版营销页切换为仓库 [website/](../website) 中的新版前端。部署对象仅是静态站点：`index.html`、`css/style.css`、`js/main.js`、`js/scope-checker.js`、`favicon.svg`、`reladock-mark.svg`、`reladock-logo.svg`、`reladock-logo.png`；`website/test/` 不上线。没有修改 Nginx 配置、控制端二进制、数据库、Agent、systemd 单元、网络规则、账务或证书，控制端仍为 `v0.9.14`。
+
+过程：先部署到 `releases/20261118T0520Z`（归档 SHA256 `a2c787bc…`，含 430–680px 间距修复）；用户随后要求恢复原版官网，`current` 已原子切回 `releases/2026-11-01-v1` 并复核旧版 5 个资源 SHA256；用户再明确选择部署新版后，重新上传并切换到 `releases/20261118T0540Z`，同时按用户要求撤回了临时间距修复提交（`a8501dc` 未推送，已从历史移除），因此线上 `css/style.css` 与仓库 `0dc4f6b` 一致。当前 `current -> /var/www/reladock/releases/20261118T0540Z`。
+
+上线后 8 个路径分别通过 `--resolve` 本地回环和公网访问核对 SHA256 一致：`index.html` `42559430577d77488786ecce753f0cca976514bc433335ab876a0745b5ffe687`、`css/style.css` `c46d51987718e236ea8a8d25ddbf33da8e284848312bc1c5068d8be5ef7eb242`、`js/main.js` `9aa9caf0066a2d18…`、`js/scope-checker.js` `1ab3acc5…`、`favicon.svg` `6e2b4ad8…`；根路径 200 且标题为「RelaDock — 指定公网应用的跨境连接」，CSP/HSTS/X-Content-Type-Options 头存在，`www` 仍 308 跳主域，`console.reladock.com/` 200 且 `/api/health` 返回 `{"status":"ok","storage":"postgresql"}`，Nginx 与控制服务均 active；生产页面无 console error 与 CSP 违规，需求检查表单可提交。
+
+已知缺陷：430–680px 宽度下 hero 的 `进入企业后台` 文字链接仍会被绝对定位示意块压住（最多重叠 32px，灰字压浅绿底）。该问题在撤回修复提交后重新回到线上；如需修复，需要重新提交窄屏预留高度并重新部署。
+
+回滚/备份：`/root/reladock-pre-website-20261118T0520Z` 与 `/root/reladock-pre-website-20261118T0540Z`（均 0700）保留切换前站点快照、原软链目标与新清单；旧版 release `2026-11-01-v1` 未被删除，把 `current` 指回它即可恢复原版官网。
+
+边界：只验证静态资源字节、页面标题、安全响应头与表单交互；未验证真实客户浏览器矩阵、屏幕阅读器、CDN、海外访问质量、法律文案审批或转化数据。官网内容仍不代表生产性能或可交付承诺，也未因本次部署改变控制面、数据面或计费状态。
 
 ## 2026-11-17 逐规则来源 IPv4 CIDR 拉黑与定时清理（本地，schema v44 / 配置 schema 5）
 
@@ -9,7 +23,15 @@
 配置 schema 5 只交给当前证书同时声明端口范围和来源拉黑能力的 Agent；证书身份变化清空能力。Linux 编译器在自有 nftables 表中生成 DNAT 前优先级 -290 的 `source_block` 链，按规则入口、协议、单端口/端口段和 CIDR drop；暂停规则不生成 drop。回读严格核对链、优先级、注释、来源、入口、协议、端口和数量。来源记录保留 worker 在控制端启动时立即执行，之后每 30 秒最多清理 1000 条，失败计入低基数指标并重试；开放 gap、当前 manifest、计费、钱包、账本和审计不在删除范围。
 
 TDD 已覆盖真实 PostgreSQL 上的新增/重复/移除、越权/跨租户、旧版本、异常 CIDR、容量、审计回滚、v29 历史行及 v42→v44 迁移、schema 5 双能力租约与换证清零；组合回归保证低端口/退役端口的 schema 4 要求不会把含拉黑字段的 schema 5 降级。数据面覆盖 TCP、UDP、both、端口段、暂停规则和严格回读近似表达式拒绝；HTTP/前端覆盖一键 `/32`、手工管理、requested/applied 文案、待节点应用的移除状态，以及提交后刷新失败不重写且不误报写入失败；保留测试覆盖立即执行、周期重试、取消、批量上限、开放 gap、当前 manifest，以及规则、计费钱包、账本和审计等非来源事实保留。2026-11-18 在独立真实 PostgreSQL 测试数据库完成 `GOFLAGS=-timeout=20m npm test`：全部 Go race 包通过，Node 160 项通过、1 项 Linux 安装器环境测试跳过。共享测试库上另一个工作树的长驻 `platform.test` 会通过跨 schema advisory lock 干扰运维告警用例；未终止该进程，改用独立数据库隔离验证。生产发布、真实 Linux nftables 应用、VPS/客户流量、IPv6、临时到期和自动信誉/行为封禁均未执行或实现，不能标记生产就绪。
+## 2026-11-17 hk-01 端口安全回收生产修复
 
+用户删除原 `40000–40100` 双协议规则后，`endpoint_allocations` 仍保留 202 行；首个 `40047/TCP` retirement 长期停在 `purging`，其余 201 行为 `queued`。现场证据显示本地 transition 为 `prepared`、无 conntrack outcome，双层 allocation guard 均存在。失败回滚后的计量观察按设计加入精确 `reladock-meter-freeze` drop，但普通 Good verifier 将这一 fail-closed 覆盖视为结构漂移，重试持续报告 `guard-mismatch`。允许该精确覆盖后，任务越过 guard 门禁并暴露第二个兼容问题：Ubuntu 24.04 的 conntrack-tools 1.4.8 在零匹配查询时输出空 stdout，并在 stderr 返回同版本的权威“0 flow entries ... shown”摘要；执行器此前只为 1.4.6 接受该表示，因此报告 `output-invalid`。
+
+TDD 新增回归覆盖：retirement verifier 只接受 relay 链上表达式为单一 drop 的 `reladock-meter-freeze`，错误 verdict、错误链和其他额外规则继续失败关闭；PurgeAllocation 在该精确冻结存在时仍能越过双 guard 校验；conntrack 1.4.8 的空 XML 只有在同版本、精确零条目摘要下才被接受，跨版本或畸形摘要继续拒绝。`go test ./internal/dataplane`、`go test ./internal/retirement` 与 `npm run vet` 通过。全仓 `npm test` 中非数据库包通过，PostgreSQL 集成包因本机既有数据库卷密码与 `.env` 不一致，在 SASL 认证阶段失败；未重置或迁移该本地数据库，因此本轮不能记录为完整全仓通过。
+
+生产节点修复前先停 Agent，并在 `/root/reladock-retirement-recovery-20261117T134700Z` 保存 retirement journal/sequence、dataplane state、nft 文本/JSON、systemd 单元和初始 SHA256 清单；原 Agent 与第一阶段 guard 热修复随后也保留在同一目录。未清空 WAL、PKI、state、数据库 retirement 或整张防火墙表。最终安装的 Linux amd64 Agent SHA256 为 `4869ba9d232466fd493c8e10a876a354b018fb5e5f7d219c8db4dacbad9d91b7`。Agent 随后逐项执行 conntrack 精确零查询、仅移除对应 obsolete forward guard、持久 proof、mTLS report 和本地 ACK 分类。
+
+最终控制库只读复核：`released=202`、其他 retirement 状态 0、`endpoint_allocations=0`、节点 generation `5/5`、Agent `v0.9.15 apply`。节点复核：服务 active/enabled，retirement journal 不存在，`Pending=false`，无 Candidate/Recovery/Retirement，`RetirementResults=202`、`ReusableQuarantines=202`、`PurgedPendingACK=0`；持久 Good 与内核均为 forward guard 0、quarantine 202、活动规则 0，内核 meter-freeze 0，完成后 10 分钟日志无 `needs attention`/failed/error。该结果允许平台在未来创建同范围的新 allocation 并通过精确 predecessor 原子接管 quarantine，但本轮没有替用户创建新规则，也没有执行 HY2 真实 UDP 端口跳跃或端到端协议验收。
 ## 2026-11-16 生产业务数据重置
 
 按用户明确确认的边界，保留 `tenants`、`members`、`sessions`、API Key/邀请/OAuth 账号关联及平台管理员字段，清空节点、规则、精确端口、retirement、配置交付、线路、套餐价格、订阅、用量、钱包余额事实、不可变账本、普通支付订单、Lightsail 资源、告警、工单、通知、探测、来源记录和两类审计。为保证保留账号登录后钱包接口仍可用，每个保留企业重建一条余额 0、未冻结的钱包壳；账本为 0。为防止历史链上付款被重新扫描或手工重放，保留 1 条 TRON receipt、1 条扫描游标，并将其必需的父订单解除规则/套餐/订阅/账本关联后改为 `expired` 的 `replay-guard-only` tombstone；普通 `payment_orders` 为 0。

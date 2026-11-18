@@ -2,6 +2,7 @@ package dataplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -90,6 +91,34 @@ func TestPurgeFailureAfterConntrackRestoresBothGuardsAndResumesWithoutRepurge(t 
 	result, err := adapter.PurgeAllocation(context.Background(), claim)
 	if err != nil || result.DeletedEntries != 4 || len(purger.calls) != 1 {
 		t.Fatalf("resume repeated side effect or lost result: result=%+v calls=%d err=%v", result, len(purger.calls), err)
+	}
+}
+
+func TestPurgeAllocationAcceptsExactFailClosedMeterFreezeBeforeSideEffect(t *testing.T) {
+	state, claim := retirementState(t)
+	store := &memoryStore{state: state}
+	items := readbackFixture(*state.Good)
+	items = append(items, map[string]any{"rule": map[string]any{
+		"family": "ip", "table": "reladock", "chain": "relay",
+		"comment": "reladock-meter-freeze", "expr": []any{map[string]any{"drop": nil}},
+	}})
+	raw, _ := json.Marshal(map[string]any{"nftables": items})
+	runner := runnerFunc(func(_ context.Context, args []string, _ string) ([]byte, error) {
+		if len(args) == 5 && args[0] == "-j" && args[2] == "table" {
+			return raw, nil
+		}
+		if len(args) == 3 && args[0] == "-j" && args[2] == "tables" {
+			return []byte(`{"nftables":[{"table":{"family":"ip","name":"reladock"}}]}`), nil
+		}
+		return nil, nil
+	})
+	purger := &fakeRetirementPurger{result: retirementexec.PurgeResult{ConntrackVersion: "conntrack v1.4.7 (conntrack-tools)"}}
+	adapter := newTestAdapter(t, store, runner, &mutexLock{}, ReadbackVerifier(runner))
+	adapter.SetRetirementPurger(purger)
+
+	_, err := adapter.PurgeAllocation(context.Background(), claim)
+	if err == nil || len(purger.calls) != 1 {
+		t.Fatalf("exact fail-closed freeze blocked guarded purge: err=%v calls=%d", err, len(purger.calls))
 	}
 }
 

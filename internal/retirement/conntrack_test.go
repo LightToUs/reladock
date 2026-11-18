@@ -119,11 +119,6 @@ func TestPurgeAcceptsV146EmptyZeroQueryOnlyWithAuthoritativeSummary(t *testing.T
 	}
 
 	for name, responses := range map[string][]CommandResult{
-		"newer version empty output": {
-			versionResult(),
-			{Stderr: []byte("conntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.\n"), ExitCode: 1},
-			{Stderr: []byte("conntrack v1.4.7 (conntrack-tools): 0 flow entries have been shown.\n")},
-		},
 		"newer version old summary": {
 			versionResult(),
 			{Stderr: []byte("conntrack v1.4.7 (conntrack-tools): 0 flow entries have been deleted.\n"), ExitCode: 1},
@@ -141,6 +136,18 @@ func TestPurgeAcceptsV146EmptyZeroQueryOnlyWithAuthoritativeSummary(t *testing.T
 				t.Fatalf("empty query accepted across version boundary: %v", err)
 			}
 		})
+	}
+}
+
+func TestPurgeAcceptsV148EmptyZeroQueryWithMatchingAuthoritativeSummary(t *testing.T) {
+	runner := &scriptedRunner{responses: []CommandResult{
+		{Stdout: []byte("conntrack v1.4.8 (conntrack-tools)\n")},
+		{Stderr: []byte("conntrack v1.4.8 (conntrack-tools): 0 flow entries have been deleted.\n"), ExitCode: 1},
+		{Stderr: []byte("conntrack v1.4.8 (conntrack-tools): 0 flow entries have been shown.\n")},
+	}}
+	result, err := (Executor{Runner: runner}).Purge(context.Background(), allocation("tcp"))
+	if err != nil || result.DeletedEntries != 0 || result.ConntrackVersion != "conntrack v1.4.8 (conntrack-tools)" || len(runner.calls) != 3 {
+		t.Fatalf("result=%+v calls=%d err=%v", result, len(runner.calls), err)
 	}
 }
 

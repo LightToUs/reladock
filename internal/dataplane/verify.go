@@ -163,6 +163,10 @@ func planToken(p Plan) string {
 // hooks, counter identities and rule counts. It is deliberately not a path
 // health check or a semantic proof of kernel forwarding/offload behavior.
 func ReadbackVerifier(r Runner) Verifier {
+	return readbackVerifier(r, false)
+}
+
+func readbackVerifier(r Runner, allowMeterFreeze bool) Verifier {
 	return func(ctx context.Context, p Plan) error {
 		out, e := r.Run(ctx, []string{"-j", "list", "table", "ip", Table}, "")
 		if e != nil {
@@ -189,6 +193,7 @@ func ReadbackVerifier(r Runner) Verifier {
 		chains := map[string]bool{}
 		counters := map[string]bool{}
 		rules := map[string]int{}
+		meterFreezeRules := 0
 		quarantineGuards := map[string]AllocationGuard{}
 		forwardGuards := map[string]AllocationGuard{}
 		sourceBlocks := map[string]SourceBlock{}
@@ -256,6 +261,12 @@ func ReadbackVerifier(r Runner) Verifier {
 				if v.Rule.Family != "ip" || v.Rule.Table != Table {
 					return bad
 				}
+				if allowMeterFreeze && v.Rule.Comment == "reladock-meter-freeze" {
+					if v.Rule.Chain != "relay" || len(v.Rule.Expr) != 1 || !exactVerdict(v.Rule.Expr[0], "drop") {
+						return bad
+					}
+					meterFreezeRules++
+				}
 				if allocationSchema(p.Config.SchemaVersion) && (v.Rule.Chain == "quarantine" || v.Rule.Chain == "forward") {
 					expected := forwardGuards
 					quarantine := false
@@ -314,6 +325,7 @@ func ReadbackVerifier(r Runner) Verifier {
 		}
 		n := len(p.Counters) / 2
 		expectedRules := map[string]int{"prerouting": n, "postrouting": n, "forward": len(p.Allocations), "relay": 2*n + 1}
+		expectedRules["relay"] += meterFreezeRules
 		if allocationSchema(p.Config.SchemaVersion) {
 			expectedRules["forward"] = len(p.ForwardGuards)
 			expectedRules["quarantine"] = len(p.Quarantines)
