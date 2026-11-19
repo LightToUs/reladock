@@ -1,20 +1,14 @@
 # 当前实现状态与 AI 交接
 
-> 最后代码核验：2026-11-18；最后生产节点核验：2026-11-17。生产控制端仍运行 `v0.9.14`、数据库 schema v42；入口节点 `hk-01` 的 apply Agent 以 `v0.9.15` 热修复构建运行，generation 5/5，原规则 202 个 TCP/UDP 精确端点已安全回收，控制库 allocation 为 0，并保留 202 个可复用前置 quarantine。本地来源 IP 拉黑增量为 schema v44 / 配置 schema 5，尚未发布或部署。Google 登录仍为 `enabled:false`；Lightsail、receive-only TRON 扫描器和 Stripe Live webhook 的既有生产验收边界不变。端口释放、Agent applied、节点在线或 UDP 配置均不等于 HY2/客户协议端到端健康；Live 配置也不等于真实支付、合规、生产容量、来源拉黑数据面或离机恢复验收完成。公开官网已于 2026-11-18 切换为仓库新版静态站点，控制端与数据面未随本次前端部署变化。
+> 最后代码核验：2026-11-18；最后生产节点核验：2026-11-17。生产控制端仍运行 `v0.9.14`、数据库 schema v42；入口节点 `hk-01` 的 apply Agent 以 `v0.9.15` 热修复构建运行，generation 5/5，原规则 202 个 TCP/UDP 精确端点已安全回收，控制库 allocation 为 0，并保留 202 个可复用前置 quarantine。本地来源 IP 拉黑增量为 schema v44 / 配置 schema 5，尚未发布或部署。Google 登录仍为 `enabled:false`；Lightsail、receive-only TRON 扫描器和 Stripe Live webhook 的既有生产验收边界不变。端口释放、Agent applied、节点在线或 UDP 配置均不等于 HY2/客户协议端到端健康；Live 配置也不等于真实支付、合规、生产容量、来源拉黑数据面或离机恢复验收完成。公开官网已于 2026-11-19 恢复为原版营销页，仓库新版前端不对外；控制端与数据面未受影响。
 
-## 2026-11-18 公开官网切换为仓库新版前端（生产已部署）
+## 2026-11-19 公开官网恢复原版（生产已回滚）
 
-在用户明确授权下，`reladock.com` 已从 2026-11-01 恢复的旧版营销页切换为仓库 [website/](../website) 中的新版前端。部署对象仅是静态站点：`index.html`、`css/style.css`、`js/main.js`、`js/scope-checker.js`、`favicon.svg`、`reladock-mark.svg`、`reladock-logo.svg`、`reladock-logo.png`；`website/test/` 不上线。没有修改 Nginx 配置、控制端二进制、数据库、Agent、systemd 单元、网络规则、账务或证书，控制端仍为 `v0.9.14`。
+按用户要求，`reladock.com` 已恢复为 2026-11-01 的原版营销页；仓库 [website/](../website) 中的新版前端不再作为线上官网，也没有保留任何临时间距修复。`current -> /var/www/reladock/releases/2026-11-01-v1`，线上 5 个资源的 SHA256 与恢复前旧版一致：`index.html` `0971a7e23b960c91c64468c59a822fddb91b51f0806d47fe013cc3285c0ab17c`、`css/style.css` `7f2ff4982251bae7bbebf5b8301cc24a4e82bf6b9be76f0709581af24c578ef9`、`js/main.js` `8fe84b65d68fad99fe21b30e01d62ce4486128acd04be8b3411a94c1420d79d3`、`js/scope-checker.js` `1ab3acc55e6f8b81c0f6c4c3b69d8d27e4bc3aca188fd7a678b970f28e59ab00`、`favicon.svg` `5459511d51eef726fcdabdf4755a6cdfe3540ffb324ef27c2c83454e8dc615ab`；公网首页 200、标题「Reladock — 跨境流量中转 · 企业级网络加速」，`www` 仍 308 跳主域，`console.reladock.com/api/health` 200，Nginx 与控制服务 active。
 
-过程：先部署到 `releases/20261118T0520Z`（归档 SHA256 `a2c787bc…`，含 430–680px 间距修复）；用户随后要求恢复原版官网，`current` 已原子切回 `releases/2026-11-01-v1` 并复核旧版 5 个资源 SHA256；用户再明确选择部署新版后，重新上传并切换到 `releases/20261118T0540Z`，同时按用户要求撤回了临时间距修复提交（`a8501dc` 未推送，已从历史移除），因此线上 `css/style.css` 与仓库 `0dc4f6b` 一致。当前 `current -> /var/www/reladock/releases/20261118T0540Z`。
+未修改 Nginx 配置、控制端二进制、数据库、Agent、systemd、网络规则、账务或证书；控制端仍 `v0.9.14`。2026-11-18 曾把新版前端部署到 `releases/20261118T0520Z` 与 `20261118T0540Z`，两次切换前快照分别在 `/root/reladock-pre-website-20261118T0520Z`、`/root/reladock-pre-website-20261118T0540Z`，这两个新版 release 目录保留但不对外；如需重新启用新版官网，把 `current` 指向 `20261118T0540Z` 即可（该版本没有 hero 窄屏间距修复，430–680px 下 `进入企业后台` 仍会压住示意块）。
 
-上线后 8 个路径分别通过 `--resolve` 本地回环和公网访问核对 SHA256 一致：`index.html` `42559430577d77488786ecce753f0cca976514bc433335ab876a0745b5ffe687`、`css/style.css` `c46d51987718e236ea8a8d25ddbf33da8e284848312bc1c5068d8be5ef7eb242`、`js/main.js` `9aa9caf0066a2d18…`、`js/scope-checker.js` `1ab3acc5…`、`favicon.svg` `6e2b4ad8…`；根路径 200 且标题为「RelaDock — 指定公网应用的跨境连接」，CSP/HSTS/X-Content-Type-Options 头存在，`www` 仍 308 跳主域，`console.reladock.com/` 200 且 `/api/health` 返回 `{"status":"ok","storage":"postgresql"}`，Nginx 与控制服务均 active；生产页面无 console error 与 CSP 违规，需求检查表单可提交。
-
-已知缺陷：430–680px 宽度下 hero 的 `进入企业后台` 文字链接仍会被绝对定位示意块压住（最多重叠 32px，灰字压浅绿底）。该问题在撤回修复提交后重新回到线上；如需修复，需要重新提交窄屏预留高度并重新部署。
-
-回滚/备份：`/root/reladock-pre-website-20261118T0520Z` 与 `/root/reladock-pre-website-20261118T0540Z`（均 0700）保留切换前站点快照、原软链目标与新清单；旧版 release `2026-11-01-v1` 未被删除，把 `current` 指回它即可恢复原版官网。
-
-边界：只验证静态资源字节、页面标题、安全响应头与表单交互；未验证真实客户浏览器矩阵、屏幕阅读器、CDN、海外访问质量、法律文案审批或转化数据。官网内容仍不代表生产性能或可交付承诺，也未因本次部署改变控制面、数据面或计费状态。
+边界：只验证静态资源字节、标题与相邻域状态；未验证真实客户浏览器矩阵、屏幕阅读器、CDN、海外访问质量或法律文案审批。官网内容不代表生产性能或可交付承诺，本次回滚未改变控制面、数据面或计费状态。
 
 ## 2026-11-17 逐规则来源 IPv4 CIDR 拉黑与定时清理（本地，schema v44 / 配置 schema 5）
 
