@@ -6,9 +6,13 @@
 
 按用户要求，`reladock.com` 已恢复为 2026-11-01 的原版营销页；仓库 [website/](../website) 中的新版前端不再作为线上官网，也没有保留任何临时间距修复。`current -> /var/www/reladock/releases/2026-11-01-v1`，线上 5 个资源的 SHA256 与恢复前旧版一致：`index.html` `0971a7e23b960c91c64468c59a822fddb91b51f0806d47fe013cc3285c0ab17c`、`css/style.css` `7f2ff4982251bae7bbebf5b8301cc24a4e82bf6b9be76f0709581af24c578ef9`、`js/main.js` `8fe84b65d68fad99fe21b30e01d62ce4486128acd04be8b3411a94c1420d79d3`、`js/scope-checker.js` `1ab3acc55e6f8b81c0f6c4c3b69d8d27e4bc3aca188fd7a678b970f28e59ab00`、`favicon.svg` `5459511d51eef726fcdabdf4755a6cdfe3540ffb324ef27c2c83454e8dc615ab`；公网首页 200、标题「Reladock — 跨境流量中转 · 企业级网络加速」，`www` 仍 308 跳主域，`console.reladock.com/api/health` 200，Nginx 与控制服务 active。
 
-未修改 Nginx 配置、控制端二进制、数据库、Agent、systemd、网络规则、账务或证书；控制端仍 `v0.9.14`。2026-11-18 曾把新版前端部署到 `releases/20261118T0520Z` 与 `20261118T0540Z`，两次切换前快照分别在 `/root/reladock-pre-website-20261118T0520Z`、`/root/reladock-pre-website-20261118T0540Z`，这两个新版 release 目录保留但不对外；如需重新启用新版官网，把 `current` 指向 `20261118T0540Z` 即可（该版本没有 hero 窄屏间距修复，430–680px 下 `进入企业后台` 仍会压住示意块）。
+除下文列出的 `reladock.com` 响应头修正外，未修改控制端二进制、数据库、Agent、systemd、网络规则、账务或证书；控制端仍 `v0.9.14`。2026-11-18 曾把新版前端部署到 `releases/20261118T0520Z` 与 `20261118T0540Z`，两次切换前快照分别在 `/root/reladock-pre-website-20261118T0520Z`、`/root/reladock-pre-website-20261118T0540Z`，这两个新版 release 目录保留但不对外；如需重新启用新版官网，把 `current` 指向 `20261118T0540Z` 即可（该版本没有 hero 窄屏间距修复，430–680px 下 `进入企业后台` 仍会压住示意块）。
 
-边界：只验证静态资源字节、标题与相邻域状态；未验证真实客户浏览器矩阵、屏幕阅读器、CDN、海外访问质量或法律文案审批。官网内容不代表生产性能或可交付承诺，本次回滚未改变控制面、数据面或计费状态。
+恢复后用户反馈页面样式错乱。诊断出两个服务端问题：其一，原版页面自带 `fonts.googleapis.com` 样式表，但 `reladock.com` 的 CSP 为 `style-src 'self'`，控制台此前已观察到该请求被拦截，页面只能回退到系统字体；其二，静态站点此前没有任何 `Cache-Control`，在 11-18 的两轮切换中浏览器可能把新版 HTML/CSS 与旧版资源混用。仅对 `reladock.com` 站点块修正：增加 `Cache-Control: no-cache`（每次用 ETag 重新校验，不要长期缓存），CSP 改为 `style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com`，其余指令与 `console.reladock.com` 的严格 CSP 均未放宽。改前备份 `/root/reladock-pre-website-cache-20261119T083552Z`，`nginx -t` 通过后 reload，仓库 `deploy/reladock-nginx.conf` 已同步，生产与仓库的 `reladock.com` server 块逐字一致。
+
+复验：清缓存重载后无 CSP/console 错误，`Inter` 与 `Noto Sans SC` 均加载成功；390/414/480/600/768/1024/1280/1440/1920 宽度下 `scrollWidth == clientWidth`，没有横向溢出，hero 与各区块正常居中；首页仍为原版 `0971a7e2…`，`www` 308，控制台 200 且 CSP 未变。之前访问过新版站点的浏览器需要强制刷新一次，才能丢掉混用的旧缓存。
+
+边界：只验证静态资源字节、标题、安全响应头、字体加载与多宽度布局；未验证真实客户浏览器矩阵、屏幕阅读器、CDN、海外访问质量或法律文案审批。官网内容不代表生产性能或可交付承诺，本次回滚与响应头修正未改变控制面、数据面或计费状态。
 
 ## 2026-11-17 逐规则来源 IPv4 CIDR 拉黑与定时清理（本地，schema v44 / 配置 schema 5）
 
